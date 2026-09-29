@@ -26,6 +26,7 @@ import { SideNav, BottomNav } from './components/shell/Navigation';
 import { tabsDelRol, TAB_INICIAL } from './components/shell/navConfig';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getStoredSupabaseConfig } from './services/supabaseConfig';
+import { getSupabaseClient } from './services/supabaseClient';
 import { leerClientes, leerDroguerias, leerLista, leerProductos, leerUsuario } from './services/storageMigrations';
 import { ThemeProvider } from './context/ThemeContext';
 import { usePersistentState, EVENTO_ERROR_ALMACENAMIENTO } from './hooks/usePersistentState';
@@ -158,6 +159,47 @@ function AppContent() {
     return () => {
       cancelado = true;
       detener?.();
+    };
+  }, [isSupabaseConectado]);
+
+  // Sincronización inicial desde Supabase: descarga clientes, productos y droguerías si existen en la nube
+  useEffect(() => {
+    if (!isSupabaseConectado) return;
+    let activo = true;
+
+    const sincronizarCatalogosNube = async () => {
+      const client = getSupabaseClient();
+      if (!client) return;
+
+      try {
+        // 1. Clientes
+        const { data: dbClientes, error: errCli } = await client.from('dim_clientes').select('*').limit(5000);
+        if (activo && !errCli && dbClientes && dbClientes.length > 0) {
+          const saneados = leerClientes(dbClientes);
+          if (saneados && saneados.length > 0) setClientes(saneados);
+        }
+
+        // 2. Productos
+        const { data: dbProductos, error: errProd } = await client.from('dim_productos').select('*').limit(5000);
+        if (activo && !errProd && dbProductos && dbProductos.length > 0) {
+          const saneados = leerProductos(dbProductos);
+          if (saneados && saneados.length > 0) setProductos(saneados);
+        }
+
+        // 3. Droguerías
+        const { data: dbDroguerias, error: errDrog } = await client.from('dim_droguerias').select('*').limit(100);
+        if (activo && !errDrog && dbDroguerias && dbDroguerias.length > 0) {
+          const saneadas = leerDroguerias(dbDroguerias);
+          if (saneadas && saneadas.length > 0) setDroguerias(saneadas);
+        }
+      } catch (err) {
+        console.warn('Error al recuperar catálogos desde Supabase:', err);
+      }
+    };
+
+    void sincronizarCatalogosNube();
+    return () => {
+      activo = false;
     };
   }, [isSupabaseConectado]);
 
@@ -425,21 +467,31 @@ function AppContent() {
           {almacenamientoLleno && (
             <div
               role="alert"
-              className="mx-3.5 sm:mx-6 lg:mx-8 mt-3 p-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200 text-xs flex items-start gap-2.5"
+              className="mx-3.5 sm:mx-6 lg:mx-8 mt-3 p-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
             >
-              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-              <p className="flex-1">
-                El almacenamiento local del navegador está lleno: los últimos cambios siguen en memoria pero no se
-                guardarán al cerrar. Conecta Supabase para conservar el histórico de ventas.
-              </p>
-              <button
-                type="button"
-                onClick={() => setAlmacenamientoLleno(false)}
-                aria-label="Cerrar aviso"
-                className="p-1 -m-1 rounded-lg"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <p className="flex-1">
+                  El histórico de ventas supera los 5MB estándar de localStorage: los datos están <strong>resguardados en IndexedDB local</strong> y en memoria. Conecta Supabase para sincronizarlos en la nube.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setModalSupabaseAbierto(true)}
+                  className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-xs"
+                >
+                  {isSupabaseConectado ? 'Verificar Supabase' : 'Conectar Supabase'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlmacenamientoLleno(false)}
+                  aria-label="Cerrar aviso"
+                  className="p-1 -m-1 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           )}
 
