@@ -25,91 +25,43 @@
 * **Rendimiento:** cada pestaña y cada modal se cargan con `React.lazy` (bundle inicial ≈ 105 kB gzip); `@supabase/supabase-js` y `html5-qrcode` solo se descargan cuando se usan; el estado persistido en `localStorage` se escribe con debounce y tolera cuota llena (`src/hooks/usePersistentState.ts`).
 * **Navegación responsiva:** móvil (<768 px) barra inferior + hoja "Más"; tablet y laptop pequeña (768–1279 px) riel lateral compacto; PC (≥1280 px) barra lateral agrupada. La pestaña activa se sincroniza con el hash (`#/teletransferencia`) para que el botón "atrás" funcione.
 * **Diseño para Alojamiento:** **100% Estático y Gratuito**. Puede desplegarse en **GitHub Pages** (con soporte de SPA mediante script de redirección 404 o hash routing) y en contenedores **Google Cloud Run / AI Studio**.
-* **Backend & Base de Datos:** **Supabase (PostgreSQL 15+)**:
-  * Autenticación con Supabase Auth (correo/contraseña, recuperación nativa).
-  * Row Level Security (RLS) estricto por roles (`admin`, `supervisor`, `vendedor`).
-  * Triggers en PL/pgSQL para resolución automática de claves e histórico.
-  * Funciones analíticas en base de datos (`calcular_pedido_sugerido`).
+* **Backend & Base de Datos:** **Supabase (PostgreSQL 15+ con PostGIS)**:
+  * Autenticación con Supabase Auth (correo/contraseña, recuperación nativa); el rol se lee de `dim_usuarios`, nunca de los metadatos.
+  * Row Level Security (RLS) estricto por roles (`admin`, `gerente`, `transferencista`, `vendedor`).
+  * Triggers y funciones PL/pgSQL: correlativos, máquina de estados, homologación automática de ventas, geofence, alertas.
 * **Resiliencia Offline-First:** Si Supabase no está conectado o el usuario no tiene conexión en calle, el sistema opera con `localStorage` y estado en memoria, permitiendo sincronización posterior.
 
 ---
 
 ## 3. Estructura de la Base de Datos (PostgreSQL / Supabase)
 
-El script SQL maestro se encuentra en: `/src/sql/supabase_schema_fase1.sql`.
+El esquema vigente es **v3**: `src/sql/nova_produccion_v3.sql` (24 tablas, 4 vistas, RLS, RPC). Si el proyecto aún tiene el esquema de fase 1,
+se migra con `src/sql/migracion/` (ver `docs/ARQUITECTURA_OFFLINE_FIRST.md`, secciones 1B y 6). El detalle completo del modelo, del flujo de
+homologación y de la seguridad está en ese documento; aquí van las reglas que no deben romperse.
 
-### 3.1. Tablas Maestras (Dimensiones)
+### 3.1. Dimensiones (los "quién / qué / dónde")
 
-1. **`dim_clientes` (Maestro Unificado de Farmacias - 11 Campos):**
-   * `ident01` (VARCHAR PK): Código maestro único de la farmacia (ej: `CLI-1001`).
-   * `razon_social`, `nombre_fantasia`, `brick`, `municipio_ciudad`, `estado`, `rif`.
-   * `frecuencia` ('Semanal', 'Quincenal', 'Mensual').
-   * `bandera` ('Farmatodo', 'Farmahorro', 'Farmacias Saas', 'Botiqueria', 'Independiente').
-   * `local_gps_lat`, `local_gps_lon` (Coordenadas geográficas).
-   * `activo` (BOOLEAN).
+* **`dim_clientes`** (farmacias): PK `id` (UUID; lo genera el dispositivo si nace en campo) y clave natural `codigo_interno` (= el antiguo `ident01`, `CLI-1001`; nulo en prospectos).
+  `razon_social`, `nombre_comercial`, `rif` (**no único**: una cadena comparte RIF entre locales), `brick`, `municipio`, `estado_geografico`, `bandera`, `ubicacion` (PostGIS) + `lat`/`lon` generadas,
+  `frecuencia_dias`, `estado_validacion` (`prospecto_pendiente` → `activo`/`inactivo`), `segmento` (`estandar`/`recurrente`/`vip`).
+* **`dim_productos`**: clave natural `sku` (= Cod SAP), `ean13`, `nombre_comercial`, `presentacion`, `principio_activo`, `categoria`, `empaque_minimo`, `es_prioritario`. Sin precios ni stock en fase 1.
+* **`dim_droguerias`**: `codigo`, `nombre`, `nombre_normalizado` (para reconocerla en los reportes) y `formato_export` (JSONB con el layout del archivo de pedido: delimitador, encabezados, orden de columnas, codificación, decimal, TXT posicional…).
+* **`dim_equipos`** y **`dim_usuarios`** (extiende `auth.users`; roles `vendedor`, `transferencista`, `gerente`, `admin`). Una cuenta nueva nace inactiva: el rol/equipo lo fija un administrador.
 
-2. **`dim_productos` (Catálogo de Medicamentos - 12 Campos sin Acentos):**
-   * `sku` (VARCHAR PK): Código interno o SAP del producto (ej: `SKU-LOS-50`).
-   * `codigo_barras_ean13`, `principio_activo`, `nombre_comercial`, `presentacion`.
-   * `laboratorio` / `unidad_negocio` ('La Sante', 'Comercial', 'OTC').
-   * `precio_lista`, `descuento_maximo_porc`, `empaque_minimo`, `stock_disponible`.
-   * `es_prioritario` (BOOLEAN), `factor_prioridad` (NUMERIC 1.0 - 2.0).
-   * `clase_terapeutica`, `sistemas`, `clasificacion_portafolio`, `product_code`, `pack_code`.
+### 3.2. Puentes y homologación por droguería
 
-3. **`dim_droguerias` (Distribuidoras Nacionales con Layout JSON Dinámico):**
-   * `id_numero` (INT PK): Identificador secuencial (1: BLV, 2: COBECA, 3: DROBIENCA, 6: NENA, etc.).
-   * `codigo_drogueria`, `rif`, `nombre_drogueria`, `email_pedidos`, `pagina_web`, `telefono`.
-   * `tiempo_entrega_promedio_dias`.
-   * `formato_csv_config` (JSONB): Configuración dinámica del layout de exportación:
-     ```json
-     {
-       "delimitador": ";",
-       "incluir_encabezados": true,
-       "entrecomillado": "solo_texto",
-       "codificacion": "UTF-8",
-       "salto_linea": "\r\n",
-       "formato_decimal": "coma",
-       "columnas": [
-         { "campo_origen": "codigo_cliente", "nombre_encabezado": "COD_CLIENTE", "orden": 1, "formato": "texto" },
-         { "campo_origen": "rif_cliente", "nombre_encabezado": "RIF_FARMACIA", "orden": 2, "formato": "texto" },
-         { "campo_origen": "sku", "nombre_encabezado": "SKU_PRODUCTO", "orden": 3, "formato": "texto" },
-         { "campo_origen": "cantidad_confirmada", "nombre_encabezado": "CANTIDAD", "orden": 4, "formato": "entero" },
-         { "campo_origen": "descuento_porcentaje", "nombre_encabezado": "DESCUENTO", "orden": 5, "formato": "decimal_coma" }
-       ]
-     }
-     ```
+Cada droguería tiene **sus propios** códigos y nombres para cada producto y cada farmacia. Los identificadores internos nunca cambian; lo de cada droguería vive en:
 
-### 3.2. Tablas Puente y Homologación Comercial
+* **`map_cliente_drogueria`**: (droguería, farmacia) → `codigo_cuenta` (opcional) y/o `nombre_en_drogueria` (normalizado). N filas por farmacia y droguería; **una principal** (`es_principal`) es la que se escribe en el pedido. Un código de cuenta pertenece a una sola farmacia por droguería.
+* **`map_producto_drogueria`**: (droguería, producto) → `codigo_drogueria`. N códigos por producto (códigos reemplazados, presentaciones); **uno principal** para exportar; un código identifica un solo producto por droguería.
+* **`rel_cliente_vendedor`**: una farmacia puede tener vendedores de varios equipos (visibilidad cruzada).
 
-4. **`dim_cliente_drogueria_alias` (Homologación de Nombres por Droguería):**
-   * Resuelve la disparidad de nombres de una misma farmacia entre droguerías.
-   * `cliente_ident01`: FK a `dim_clientes(ident01)`.
-   * `drogueria`: Nombre de la droguería (ej. `COBECA`).
-   * `cod_cliente_drogueria`: Código asignado por esa droguería.
-   * `nombre_cliente_drogueria`: Razón social o nombre textual en reportes de esa droguería.
-   * `verificado`: Booleano de validación.
+### 3.3. Hechos
 
-5. **`dim_producto_drogueria_mapeo` (Diccionario Permanente Cod SAP):**
-   * Resuelve la ausencia de Cod SAP en reportes brutos.
-   * Clave única: `(drogueria, codigo_producto_drogueria)`.
-   * `cod_sap`: FK lógica a `dim_productos(sku)`.
-   * `nombre_producto_drogueria`: Descripción textual en la droguería.
-
-6. **`rel_cliente_drogueria_codigos`:**
-   * Almacena el código B2B oficial que cada droguería exige para pedidos de cada farmacia.
-
-7. **`rel_cliente_vendedor`:**
-   * Vincula vendedores de La Santé (Equipo A) y Comercial/OTC (Equipo B) a farmacias comunes.
-
-### 3.3. Tablas de Hechos (Transaccionales)
-
-8. **`fact_historico_ventas` (8 Columnas Comerciales de Venta Diaria por Mes):**
-   * Columnas de origen: `fecha` (DATE), `cod_cliente`, `nombre_cliente`, `drogueria`, `codigo_producto`, `nombre_producto`, `unidades` (INT), `cod_sap` (VARCHAR NULLABLE).
-   * Columnas de enriquecimiento: `mes_periodo` (ej: `2026-06`), `archivo_origen` (ej: `ventas_junio.csv`), `cliente_ident01`.
-   * **Trigger reactivo `fn_resolver_fact_historico_ventas()`:** Infiere el período, busca el Cod SAP en el mapeo, busca la farmacia en los alias, y alimenta el diccionario de mapeo si la fila traía Cod SAP.
-
-9. **`fact_pedidos_cabecera` & `fact_pedidos_detalle`:**
-   * Gestión de órdenes tomadas en campo, fill-rate, droguería seleccionada, descuentos y estados (`borrador`, `confirmado_farmacia`, `enviado_teletransferencia`, `facturado`).
+* **`fact_pedidos` / `fact_pedido_detalles`**: lo que Nova toma en campo. Correlativo del servidor (`PED-1045`, derivados `PED-1045-R1` con `parent_pedido_id`), estados con máquina de transiciones, campos de precio nulos.
+* **`fact_ventas_drogueria`** (+ `import_lotes`): lo que **reportan las droguerías**, guardado con sus códigos y nombres; `cliente_id`/`producto_id` se enlazan con los `map_*` (`app.homologar_ventas`) y quedan nulos si no se reconocen (`vw_pendientes_clientes`, `vw_pendientes_productos`). Homologar después enlaza el histórico retroactivamente.
+* **`fact_compras_mensual`**: consolidado farmacia × producto × mes. Baja al dispositivo (6 meses) y alimenta pedido sugerido, segmentos y alertas.
+* Operativas: `crm_visitas` (geofence), `plantillas_reposicion`, `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `audit_log`.
 
 ---
 
@@ -136,14 +88,16 @@ El script SQL maestro se encuentra en: `/src/sql/supabase_schema_fase1.sql`.
     │   └── mockData.ts                # Datos semilla de 17 droguerías, productos, farmacias e histórico
     ├── services/
     │   ├── supabaseConfig.ts          # URL/Anon Key (sin cargar el SDK de Supabase)
-    │   ├── supabaseClient.ts          # Cliente Supabase, inserción por lotes y prueba de conexión
+    │   ├── supabaseClient.ts          # Cliente Supabase, cliente sin sesión (altas de usuarios) y prueba de conexión
+    │   ├── nubeV3.ts                  # Puente pantallas clásicas ↔ esquema v3 (catálogos, homologación, ventas, usuarios)
     │   ├── storageMigrations.ts       # Saneado de datos guardados (productos, clientes, droguerías) y CSV por defecto
     │   ├── importUtils.ts             # Similitud de nombres, detección de mes, lector de columnas indexado
     │   ├── suggestedOrderEngine.ts    # Motor de pedido sugerido 30/60/90
     │   ├── csvExportEngine.ts         # Exportación CSV dinámica por droguería
     │   └── voiceParserEngine.ts       # Parser semántico del dictado por voz
     ├── sql/
-    │   └── supabase_schema_fase1.sql  # Script DDL completo, RLS, triggers y funciones
+    │   ├── nova_produccion_v3.sql     # Esquema vigente: DDL, RLS, triggers, RPC
+    │   └── migracion/                 # Archivar el esquema de fase 1 y migrar sus datos a v3
     ├── types/
     │   └── pharmacy.ts                # Interfaces TypeScript de todo el dominio farmacéutico
     └── components/
@@ -198,12 +152,12 @@ Esquema de producción: `src/sql/nova_produccion_v3.sql` (PostGIS, RLS, RPC idem
 
 ### 5.2. Motor de Homologación de Farmacias Multi-Nombre
 * Cuando una droguería reporta una venta con un nombre no reconocido directamente en `dim_clientes`:
-  1. Se verifica si ya existe en `dim_cliente_drogueria_alias`.
+  1. Se verifica si ya existe en la homologación de esa droguería (`map_cliente_drogueria`; en la app clásica, los alias locales, que se suben con `importar_homologacion`).
   2. Si no existe, se ejecuta el algoritmo `calcularSimilitudNombres(nombreA, nombreB)` basado en token Dice-Sørensen + subcadenas (filtrando stopwords comerciales como "Farmacia", "C.A.", "S.A.", "Droguería").
   3. En la interfaz **2. Homologar Farmacias**, se presenta al usuario la sugerencia con mayor porcentaje de afinidad (ej. 92% de coincidencia) para su aprobación en un solo clic.
 
 ### 5.3. Diccionario Dinámico de Cod SAP
-* Si un archivo de ventas no incluye la columna `Cod Sap`, el sistema busca en `dim_producto_drogueria_mapeo`.
+* Si un archivo de ventas no incluye la columna `Cod Sap`, el sistema busca el código de la droguería en `map_producto_drogueria` (en el servidor, `app.homologar_ventas`; si el reporte sí trae el Cod SAP, el servidor aprende el mapeo solo).
 * Si el producto no ha sido mapeado previamente, se lista en la subpestaña **3. Diccionario Cod SAP**, donde el administrador selecciona el medicamento correspondiente del vademécum. Una vez seleccionado, **queda guardado permanentemente**, evitando tener que volver a editar los archivos Excel en meses futuros.
 
 ### 5.4. Motor de Pedido Sugerido (30 / 60 / 90 Días)
@@ -228,7 +182,7 @@ Cualquier IA o ingeniero que trabaje en fases subsiguientes debe considerar las 
 ## 7. Directrices Estrictas para Generación de Código por otra IA
 
 1. **Cero Placeholders:** Nunca escribir comentarios como `// TODO`, `// resto del código`, `// implement logic here`. Todo código debe entregarse completo, funcional y fuertemente tipado.
-2. **Respetar Nombres y Schemas:** No alterar las 11 columnas de `dim_clientes` ni las 12 columnas de `dim_productos`. No renombrar `ident01` (clave primaria de farmacias) ni `sku` (clave primaria de productos).
+2. **Respetar Nombres y Schemas:** En el modelo de las pantallas clásicas no renombrar `ident01` ni `sku`; en la base (v3) sus equivalentes son `dim_clientes.codigo_interno` y `dim_productos.sku` (claves naturales únicas; el RIF NO es único). Los códigos de cada droguería viven solo en `map_*`, nunca en las dimensiones.
 3. **Sin Coste en Infraestructura:** Mantener la arquitectura compatible con hosting estático gratuito y capa gratuita de Supabase (500 MB DB / RLS).
 4. **TypeScript Estricto:** Evitar el uso indiscriminado de `any`. Utilizar las interfaces definidas en `/src/types/pharmacy.ts`.
 5. **Estilos:** Usar exclusivamente clases de utilidad de Tailwind CSS con soporte para temas claro y oscuro. Preferir el variante `dark:` (`bg-white dark:bg-slate-900`); `esClaro ? '...' : '...'` sigue siendo válido en componentes existentes.

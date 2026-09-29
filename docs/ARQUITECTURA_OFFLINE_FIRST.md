@@ -18,22 +18,74 @@ guarda en el dispositivo y se sincroniza solo, en segundo plano, cuando vuelve l
 
 | Capa | Archivo | Qué hace |
 |---|---|---|
-| Base de datos | `src/sql/nova_produccion_v3.sql` | DDL completo: 24 tablas, enums, PostGIS, triggers, RPC, RLS, Realtime, purga segura |
-| | `db-tests/` | Valida el DDL en un PostgreSQL local (`./db-tests/run.sh`): 11 escenarios de negocio |
+| Base de datos | `src/sql/nova_produccion_v3.sql` | DDL completo: 24 tablas y 4 vistas, enums, PostGIS, triggers, RPC, RLS, Realtime, purga segura |
+| | `src/sql/migracion/` | Migración desde el esquema de fase 1: archivar (`1_…`) y copiar datos (`2_…`) |
+| | `db-tests/` | Valida el DDL, la homologación y la migración en un PostgreSQL local (`./db-tests/run.sh`): escenarios de negocio + verificación de migración |
 | Datos locales | `src/offline/db.ts` | Esquema Dexie (índice multiEntry `tokens` para búsqueda por prefijo) |
 | | `src/offline/types.ts` | Tipos locales (reflejan las tablas + `sync_estado`, `correlativo_provisional`) |
 | Cola | `src/offline/outbox.ts` | Outbox: encolar, enviar en orden, backoff, ack, errores, compensación |
 | | `src/offline/pedidos.ts` | Operaciones del vendedor: cada una escribe local **y** encola en una sola transacción |
 | | `src/offline/splitOrders.ts` | Remanente y correlativos `PED-XXXX-R1` (puro) |
-| Sync | `src/offline/pull.ts` | Descarga incremental por cursor (10 tablas) |
+| Sync | `src/offline/pull.ts` | Descarga incremental por cursor (11 tablas; las compras solo de los últimos 6 meses) |
 | | `src/offline/motor.ts` | Dispara el sync solo: `online`, visibilidad, temporizadores, Web Locks, Background Sync |
 | | `src/offline/remoto.ts`, `supabaseRemoto.ts` | Puerto `SyncRemote` y su implementación con supabase-js |
 | Negocio cliente | `src/offline/politicas.ts` | Reglas comerciales (espejo del servidor) |
 | | `src/offline/sugerido.ts`, `busqueda.ts` | Pedido sugerido y búsqueda local |
-| Exportación | `src/services/exportacionDrogueria.ts` | CSV/TXT por droguería con códigos homologados |
+| Exportación | `src/services/exportacionDrogueria.ts` | CSV/TXT por droguería con los códigos **principales** de esa droguería |
+| Puente app clásica | `src/services/nubeV3.ts` | Import Studio, catálogos y usuarios contra v3 por clave natural (ident01, SKU, códigos de droguería) |
 | UI | `src/components/capture/*` | Pantalla de captura móvil/tablet (carrito flotante, búsqueda, condiciones, escáner) |
 | | `src/components/SyncStatusChip.tsx` | Indicador de sincronización del encabezado |
 | PWA | `public/sw.js`, `manifest.webmanifest`, `vite.config.ts` (plugin `sw-manifest`) | Instalable y abre sin red |
+
+## 1B. Modelo de datos: dimensiones, hechos y homologación
+
+```
+                        DIMENSIONES                                   HOMOLOGACIÓN (puentes)               HECHOS
+ dim_equipos ─┬─ dim_usuarios ──────────────┐
+              │        │                    │
+              │  rel_cliente_vendedor       │            map_cliente_drogueria  ──┐          fact_pedidos ── fact_pedido_detalles
+              │        │                    │              (N cuentas/nombres      │             (parent_pedido_id: PED-1045-R1)
+              └─ dim_productos ─────────────┼───────────    por farmacia y por     ├──▶ dim_droguerias
+                       │                    │               droguería, 1 principal)│
+ dim_clientes ─────────┴────────────────────┘            map_producto_drogueria ──┘          fact_ventas_drogueria ◀── import_lotes
+ (farmacias; prospectos hasta validar)                     (N códigos por producto y            (lo que reporta cada droguería,
+                                                            droguería, 1 principal)              con SUS códigos y nombres)
+ dim_droguerias (layout de exportación en                                                              │ homologar_ventas()
+ formato_export)                                                                                        ▼
+                                                                                              fact_compras_mensual  (cliente × producto × mes)
+                                                                                              → pedido sugerido, segmentos VIP, alertas
+```
+
+| Tipo | Tablas | Para qué |
+|---|---|---|
+| **Dimensiones** | `dim_equipos`, `dim_usuarios`, `dim_clientes`, `dim_productos`, `dim_droguerias` | Los "quién / qué / dónde": cada fila es una entidad maestra con **un solo** identificador interno (UUID) y su clave natural (`codigo_interno` = ident01, `sku` = Cod SAP, `codigo` de droguería). |
+| **Puentes** | `rel_cliente_vendedor`, `map_cliente_drogueria`, `map_producto_drogueria` | Conectan dimensiones. Los `map_*` traducen entre **nuestro** código y **el de cada droguería**. |
+| **Hechos** | `fact_pedidos` + `fact_pedido_detalles` (lo que Nova toma), `fact_ventas_drogueria` (lo que reportan las droguerías), `fact_compras_mensual` (consolidado) | Los eventos medibles (unidades). Sin precios en fase 1. |
+| **Operativas** | `crm_visitas`, `plantillas_reposicion`/`plantilla_items`, `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `import_lotes`, `config_sistema`, `secretos_sistema`, `audit_log` | Soporte de campo, alertas, reglas, auditoría. |
+
+### Cada droguería habla su propio idioma (códigos y nombres únicos)
+
+Una misma farmacia y un mismo producto reciben códigos y nombres distintos en cada droguería. NOVA nunca cambia sus identificadores: **mantiene los de cada droguería en las tablas puente**.
+
+| Situación real | Cómo lo resuelve el modelo |
+|---|---|
+| Cobeca llama a la farmacia `COB-1001 · "FARMACIA LA PAZ"` y Nena `"LA PAZ CHACAO"` (sin código) | Dos filas en `map_cliente_drogueria`, una por droguería, apuntando a la **misma** `dim_clientes`. Se reconoce por código de cuenta o, si el reporte no trae código, por **nombre normalizado** (sin tildes, mayúsculas, sin signos). |
+| Una droguería tiene **dos cuentas** (o dos nombres) para la misma farmacia | Varias filas en `map_cliente_drogueria` para (droguería, farmacia). Una es la **principal** (`es_principal`): esa se escribe en el pedido; las demás sirven para leer reportes. |
+| Cobeca codifica Losartán como `COB-LOS` y luego lo reemplaza por `COB-LOS2` | Varias filas en `map_producto_drogueria`: los reportes de ambos códigos suman al mismo SKU; el **principal** es el que se exporta. |
+| El mismo código de una droguería no puede significar dos productos/farmacias | Índice único `(drogueria, código)`: intentar repetirlo falla con un error claro (`homologar_*`, `importar_homologacion`). |
+| El reporte de ventas trae el Cod SAP | `homologar_ventas` **aprende** el código de la droguería solo (si ese código apunta a un único SKU): el mapeo queda con `origen = 'importacion'`. |
+
+Flujo de un reporte de ventas (`importar_ventas_drogueria`):
+
+1. La fila se guarda **tal como llegó** (códigos y nombres de la droguería) en `fact_ventas_drogueria`, agrupada en un `import_lotes` (el `checksum` evita duplicar si se reenvía el archivo).
+2. `app.homologar_ventas` enlaza `cliente_id` / `producto_id` con los `map_*`. Lo que no reconoce queda con FK nula y aparece en **`vw_pendientes_clientes` / `vw_pendientes_productos`**, ordenado por volumen (se resuelve primero lo que más pesa; `sugerir_farmacias` / `sugerir_productos` proponen candidatos por similitud).
+3. Al crear un mapeo (`homologar_cliente`, `homologar_producto`, `importar_homologacion` o un INSERT), un trigger **enlaza retroactivamente** todo el histórico de esa droguería. Corregir un mapeo equivocado: se edita y se corre `reprocesar_homologacion`.
+4. `fact_compras_mensual` se recalcula solo para los meses afectados y baja al dispositivo (últimos 6 meses) para el pedido sugerido, los segmentos VIP y las alertas (SKU hueso, abandono).
+5. `vw_estado_homologacion` muestra, por droguería, el % de filas ya enlazadas.
+
+Al **exportar** un pedido hacia una droguería (`exportacionDrogueria.ts`) se hace el camino inverso: farmacia y productos internos → sus códigos **principales** en esa droguería. Si falta alguno, no sale un archivo incompleto: se listan los SKU/farmacias sin código.
+
+Decisión deliberada: el **RIF no es único** (una cadena comparte razón social entre locales); la identidad de cada local es su `codigo_interno`. `vw_clientes_rif_repetido` ayuda a detectar duplicados reales.
 
 ## 2. Contrato de sincronización
 
@@ -97,26 +149,42 @@ comparten los mismos casos de prueba (`politicas.test.ts` y `db-tests/10_escenar
 - `purgar_base_datos_pruebas(admin_pass, solo_transaccional)`: solo admin, solo si `purga_habilitada = true`, clave bcrypt,
   5 intentos por 15 min, y queda en `audit_log`. Nunca toca usuarios, equipos, configuración ni auditoría.
 - `anon` no tiene acceso a ninguna tabla; las funciones internas viven en el esquema `app`.
+- **Alta de usuarios:** toda cuenta nueva de Supabase Auth nace como `vendedor` **inactivo** (trigger `on_auth_user_created`); el rol y el
+  equipo NUNCA se toman de los metadatos del registro (los escribe quien se registra). Un administrador la activa con
+  `admin_configurar_usuario`. La app lee el rol desde `dim_usuarios` al iniciar sesión, no desde `user_metadata`.
 
 ## 6. Puesta en marcha en Supabase
 
-1. Crear un proyecto nuevo y ejecutar `src/sql/nova_produccion_v3.sql` completo en el SQL Editor (es re-ejecutable).
-2. Crear usuarios en Auth y su fila en `dim_usuarios` (idealmente con una Edge Function; el navegador no debe usar la service key).
-3. Cargar catálogo, droguerías (con su `formato_export`), homologaciones y `config_reglas_comerciales`.
-4. Realtime ya queda habilitado para `fact_pedidos`, `pedido_bloqueos`, `notificaciones` y `dim_clientes`.
-5. Programar `recalcular_segmentos_clientes()` y `generar_alertas_comerciales()` a diario (pg_cron, ver el final del DDL).
-6. En la app: **Supabase (configurar)** con URL y anon key. La sesión de Supabase Auth es obligatoria (RLS).
+**Proyecto nuevo:**
+1. SQL Editor: ejecutar `src/sql/nova_produccion_v3.sql` completo (re-ejecutable).
+2. Registrar tu usuario (Authentication → Users, o desde la app) y promoverte una sola vez desde el SQL Editor:
+   `UPDATE dim_usuarios SET rol = 'admin', activo = true WHERE email = 'tu@correo.com';`
+3. Iniciar sesión en la app; desde ahí, cargar catálogos, droguerías (con su layout), homologaciones y ventas en **Carga de Datos**, y dar de alta al resto del equipo en **Usuarios**.
+
+**Proyecto con el esquema de fase 1 (dim_clientes con `ident01`, `fact_historico_ventas`…):**
+1. `src/sql/migracion/1_archivar_esquema_anterior.sql` — mueve las tablas anteriores al esquema `legacy` (no borra nada) y retira el trigger de alta inseguro.
+2. `src/sql/nova_produccion_v3.sql`.
+3. `src/sql/migracion/2_migrar_datos_anteriores.sql` — copia usuarios, droguerías (convierte el layout CSV), productos, farmacias, homologaciones y ventas; enlaza el histórico e imprime el resumen y lo pendiente. Re-ejecutable.
+4. Promover tu usuario administrador si el resumen avisa que no hay ninguno (paso 2 de arriba) e iniciar sesión.
+5. Con todo verificado: `DROP SCHEMA legacy CASCADE;`.
+
+Después, en ambos casos:
+- Realtime ya queda habilitado para `fact_pedidos`, `pedido_bloqueos`, `notificaciones` y `dim_clientes`.
+- Programar `recalcular_segmentos_clientes()` y `generar_alertas_comerciales()` a diario (pg_cron, ver el final del DDL).
+- En la app: **Supabase (configurar)** con URL y anon key. La sesión de Supabase Auth es obligatoria (RLS): sin iniciar sesión las tablas no devuelven datos.
 
 ## 7. Pruebas
 
 ```bash
-npm test                                   # 46 pruebas de lógica cliente (Dexie en memoria)
-NOVA_PG=1 PGHOST=… PGUSER=… npm test       # +8 de integración contra PostgreSQL + PostGIS reales
-./db-tests/run.sh                          # DDL (dos veces) + 11 escenarios de negocio en SQL
+npm test                                   # 67 pruebas de lógica cliente (Dexie en memoria)
+NOVA_PG=1 PGHOST=… PGUSER=… npm test       # +9 de integración contra PostgreSQL + PostGIS reales
+./db-tests/run.sh                          # DDL (dos veces) + escenarios de negocio + migración desde la fase 1 (dos veces)
 ```
 
 La prueba de integración ejecuta la **misma cola** del dispositivo contra las RPC reales: cubre pull, pedido offline,
-split `PED-1001-R1`, exportación, prospecto, check-in y aislamiento de errores.
+split `PED-1001-R1`, exportación, prospecto, check-in, aislamiento de errores y el circuito ventas de droguería → homologación → consolidado → pedido sugerido.
+`db-tests/20_homologacion.sql` cubre códigos múltiples con principal, pendientes, homologación retroactiva, corrección, permisos y alta de usuarios;
+`db-tests/30-31` cargan un esquema de fase 1 con datos y verifican la migración (incluida su re-ejecución).
 
 ## 8. Límites conocidos
 
@@ -126,5 +194,9 @@ split `PED-1001-R1`, exportación, prospecto, check-in y aislamiento de errores.
   pero no lo elimina. Lo pendiente de enviar es lo único irremplazable; conviene sincronizar al final de cada jornada.
 - Falta la interfaz del panel del transferencista con presencia en vivo (el servidor —`tomar_pedido`, `pedido_bloqueos`,
   Realtime— y el adaptador ya existen) y la del administrador para editar reglas comerciales (hoy son datos en la tabla).
-- Las pantallas anteriores (toma clásica, sugerido, teletransferencias) siguen usando el modelo local previo; la captura v3
-  convive con ellas hasta migrarlas.
+- Las pantallas anteriores (toma clásica, sugerido, teletransferencias) siguen usando el modelo local previo (`localStorage`); la
+  captura v3 convive con ellas hasta migrarlas. Sus cargas a la nube (catálogos, homologación, ventas, usuarios) ya van al esquema v3
+  a través de `src/services/nubeV3.ts`.
+- Las pantallas para resolver lo pendiente de homologar y el tablero `vw_estado_homologacion` existen como vistas/RPC; la pantalla nueva
+  está por hacer (hoy se usa la del Import Studio, que trabaja con el modelo local y sube por `importar_homologacion`).
+- La tabla `inventario_drogueria` de la fase 1 no se migra (la app nunca la usó): el inventario sigue siendo local.

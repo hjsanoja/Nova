@@ -4,6 +4,7 @@ import type { FilaRemota, SyncRemote } from './remoto';
 import type { ReglaComercial } from './politicas';
 import type {
   LocalCliente,
+  LocalCompraMensual,
   LocalDetalle,
   LocalDrogueria,
   LocalMapCliente,
@@ -24,6 +25,7 @@ import type {
 const PAGINA = 500;
 const SOLAPE_MS = 5_000; // los commits pueden llegar fuera de orden: se re-pide un margen y el upsert es idempotente
 const DIAS_HISTORIAL = 90;
+const MESES_COMPRAS = 6; // el sugerido usa las últimas compras: no se baja todo el histórico al dispositivo
 
 const str = (v: unknown): string => (v == null ? '' : String(v));
 const strN = (v: unknown): string | null => (v == null ? null : String(v));
@@ -35,6 +37,10 @@ interface TablaPull {
   /** Aplica una página en la base local. */
   aplicar: (db: NovaDB, filas: FilaRemota[]) => Promise<void>;
   acotarHistorial?: boolean;
+  /** Descarga solo los últimos MESES_COMPRAS meses según esta columna de fecha (p. ej. `periodo`). */
+  acotarMeses?: string;
+  /** Limpia lo que salió de la ventana local tras una descarga (p. ej. compras de hace más de MESES_COMPRAS meses). */
+  podar?: (db: NovaDB) => Promise<void>;
   seleccion?: string;
 }
 
@@ -132,6 +138,7 @@ export const TABLAS_PULL: TablaPull[] = [
           producto_id: str(f.producto_id),
           codigo_drogueria: str(f.codigo_drogueria),
           descripcion_drogueria: strN(f.descripcion_drogueria),
+          es_principal: f.es_principal !== false,
         }))
       );
     },
@@ -145,8 +152,32 @@ export const TABLAS_PULL: TablaPull[] = [
           id: str(f.id),
           drogueria_id: str(f.drogueria_id),
           cliente_id: str(f.cliente_id),
-          codigo_cuenta: str(f.codigo_cuenta),
+          codigo_cuenta: strN(f.codigo_cuenta),
           nombre_en_drogueria: strN(f.nombre_en_drogueria),
+          es_principal: f.es_principal !== false,
+        }))
+      );
+    },
+  },
+  {
+    remota: 'fact_compras_mensual',
+    acotarMeses: 'periodo',
+    podar: async (db) => {
+      const corte = inicioMes(MESES_COMPRAS);
+      const viejas = await db.comprasMensual.filter((c) => c.periodo < corte).primaryKeys();
+      if (viejas.length) await db.comprasMensual.bulkDelete(viejas);
+    },
+    aplicar: async (db, filas) => {
+      await db.comprasMensual.bulkDelete(borrados(filas));
+      await db.comprasMensual.bulkPut(
+        vigentes(filas).map<LocalCompraMensual>((f) => ({
+          id: str(f.id),
+          cliente_id: str(f.cliente_id),
+          producto_id: str(f.producto_id),
+          periodo: str(f.periodo),
+          unidades: Number(f.unidades),
+          n_compras: Number(f.n_compras ?? 1),
+          ultima_compra: str(f.ultima_compra),
         }))
       );
     },
@@ -287,14 +318,21 @@ export const TABLAS_PULL: TablaPull[] = [
 
 const claveCursor = (tabla: string) => `cursor:${tabla}`;
 
+/** Primer día del mes de hace `meses` meses (YYYY-MM-DD). */
+function inicioMes(meses: number, ahora = new Date()): string {
+  const d = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth() - meses, 1));
+  return d.toISOString().slice(0, 10);
+}
+
 /** Baja los cambios de una tabla hasta agotarla. Devuelve cuántas filas aplicó. */
 export async function traerTabla(db: NovaDB, remoto: SyncRemote, t: TablaPull): Promise<number> {
   let cursor = await db.leerMeta<string | null>(claveCursor(t.remota), null);
   const creadoDesde = t.acotarHistorial ? new Date(Date.now() - DIAS_HISTORIAL * 86_400_000).toISOString() : undefined;
+  const minimo = t.acotarMeses ? { [t.acotarMeses]: inicioMes(MESES_COMPRAS) } : undefined;
   let total = 0;
   for (;;) {
     const desde = cursor ? new Date(new Date(cursor).getTime() - SOLAPE_MS).toISOString() : null;
-    const filas = await remoto.traer(t.remota, desde, PAGINA, { creadoDesde, seleccion: t.seleccion });
+    const filas = await remoto.traer(t.remota, desde, PAGINA, { creadoDesde, seleccion: t.seleccion, minimo });
     if (filas.length === 0) break;
     await t.aplicar(db, filas);
     total += filas.length;
@@ -307,6 +345,7 @@ export async function traerTabla(db: NovaDB, remoto: SyncRemote, t: TablaPull): 
     }
     if (filas.length < PAGINA || !avanzo) break;
   }
+  if (t.podar && total > 0) await t.podar(db);
   return total;
 }
 

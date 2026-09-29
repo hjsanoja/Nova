@@ -41,6 +41,49 @@ describe('exportación por droguería', () => {
     expect(r.lineas).toBe(2);
   });
 
+  it('cada droguería usa SUS códigos: el mismo producto y la misma farmacia salen con códigos distintos', () => {
+    const r = generarArchivoDrogueria(entrada(FORMATO_CSV, { drogueria: drogueria('nena') }));
+    // Nena solo tiene homologado el producto 1 (NEN-LOS) y la cuenta NEN-77: el producto 2 bloquea el archivo.
+    expect(r.ok).toBe(false);
+    expect(r.errores.map((e) => e.sku)).toEqual(['SKU-2']);
+    const parcial = generarArchivoDrogueria(entrada(FORMATO_CSV, { drogueria: drogueria('nena') }), { permitirFaltantes: true });
+    expect(parcial.texto).toContain('"NEN-77";"NEN-LOS"');
+    expect(parcial.texto).not.toContain('COB-');
+  });
+
+  it('con varios códigos para un mismo producto/farmacia en la droguería escribe el principal', () => {
+    const r = generarArchivoDrogueria(entrada(FORMATO_CSV, {
+      mapProductos: [
+        { id: 'm0', drogueria_id: 'cobeca', producto_id: '1', codigo_drogueria: 'COB-LOS-OLD', es_principal: false },
+        { id: 'm1', drogueria_id: 'cobeca', producto_id: '1', codigo_drogueria: 'COB-LOS', es_principal: true },
+        { id: 'm2', drogueria_id: 'cobeca', producto_id: '2', codigo_drogueria: 'COB-ATO', es_principal: true },
+      ],
+      mapClientes: [
+        { id: 'k0', drogueria_id: 'cobeca', cliente_id: 'c1', codigo_cuenta: 'COB-1001-B', es_principal: false },
+        { id: 'k1', drogueria_id: 'cobeca', cliente_id: 'c1', codigo_cuenta: 'COB-1001', es_principal: true },
+        { id: 'k2', drogueria_id: 'cobeca', cliente_id: 'c1', codigo_cuenta: null, nombre_en_drogueria: 'LA PAZ', es_principal: false }, // alias solo por nombre
+      ],
+    }));
+    expect(r.ok).toBe(true);
+    expect(r.texto).toContain('"COB-1001";"COB-LOS"');
+    expect(r.texto).not.toContain('COB-LOS-OLD');
+    expect(r.texto).not.toContain('COB-1001-B');
+    expect(r.advertencias).toEqual([]);
+  });
+
+  it('un alias solo por nombre no sirve como cuenta, y varios códigos sin principal se avisan', () => {
+    const soloNombre = generarArchivoDrogueria(entrada(FORMATO_CSV, { mapClientes: [{ id: 'k', drogueria_id: 'cobeca', cliente_id: 'c1', codigo_cuenta: null, nombre_en_drogueria: 'LA PAZ', es_principal: true }] }));
+    expect(soloNombre.errores[0].codigo).toBe('cliente_sin_homologar');
+    const ambiguo = generarArchivoDrogueria(entrada(FORMATO_CSV, {
+      mapClientes: [
+        { id: 'k1', drogueria_id: 'cobeca', cliente_id: 'c1', codigo_cuenta: 'COB-1001' },
+        { id: 'k2', drogueria_id: 'cobeca', cliente_id: 'c1', codigo_cuenta: 'COB-1001-B' },
+      ],
+    }));
+    expect(ambiguo.ok).toBe(true);
+    expect(ambiguo.advertencias.join(' ')).toContain('varias cuentas');
+  });
+
   it('respeta delimitador, orden, entrecomillado "nunca" y decimales', () => {
     const f: FormatoExport = { ...FORMATO_CSV, delimitador: '|', entrecomillado: 'nunca', salto_linea: '\n', encabezado: false, decimal: 'coma',
       columnas: [{ encabezado: 'P', origen: 'correlativo' }, { encabezado: 'C', origen: 'unidades_solicitadas', formato: 'decimal' }, { encabezado: 'X', origen: 'codigo_producto_drogueria' }, { encabezado: 'F', origen: 'fecha_pedido' }] };

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Usuario, RolUsuario, EquipoVentas } from '../types/pharmacy';
-import { getSupabaseClient } from '../services/supabaseClient';
+import { crearClienteSinSesion, getSupabaseClient } from '../services/supabaseClient';
+import { crearUsuarioNube } from '../services/nubeV3';
 import { 
   Users, 
   UserPlus, 
@@ -98,26 +99,22 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
     }
 
     const supabase = getSupabaseClient();
-    if (supabase) {
+    const registro = crearClienteSinSesion();
+    if (supabase && registro) {
+      // La cuenta se crea con un cliente aparte (no reemplaza la sesión del administrador) y el rol/equipo los asigna
+      // el administrador en la base mediante una función protegida: nunca viajan en los metadatos del registro.
       try {
-        const { error } = await supabase.auth.signUp({
+        await crearUsuarioNube(supabase, registro, {
           email: formNuevo.email.trim(),
           password: formNuevo.password.trim(),
-          options: {
-            data: {
-              nombre_completo: formNuevo.nombre_completo.trim(),
-              rol: formNuevo.rol,
-              equipo: formNuevo.equipo,
-            },
-          },
+          nombre_completo: formNuevo.nombre_completo.trim(),
+          rol: formNuevo.rol,
+          equipo: formNuevo.equipo,
+          telefono: formNuevo.telefono.trim() || undefined,
+          activo: formNuevo.activo,
         });
-
-        if (error) {
-          showNotification('error', `Error en Supabase Auth: ${error.message}`);
-          return;
-        }
-      } catch (err: any) {
-        showNotification('error', `Fallo al registrar usuario en Supabase: ${err.message}`);
+      } catch (err: unknown) {
+        showNotification('error', err instanceof Error ? err.message : String(err));
         return;
       }
     }

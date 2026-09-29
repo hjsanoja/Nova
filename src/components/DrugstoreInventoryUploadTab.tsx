@@ -285,10 +285,11 @@ SKU-OME-20;COB-1006;600;5.00`;
       }`}>
         <div className={`flex items-center gap-2 text-xs font-bold ${esClaro ? 'text-slate-700' : 'text-slate-300'}`}>
           <Database className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-          <span>Estructura de Base de Datos para Droguerías (<code className="font-mono text-teal-600 dark:text-teal-400">inventario_drogueria</code>)</span>
+          <span>Dónde se guarda esta información</span>
         </div>
         <p className={`text-[11px] ${esClaro ? 'text-slate-500' : 'text-slate-400'}`}>
-          Tabla provisionada en PostgreSQL / Supabase para mantener la disponibilidad por centro logístico de forma independiente al catálogo maestro.
+          En esta fase el inventario por droguería se conserva solo en este navegador (no se sube a Supabase) y se usa para orientar la toma de pedidos.
+          La homologación de cada droguería (sus códigos de producto y de farmacia) sí vive en Supabase: tablas <code className="font-mono text-teal-600 dark:text-teal-400">map_producto_drogueria</code> y <code className="font-mono text-teal-600 dark:text-teal-400">map_cliente_drogueria</code>.
         </p>
       </div>
 

@@ -22,6 +22,8 @@ export interface OpcionesTraer {
   seleccion?: string;
   /** Igualdades adicionales (columna -> valor). */
   filtro?: Record<string, string>;
+  /** Cota inferior sobre una columna (col >= valor): p. ej. solo los últimos meses del consolidado de compras. */
+  minimo?: Record<string, string>;
 }
 
 /** Puerto hacia el servidor. La cola y el motor de sync dependen solo de esta interfaz (fácil de probar). */

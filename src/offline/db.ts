@@ -3,6 +3,7 @@ import type { Table } from 'dexie';
 import type {
   LocalCliente,
   LocalDetalle,
+  LocalCompraMensual,
   LocalDrogueria,
   LocalMapCliente,
   LocalMapProducto,
@@ -27,6 +28,7 @@ export class NovaDB extends Dexie {
   droguerias!: Table<LocalDrogueria, string>;
   mapProductos!: Table<LocalMapProducto, string>;
   mapClientes!: Table<LocalMapCliente, string>;
+  comprasMensual!: Table<LocalCompraMensual, string>;
   reglas!: Table<ReglaComercial, string>;
   pedidos!: Table<LocalPedido, string>;
   detalles!: Table<LocalDetalle, string>;
@@ -55,6 +57,10 @@ export class NovaDB extends Dexie {
       // ++seq conserva el orden de llegada (FIFO); entidad_id agrupa las mutaciones de un mismo pedido.
       outbox: '++seq, id, estado, entidad_id, tipo, proximo_intento',
       meta: 'clave',
+    });
+    // v2: consolidado mensual de compras (historial de las droguerías) para el pedido sugerido.
+    this.version(2).stores({
+      comprasMensual: 'id, [cliente_id+periodo], cliente_id, producto_id',
     });
   }
 

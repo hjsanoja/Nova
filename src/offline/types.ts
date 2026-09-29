@@ -127,20 +127,36 @@ export interface LocalDrogueria {
   activo: boolean;
 }
 
+/** Un producto puede tener varios códigos en una droguería; `es_principal` marca el que se escribe en el pedido. */
 export interface LocalMapProducto {
   id: string;
   drogueria_id: string;
   producto_id: string;
   codigo_drogueria: string;
   descripcion_drogueria?: string | null;
+  es_principal?: boolean;
 }
 
+/** Una farmacia puede tener varias cuentas en una droguería (o solo un nombre, sin código); una es la principal. */
 export interface LocalMapCliente {
   id: string;
   drogueria_id: string;
   cliente_id: string;
-  codigo_cuenta: string;
+  codigo_cuenta: string | null;
   nombre_en_drogueria?: string | null;
+  es_principal?: boolean;
+}
+
+/** Compras de una farmacia por producto y mes, consolidadas desde los reportes de las droguerías (fact_compras_mensual). */
+export interface LocalCompraMensual {
+  id: string;
+  cliente_id: string;
+  producto_id: string;
+  /** Primer día del mes (YYYY-MM-DD). */
+  periodo: string;
+  unidades: number;
+  n_compras: number;
+  ultima_compra: string;
 }
 
 export interface LocalPedido {

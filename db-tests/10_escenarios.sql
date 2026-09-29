@@ -18,7 +18,9 @@ INSERT INTO dim_usuarios (id, nombre_completo, email, rol, equipo_id) VALUES
   ('a0000000-0000-0000-0000-0000000000b1','Transferencista 1','t1@nova.test','transferencista',NULL),
   ('a0000000-0000-0000-0000-0000000000b2','Transferencista 2','t2@nova.test','transferencista',NULL),
   ('a0000000-0000-0000-0000-0000000000c1','Vendedor Ético','v1@nova.test','vendedor','e0000000-0000-0000-0000-000000000001'),
-  ('a0000000-0000-0000-0000-0000000000c2','Vendedor OTC','v2@nova.test','vendedor','e0000000-0000-0000-0000-000000000002');
+  ('a0000000-0000-0000-0000-0000000000c2','Vendedor OTC','v2@nova.test','vendedor','e0000000-0000-0000-0000-000000000002')
+ON CONFLICT (id) DO UPDATE SET nombre_completo = excluded.nombre_completo, rol = excluded.rol,
+  equipo_id = excluded.equipo_id, activo = true;   -- el trigger de alta ya creó la fila (inactiva) al insertar en auth.users
 INSERT INTO dim_droguerias (id, codigo, nombre) VALUES
   ('d0000000-0000-0000-0000-000000000001','COBECA','Cobeca'),
   ('d0000000-0000-0000-0000-000000000002','NENA','Nena');

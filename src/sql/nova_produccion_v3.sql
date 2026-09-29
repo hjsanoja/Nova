@@ -11,8 +11,9 @@
 --     los detalles quedan nulas y listas para activarse sin tocar la lógica operativa.
 --   * Seguridad: RLS en todas las tablas; las operaciones críticas viven en funciones RPC.
 --
--- Uso: ejecutar completo en el SQL Editor de un proyecto Supabase NUEVO (o tras retirar el
--- esquema de fase 1, cuyos nombres de tabla coinciden). Es re-ejecutable (IF NOT EXISTS).
+-- Uso: ejecutar completo en el SQL Editor de Supabase. Es re-ejecutable (IF NOT EXISTS).
+-- Si el proyecto ya tiene el esquema de fase 1 (mismos nombres de tabla, otra estructura), ejecutar ANTES
+-- src/sql/migracion/1_archivar_esquema_anterior.sql y DESPUÉS 2_migrar_datos_anteriores.sql.
 -- ==============================================================================
 
 -- ------------------------------------------------------------------------------
@@ -71,6 +72,14 @@ BEGIN
   RETURN NEW;
 END $$;
 
+-- Normaliza nombres para cruzar reportes de droguería: mayúsculas, sin tildes ni signos, espacios simples.
+-- 'Farmacia  "San José", C.A.' -> 'FARMACIA SAN JOSE C A'. Inmutable: se usa en columnas generadas e índices.
+CREATE OR REPLACE FUNCTION app.norm_texto(t text) RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT nullif(btrim(regexp_replace(
+           upper(translate(coalesce(t, ''), 'ÁÉÍÓÚÜÑáéíóúüñ', 'AEIOUUNaeiouun')), '[^A-Z0-9]+', ' ', 'g')), '')
+$$;
+
 -- ------------------------------------------------------------------------------
 -- 2. DIMENSIONES
 -- ------------------------------------------------------------------------------
@@ -85,6 +94,8 @@ CREATE TABLE IF NOT EXISTS dim_equipos (
   row_version integer NOT NULL DEFAULT 1,
   deleted_at  timestamptz
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_equipos_codigo_ci ON dim_equipos (upper(codigo));   -- 'La Sante' y 'LA SANTE' son el mismo equipo
 
 -- Usuarios de la aplicación: extienden auth.users de Supabase.
 CREATE TABLE IF NOT EXISTS dim_usuarios (
@@ -138,8 +149,11 @@ CREATE TABLE IF NOT EXISTS dim_clientes (
   -- Un cliente activo exige RIF verificado (regla 4).
   CONSTRAINT ck_cliente_activo_rif CHECK (estado_validacion <> 'activo' OR rif_verificado)
 );
--- RIF normalizado único (ignora guiones, puntos y mayúsculas).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_clientes_rif
+-- El RIF NO es único: las cadenas comparten razón social/RIF entre muchos locales. La identidad de cada
+-- local es su código interno (ident01) y, mientras es prospecto, su id. Se indexa el RIF normalizado para
+-- buscar y detectar posibles duplicados (vw_clientes_rif_repetido).
+DROP INDEX IF EXISTS uq_clientes_rif;
+CREATE INDEX IF NOT EXISTS idx_clientes_rif
   ON dim_clientes (upper(regexp_replace(rif, '[^0-9A-Za-z]', '', 'g')))
   WHERE rif IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_clientes_ubicacion ON dim_clientes USING gist (ubicacion);
@@ -186,6 +200,7 @@ CREATE TABLE IF NOT EXISTS dim_droguerias (
   updated_at      timestamptz NOT NULL DEFAULT clock_timestamp(),
   row_version     integer NOT NULL DEFAULT 1,
   deleted_at      timestamptz,
+  nombre_normalizado text GENERATED ALWAYS AS (app.norm_texto(nombre)) STORED,
   CONSTRAINT ck_formato_export CHECK (
     jsonb_typeof(formato_export->'columnas') = 'array'
     AND jsonb_array_length(formato_export->'columnas') > 0
@@ -193,6 +208,9 @@ CREATE TABLE IF NOT EXISTS dim_droguerias (
     AND coalesce(formato_export->>'formato','csv') IN ('csv','txt')
     AND coalesce(formato_export->>'codificacion','utf-8') IN ('utf-8','iso-8859-1','windows-1252'))
 );
+
+-- Bases creadas con una versión anterior de este script: el nombre normalizado permite reconocer la droguería en sus reportes.
+ALTER TABLE dim_droguerias ADD COLUMN IF NOT EXISTS nombre_normalizado text GENERATED ALWAYS AS (app.norm_texto(nombre)) STORED;
 
 CREATE TABLE IF NOT EXISTS dim_productos (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -233,29 +251,156 @@ CREATE TABLE IF NOT EXISTS map_producto_drogueria (
   created_at             timestamptz NOT NULL DEFAULT now(),
   updated_at             timestamptz NOT NULL DEFAULT clock_timestamp(),
   row_version            integer NOT NULL DEFAULT 1,
-  deleted_at             timestamptz,
-  UNIQUE (drogueria_id, producto_id),          -- relación unívoca interno -> droguería
-  UNIQUE (drogueria_id, codigo_drogueria)      -- y droguería -> interno
+  deleted_at             timestamptz
 );
+-- Una droguería puede tener varios códigos para el mismo producto (presentaciones, códigos reemplazados):
+--   * el código de la droguería identifica un solo producto (para leer sus reportes de venta);
+--   * un producto tiene UN código principal por droguería (el que se escribe en el archivo de pedido).
+ALTER TABLE map_producto_drogueria ADD COLUMN IF NOT EXISTS nombre_normalizado text
+  GENERATED ALWAYS AS (app.norm_texto(descripcion_drogueria)) STORED;
+ALTER TABLE map_producto_drogueria ADD COLUMN IF NOT EXISTS es_principal boolean NOT NULL DEFAULT true;
+ALTER TABLE map_producto_drogueria ADD COLUMN IF NOT EXISTS origen text NOT NULL DEFAULT 'manual';
+ALTER TABLE map_producto_drogueria DROP CONSTRAINT IF EXISTS map_producto_drogueria_drogueria_id_producto_id_key;
+ALTER TABLE map_producto_drogueria DROP CONSTRAINT IF EXISTS map_producto_drogueria_drogueria_id_codigo_drogueria_key;
+DO $$ BEGIN
+  ALTER TABLE map_producto_drogueria ADD CONSTRAINT ck_mapprod_origen
+    CHECK (origen IN ('manual','importacion','sugerencia','migracion'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mapprod_codigo ON map_producto_drogueria (drogueria_id, codigo_drogueria)
+  WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mapprod_principal ON map_producto_drogueria (drogueria_id, producto_id)
+  WHERE es_principal AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_mapprod_producto ON map_producto_drogueria (producto_id);
 CREATE INDEX IF NOT EXISTS idx_mapprod_updated ON map_producto_drogueria (updated_at);
 
+-- Igual para las farmacias: una droguería puede tener varias cuentas (o nombres) para una misma farmacia.
+-- El código puede faltar cuando el reporte de la droguería solo trae el nombre.
 CREATE TABLE IF NOT EXISTS map_cliente_drogueria (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   drogueria_id          uuid NOT NULL REFERENCES dim_droguerias(id) ON DELETE CASCADE,
   cliente_id            uuid NOT NULL REFERENCES dim_clientes(id) ON DELETE CASCADE,
-  codigo_cuenta         text NOT NULL,
+  codigo_cuenta         text,
   nombre_en_drogueria   text,
   verificado            boolean NOT NULL DEFAULT true,
   created_at            timestamptz NOT NULL DEFAULT now(),
   updated_at            timestamptz NOT NULL DEFAULT clock_timestamp(),
   row_version           integer NOT NULL DEFAULT 1,
-  deleted_at            timestamptz,
-  UNIQUE (drogueria_id, cliente_id),
-  UNIQUE (drogueria_id, codigo_cuenta)
+  deleted_at            timestamptz
 );
+ALTER TABLE map_cliente_drogueria ALTER COLUMN codigo_cuenta DROP NOT NULL;
+ALTER TABLE map_cliente_drogueria ADD COLUMN IF NOT EXISTS nombre_normalizado text
+  GENERATED ALWAYS AS (app.norm_texto(nombre_en_drogueria)) STORED;
+ALTER TABLE map_cliente_drogueria ADD COLUMN IF NOT EXISTS es_principal boolean NOT NULL DEFAULT true;
+ALTER TABLE map_cliente_drogueria ADD COLUMN IF NOT EXISTS origen text NOT NULL DEFAULT 'manual';
+ALTER TABLE map_cliente_drogueria DROP CONSTRAINT IF EXISTS map_cliente_drogueria_drogueria_id_cliente_id_key;
+ALTER TABLE map_cliente_drogueria DROP CONSTRAINT IF EXISTS map_cliente_drogueria_drogueria_id_codigo_cuenta_key;
+DO $$ BEGIN
+  ALTER TABLE map_cliente_drogueria ADD CONSTRAINT ck_mapcli_origen
+    CHECK (origen IN ('manual','importacion','sugerencia','migracion'));
+  ALTER TABLE map_cliente_drogueria ADD CONSTRAINT ck_mapcli_identificable
+    CHECK (codigo_cuenta IS NOT NULL OR nombre_normalizado IS NOT NULL);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mapcli_cuenta ON map_cliente_drogueria (drogueria_id, codigo_cuenta)
+  WHERE codigo_cuenta IS NOT NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mapcli_nombre ON map_cliente_drogueria (drogueria_id, nombre_normalizado)
+  WHERE codigo_cuenta IS NULL AND deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mapcli_principal ON map_cliente_drogueria (drogueria_id, cliente_id)
+  WHERE es_principal AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_mapcli_cliente ON map_cliente_drogueria (cliente_id);
+CREATE INDEX IF NOT EXISTS idx_mapcli_nombre_trgm ON map_cliente_drogueria USING gin (nombre_normalizado gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_mapcli_updated ON map_cliente_drogueria (updated_at);
+
+-- Regla del código principal (el que se escribe en el archivo de pedido). Siempre hay uno por (droguería, producto)
+-- y por (droguería, farmacia) mientras exista al menos un código:
+--   * el primer código queda como principal; si se marca otro, el anterior deja de serlo;
+--   * un código MOVIDO a otra farmacia/producto no le quita el principal al destino;
+--   * si se da de baja o se mueve el principal, se promueve el código más antiguo que quede.
+CREATE OR REPLACE FUNCTION app.mantener_principal() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE v_otro boolean; v_movido boolean;
+BEGIN
+  IF current_setting('nova.degradando', true) = '1' THEN RETURN NEW; END IF;  -- evita la recursión al degradar
+  IF NEW.deleted_at IS NOT NULL THEN NEW.es_principal := false; RETURN NEW; END IF;
+  -- Un INSERT que va a chocar con un código ya registrado (ON CONFLICT DO NOTHING/UPDATE, o error) no debe tocar a nadie:
+  -- este trigger corre ANTES de que la fila sea descartada y sus efectos sobre otras filas no se revertirían.
+  IF TG_OP = 'INSERT' THEN
+    IF TG_TABLE_NAME = 'map_producto_drogueria' THEN
+      IF EXISTS (SELECT 1 FROM map_producto_drogueria m WHERE m.drogueria_id = NEW.drogueria_id
+                 AND m.codigo_drogueria = NEW.codigo_drogueria AND m.deleted_at IS NULL) THEN RETURN NEW; END IF;
+    ELSIF EXISTS (SELECT 1 FROM map_cliente_drogueria m WHERE m.drogueria_id = NEW.drogueria_id AND m.deleted_at IS NULL
+                  AND ((NEW.codigo_cuenta IS NOT NULL AND m.codigo_cuenta = NEW.codigo_cuenta)
+                       OR (NEW.codigo_cuenta IS NULL AND m.codigo_cuenta IS NULL
+                           AND m.nombre_normalizado = app.norm_texto(NEW.nombre_en_drogueria)))) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+  IF TG_TABLE_NAME = 'map_producto_drogueria' THEN
+    v_movido := TG_OP = 'UPDATE' AND (NEW.producto_id IS DISTINCT FROM OLD.producto_id OR NEW.drogueria_id IS DISTINCT FROM OLD.drogueria_id);
+    SELECT EXISTS (SELECT 1 FROM map_producto_drogueria m WHERE m.drogueria_id = NEW.drogueria_id
+                   AND m.producto_id = NEW.producto_id AND m.es_principal AND m.deleted_at IS NULL AND m.id <> NEW.id) INTO v_otro;
+    IF v_movido THEN
+      NEW.es_principal := NOT v_otro;
+    ELSIF NEW.es_principal AND v_otro THEN
+      PERFORM set_config('nova.degradando', '1', true);
+      UPDATE map_producto_drogueria SET es_principal = false
+       WHERE drogueria_id = NEW.drogueria_id AND producto_id = NEW.producto_id AND es_principal AND deleted_at IS NULL AND id <> NEW.id;
+      PERFORM set_config('nova.degradando', '', true);
+    ELSIF NOT NEW.es_principal AND NOT v_otro THEN
+      NEW.es_principal := true;
+    END IF;
+  ELSE
+    v_movido := TG_OP = 'UPDATE' AND (NEW.cliente_id IS DISTINCT FROM OLD.cliente_id OR NEW.drogueria_id IS DISTINCT FROM OLD.drogueria_id);
+    SELECT EXISTS (SELECT 1 FROM map_cliente_drogueria m WHERE m.drogueria_id = NEW.drogueria_id
+                   AND m.cliente_id = NEW.cliente_id AND m.es_principal AND m.deleted_at IS NULL AND m.id <> NEW.id) INTO v_otro;
+    IF v_movido THEN
+      NEW.es_principal := NOT v_otro;
+    ELSIF NEW.es_principal AND v_otro THEN
+      PERFORM set_config('nova.degradando', '1', true);
+      UPDATE map_cliente_drogueria SET es_principal = false
+       WHERE drogueria_id = NEW.drogueria_id AND cliente_id = NEW.cliente_id AND es_principal AND deleted_at IS NULL AND id <> NEW.id;
+      PERFORM set_config('nova.degradando', '', true);
+    ELSIF NOT NEW.es_principal AND NOT v_otro THEN
+      NEW.es_principal := true;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+
+-- Si el principal se dio de baja o se movió, el grupo de origen no debe quedar sin principal.
+CREATE OR REPLACE FUNCTION app.reponer_principal() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT OLD.es_principal OR current_setting('nova.degradando', true) = '1' THEN RETURN NULL; END IF;  -- traspaso en curso
+  IF TG_TABLE_NAME = 'map_producto_drogueria' THEN
+    IF NOT EXISTS (SELECT 1 FROM map_producto_drogueria m WHERE m.drogueria_id = OLD.drogueria_id AND m.producto_id = OLD.producto_id
+                   AND m.es_principal AND m.deleted_at IS NULL) THEN
+      UPDATE map_producto_drogueria SET es_principal = true
+       WHERE id = (SELECT m.id FROM map_producto_drogueria m WHERE m.drogueria_id = OLD.drogueria_id AND m.producto_id = OLD.producto_id
+                    AND m.deleted_at IS NULL ORDER BY m.created_at, m.id LIMIT 1);
+    END IF;
+  ELSE
+    IF NOT EXISTS (SELECT 1 FROM map_cliente_drogueria m WHERE m.drogueria_id = OLD.drogueria_id AND m.cliente_id = OLD.cliente_id
+                   AND m.es_principal AND m.deleted_at IS NULL) THEN
+      UPDATE map_cliente_drogueria SET es_principal = true
+       WHERE id = (SELECT m.id FROM map_cliente_drogueria m WHERE m.drogueria_id = OLD.drogueria_id AND m.cliente_id = OLD.cliente_id
+                    AND m.deleted_at IS NULL ORDER BY m.created_at, m.id LIMIT 1);
+    END IF;
+  END IF;
+  RETURN NULL;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_principal ON map_producto_drogueria;
+CREATE TRIGGER trg_principal BEFORE INSERT OR UPDATE OF es_principal, deleted_at, producto_id, drogueria_id ON map_producto_drogueria
+  FOR EACH ROW EXECUTE FUNCTION app.mantener_principal();
+DROP TRIGGER IF EXISTS trg_reponer ON map_producto_drogueria;
+CREATE TRIGGER trg_reponer AFTER UPDATE OF es_principal, deleted_at, producto_id, drogueria_id ON map_producto_drogueria
+  FOR EACH ROW WHEN (OLD.es_principal) EXECUTE FUNCTION app.reponer_principal();
+DROP TRIGGER IF EXISTS trg_principal ON map_cliente_drogueria;
+CREATE TRIGGER trg_principal BEFORE INSERT OR UPDATE OF es_principal, deleted_at, cliente_id, drogueria_id ON map_cliente_drogueria
+  FOR EACH ROW EXECUTE FUNCTION app.mantener_principal();
+DROP TRIGGER IF EXISTS trg_reponer ON map_cliente_drogueria;
+CREATE TRIGGER trg_reponer AFTER UPDATE OF es_principal, deleted_at, cliente_id, drogueria_id ON map_cliente_drogueria
+  FOR EACH ROW WHEN (OLD.es_principal) EXECUTE FUNCTION app.reponer_principal();
 
 -- ------------------------------------------------------------------------------
 -- 4. PRECIOS (FASE POSTERIOR) Y POLÍTICAS COMERCIALES
@@ -429,6 +574,68 @@ CREATE TABLE IF NOT EXISTS pedido_bloqueos (
 CREATE INDEX IF NOT EXISTS idx_bloqueos_expira ON pedido_bloqueos (expira_en);
 
 -- ------------------------------------------------------------------------------
+-- 5B. HECHOS: VENTAS REPORTADAS POR LAS DROGUERÍAS (sell-out) Y COMPRAS MENSUALES
+-- Cada droguería reporta a su manera: sus códigos y nombres de farmacia y de producto. La fila se guarda
+-- TAL CUAL LLEGÓ (códigos y nombres de la droguería) y se enlaza a la farmacia y al producto maestros
+-- (cliente_id / producto_id) mediante map_cliente_drogueria y map_producto_drogueria. Lo que aún no se
+-- reconoce queda con FK nula y aparece en vw_pendientes_*; al homologarlo, las filas históricas se enlazan solas.
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS import_lotes (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  archivo       text NOT NULL,
+  checksum      text NOT NULL UNIQUE,            -- identidad del archivo: subirlo dos veces no duplica filas
+  periodo_desde date,
+  periodo_hasta date,
+  filas         integer NOT NULL DEFAULT 0,
+  creado_por    uuid REFERENCES dim_usuarios(id),
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fact_ventas_drogueria (
+  id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  lote_id                   uuid NOT NULL REFERENCES import_lotes(id) ON DELETE CASCADE,
+  fila                      integer NOT NULL,             -- posición en el archivo: reenviar un lote no duplica
+  fecha                     date NOT NULL,
+  periodo                   date GENERATED ALWAYS AS (date_trunc('month', fecha::timestamp)::date) STORED,
+  drogueria_id              uuid NOT NULL REFERENCES dim_droguerias(id),
+  cliente_id                uuid REFERENCES dim_clientes(id),    -- NULL = farmacia sin homologar
+  producto_id               uuid REFERENCES dim_productos(id),   -- NULL = producto sin homologar
+  cod_cliente_drogueria     text,
+  nombre_cliente_drogueria  text NOT NULL,
+  cod_producto_drogueria    text NOT NULL,
+  nombre_producto_drogueria text,
+  cod_sap_reportado         text,                                -- si el reporte ya traía el Cod SAP
+  unidades                  integer NOT NULL,                    -- negativo = devolución / nota de crédito
+  UNIQUE (lote_id, fila)
+);
+CREATE INDEX IF NOT EXISTS idx_ventas_cliente_prod ON fact_ventas_drogueria (cliente_id, producto_id, periodo)
+  WHERE cliente_id IS NOT NULL AND producto_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ventas_sin_cliente ON fact_ventas_drogueria (drogueria_id, cod_cliente_drogueria)
+  WHERE cliente_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ventas_sin_producto ON fact_ventas_drogueria (drogueria_id, cod_producto_drogueria)
+  WHERE producto_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON fact_ventas_drogueria USING brin (fecha);
+
+-- Consolidado por farmacia, producto y mes: es lo que baja al dispositivo (pedido sugerido) y lo que
+-- alimenta segmentos y alertas. Se recalcula a partir de fact_ventas_drogueria (app.refrescar_compras).
+CREATE TABLE IF NOT EXISTS fact_compras_mensual (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  cliente_id     uuid NOT NULL REFERENCES dim_clientes(id) ON DELETE CASCADE,
+  producto_id    uuid NOT NULL REFERENCES dim_productos(id) ON DELETE CASCADE,
+  periodo        date NOT NULL,
+  unidades       integer NOT NULL CHECK (unidades > 0),
+  n_compras      integer NOT NULL DEFAULT 1,
+  ultima_compra  date NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  updated_at     timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version    integer NOT NULL DEFAULT 1,
+  deleted_at     timestamptz,
+  UNIQUE (cliente_id, producto_id, periodo)
+);
+CREATE INDEX IF NOT EXISTS idx_compras_updated ON fact_compras_mensual (updated_at);
+CREATE INDEX IF NOT EXISTS idx_compras_producto ON fact_compras_mensual (producto_id, periodo);
+
+-- ------------------------------------------------------------------------------
 -- 6. MINI-CRM: VISITAS, PLANTILLAS, NOTIFICACIONES, ALERTAS, AUDITORÍA
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS crm_visitas (
@@ -531,7 +738,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias',
     'dim_productos','map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto',
     'config_reglas_comerciales','fact_pedidos','fact_pedido_detalles','crm_visitas','plantillas_reposicion',
-    'notificaciones','alertas_comerciales']
+    'notificaciones','alertas_comerciales','fact_compras_mensual']
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS trg_touch ON %I', t);
     EXECUTE format('CREATE TRIGGER trg_touch BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION app.touch()', t);
@@ -634,7 +841,8 @@ BEGIN
       RAISE EXCEPTION 'El cliente aún no está validado (RIF/documentación): no puede transferirse' USING ERRCODE = 'P0001';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM map_cliente_drogueria m
-                   WHERE m.cliente_id = NEW.cliente_id AND m.drogueria_id = NEW.drogueria_id AND m.deleted_at IS NULL) THEN
+                   WHERE m.cliente_id = NEW.cliente_id AND m.drogueria_id = NEW.drogueria_id
+                     AND m.es_principal AND m.codigo_cuenta IS NOT NULL AND m.deleted_at IS NULL) THEN
       RAISE EXCEPTION 'El cliente no está homologado con la droguería destino' USING ERRCODE = 'P0001';
     END IF;
   END IF;
@@ -696,8 +904,8 @@ BEGIN
       IF NOT NEW.rif_verificado THEN
         RAISE EXCEPTION 'Verifica el RIF/documentación antes de activar al cliente' USING ERRCODE = 'P0001';
       END IF;
-      IF NOT EXISTS (SELECT 1 FROM map_cliente_drogueria WHERE cliente_id = NEW.id AND deleted_at IS NULL) THEN
-        RAISE EXCEPTION 'Asigna la homologación con al menos una droguería antes de activar' USING ERRCODE = 'P0001';
+      IF NOT EXISTS (SELECT 1 FROM map_cliente_drogueria WHERE cliente_id = NEW.id AND codigo_cuenta IS NOT NULL AND deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'Asigna la homologación (código de cuenta) con al menos una droguería antes de activar' USING ERRCODE = 'P0001';
       END IF;
       NEW.validado_en := coalesce(NEW.validado_en, now());
       NEW.validado_por := coalesce(NEW.validado_por, auth.uid());
@@ -1108,9 +1316,11 @@ RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
-  INSERT INTO map_cliente_drogueria (drogueria_id, cliente_id, codigo_cuenta)
-  VALUES (p_drogueria, p_cliente, p_codigo_cuenta)
-  ON CONFLICT (drogueria_id, cliente_id) DO UPDATE SET codigo_cuenta = excluded.codigo_cuenta, deleted_at = NULL;
+  IF coalesce(btrim(p_codigo_cuenta), '') = '' THEN
+    RAISE EXCEPTION 'Indica el código de cuenta que la droguería asignó a la farmacia' USING ERRCODE = '22023';
+  END IF;
+  -- Lanza 23505 si ese código ya pertenece a otra farmacia; el primer código de la droguería queda como principal.
+  PERFORM homologar_cliente(p_drogueria, p_cliente, p_codigo_cuenta, NULL, NULL);
   UPDATE dim_clientes
      SET rif_verificado = p_rif_verificado, rif_verificado_por = auth.uid(), rif_verificado_en = now(),
          codigo_interno = coalesce(p_codigo_interno, codigo_interno),
@@ -1156,6 +1366,476 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------------------
+-- 11B. HOMOLOGACIÓN E IMPORTACIÓN (códigos y nombres propios de cada droguería)
+-- ------------------------------------------------------------------------------
+-- Resolución = función pura de (códigos/nombres reportados + tablas map_*): por eso se puede recalcular
+-- (reprocesar_homologacion) y se completa sola cuando se agrega un mapeo (triggers de más abajo).
+
+-- Consolida fact_ventas_drogueria -> fact_compras_mensual desde un mes en adelante (NULL = todo).
+CREATE OR REPLACE FUNCTION app.refrescar_compras(p_desde date DEFAULT NULL) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer; v_baja integer;
+BEGIN
+  WITH agg AS (
+    SELECT cliente_id, producto_id, periodo, sum(unidades)::integer AS unidades, count(*)::integer AS n, max(fecha) AS ultima
+      FROM fact_ventas_drogueria
+     WHERE cliente_id IS NOT NULL AND producto_id IS NOT NULL AND (p_desde IS NULL OR periodo >= p_desde)
+     GROUP BY cliente_id, producto_id, periodo
+    HAVING sum(unidades) > 0)
+  INSERT INTO fact_compras_mensual (cliente_id, producto_id, periodo, unidades, n_compras, ultima_compra)
+  SELECT cliente_id, producto_id, periodo, unidades, n, ultima FROM agg
+  ON CONFLICT (cliente_id, producto_id, periodo) DO UPDATE
+     SET unidades = excluded.unidades, n_compras = excluded.n_compras,
+         ultima_compra = excluded.ultima_compra, deleted_at = NULL
+   WHERE (fact_compras_mensual.unidades, fact_compras_mensual.n_compras, fact_compras_mensual.ultima_compra)
+           IS DISTINCT FROM (excluded.unidades, excluded.n_compras, excluded.ultima_compra)
+      OR fact_compras_mensual.deleted_at IS NOT NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+
+  -- Combinaciones que dejaron de existir (lote borrado, homologación corregida): baja lógica para que el dispositivo las retire.
+  UPDATE fact_compras_mensual c SET deleted_at = now()
+   WHERE c.deleted_at IS NULL AND (p_desde IS NULL OR c.periodo >= p_desde)
+     AND NOT EXISTS (SELECT 1 FROM fact_ventas_drogueria v
+                      WHERE v.cliente_id = c.cliente_id AND v.producto_id = c.producto_id AND v.periodo = c.periodo
+                     HAVING sum(v.unidades) > 0);
+  GET DIAGNOSTICS v_baja = ROW_COUNT;
+  RETURN v_n + v_baja;
+END $$;
+
+-- Enlaza las filas de venta pendientes con la farmacia/producto maestro usando los mapeos vigentes.
+--   1) aprende códigos de producto cuando el reporte trae el Cod SAP (solo si el código apunta a un único SKU);
+--   2) farmacia por código de cuenta; si el reporte no trae código, por nombre normalizado inequívoco;
+--   3) producto por código de la droguería;
+--   4) actualiza el consolidado mensual de los meses afectados.
+CREATE OR REPLACE FUNCTION app.homologar_ventas(p_drogueria uuid DEFAULT NULL, p_lote uuid DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_aprendidos bigint := 0; v_cli bigint := 0; v_cli_n bigint := 0; v_prod bigint := 0; v_x bigint;
+        v_desde date; v_m date;
+BEGIN
+  IF current_setting('nova.homologando', true) = '1' THEN RETURN '{}'::jsonb; END IF;
+  PERFORM set_config('nova.homologando', '1', true);
+
+  WITH cand AS (
+    SELECT v.drogueria_id, v.cod_producto_drogueria AS codigo,
+           (array_agg(DISTINCT p.id))[1] AS producto_id,
+           (array_agg(v.nombre_producto_drogueria))[1] AS descripcion,
+           count(DISTINCT p.id) AS n
+      FROM fact_ventas_drogueria v
+      JOIN dim_productos p ON p.sku = v.cod_sap_reportado AND p.deleted_at IS NULL
+     WHERE v.producto_id IS NULL AND v.cod_sap_reportado IS NOT NULL
+       AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+     GROUP BY v.drogueria_id, v.cod_producto_drogueria),
+  ins AS (
+    INSERT INTO map_producto_drogueria (drogueria_id, producto_id, codigo_drogueria, descripcion_drogueria, es_principal, origen)
+    SELECT drogueria_id, producto_id, codigo, descripcion, false, 'importacion' FROM cand WHERE n = 1
+    ON CONFLICT (drogueria_id, codigo_drogueria) WHERE deleted_at IS NULL DO NOTHING
+    RETURNING 1)
+  SELECT count(*) INTO v_aprendidos FROM ins;
+
+  WITH u AS (
+    UPDATE fact_ventas_drogueria v SET cliente_id = m.cliente_id
+      FROM map_cliente_drogueria m
+     WHERE v.cliente_id IS NULL AND m.deleted_at IS NULL AND m.drogueria_id = v.drogueria_id
+       AND m.codigo_cuenta IS NOT NULL AND m.codigo_cuenta = v.cod_cliente_drogueria
+       AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+    RETURNING v.periodo)
+  SELECT count(*), min(periodo) INTO v_cli, v_m FROM u;
+  v_desde := v_m;
+
+  WITH unico AS (
+    SELECT drogueria_id, nombre_normalizado, (array_agg(DISTINCT cliente_id))[1] AS cliente_id
+      FROM map_cliente_drogueria
+     WHERE deleted_at IS NULL AND nombre_normalizado IS NOT NULL
+       AND (p_drogueria IS NULL OR drogueria_id = p_drogueria)
+     GROUP BY drogueria_id, nombre_normalizado HAVING count(DISTINCT cliente_id) = 1),
+  u AS (
+    UPDATE fact_ventas_drogueria v SET cliente_id = un.cliente_id
+      FROM unico un
+     WHERE v.cliente_id IS NULL AND v.cod_cliente_drogueria IS NULL
+       AND un.drogueria_id = v.drogueria_id AND un.nombre_normalizado = app.norm_texto(v.nombre_cliente_drogueria)
+       AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+    RETURNING v.periodo)
+  SELECT count(*), min(periodo) INTO v_cli_n, v_m FROM u;
+  v_desde := least(v_desde, v_m);
+
+  WITH u AS (
+    UPDATE fact_ventas_drogueria v SET producto_id = m.producto_id
+      FROM map_producto_drogueria m
+     WHERE v.producto_id IS NULL AND m.deleted_at IS NULL AND m.drogueria_id = v.drogueria_id
+       AND m.codigo_drogueria = v.cod_producto_drogueria
+       AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+    RETURNING v.periodo)
+  SELECT count(*), min(periodo) INTO v_prod, v_m FROM u;
+  v_desde := least(v_desde, v_m);
+
+  IF v_desde IS NOT NULL THEN PERFORM app.refrescar_compras(v_desde); END IF;
+  PERFORM set_config('nova.homologando', '', true);
+  RETURN jsonb_build_object('clientes_enlazados', v_cli + v_cli_n, 'productos_enlazados', v_prod, 'codigos_aprendidos', v_aprendidos);
+EXCEPTION WHEN OTHERS THEN
+  PERFORM set_config('nova.homologando', '', true);
+  RAISE;
+END $$;
+
+-- Al agregar o cambiar mapeos, las ventas históricas de esa droguería se enlazan solas (una pasada por sentencia).
+CREATE OR REPLACE FUNCTION app.tg_homologar_map() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE d uuid;
+BEGIN
+  IF current_setting('nova.homologando', true) = '1' OR current_setting('nova.degradando', true) = '1' THEN RETURN NULL; END IF;
+  FOR d IN SELECT DISTINCT drogueria_id FROM nuevas LOOP
+    PERFORM app.homologar_ventas(d);
+  END LOOP;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS trg_homologar_ins ON map_producto_drogueria;
+CREATE TRIGGER trg_homologar_ins AFTER INSERT ON map_producto_drogueria
+  REFERENCING NEW TABLE AS nuevas FOR EACH STATEMENT EXECUTE FUNCTION app.tg_homologar_map();
+DROP TRIGGER IF EXISTS trg_homologar_upd ON map_producto_drogueria;
+CREATE TRIGGER trg_homologar_upd AFTER UPDATE ON map_producto_drogueria
+  REFERENCING NEW TABLE AS nuevas FOR EACH STATEMENT EXECUTE FUNCTION app.tg_homologar_map();
+DROP TRIGGER IF EXISTS trg_homologar_ins ON map_cliente_drogueria;
+CREATE TRIGGER trg_homologar_ins AFTER INSERT ON map_cliente_drogueria
+  REFERENCING NEW TABLE AS nuevas FOR EACH STATEMENT EXECUTE FUNCTION app.tg_homologar_map();
+DROP TRIGGER IF EXISTS trg_homologar_upd ON map_cliente_drogueria;
+CREATE TRIGGER trg_homologar_upd AFTER UPDATE ON map_cliente_drogueria
+  REFERENCING NEW TABLE AS nuevas FOR EACH STATEMENT EXECUTE FUNCTION app.tg_homologar_map();
+
+-- Corregir un mapeo equivocado: se borra el enlace de esa droguería y se recalcula con los mapeos vigentes.
+CREATE OR REPLACE FUNCTION reprocesar_homologacion(p_drogueria uuid DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_res jsonb;
+BEGIN
+  IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
+  UPDATE fact_ventas_drogueria SET cliente_id = NULL, producto_id = NULL
+   WHERE p_drogueria IS NULL OR drogueria_id = p_drogueria;
+  v_res := app.homologar_ventas(p_drogueria);
+  PERFORM app.refrescar_compras(NULL);
+  RETURN v_res;
+END $$;
+
+-- Un solo mapeo de farmacia (pantalla "Homologar"). El primero de la droguería queda como principal.
+CREATE OR REPLACE FUNCTION homologar_cliente(p_drogueria uuid, p_cliente uuid, p_codigo text DEFAULT NULL,
+                                             p_nombre text DEFAULT NULL, p_principal boolean DEFAULT NULL) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_id uuid; v_otro uuid; v_norm text := app.norm_texto(p_nombre);
+BEGIN
+  IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
+  p_codigo := nullif(btrim(p_codigo), '');
+  IF p_codigo IS NULL AND v_norm IS NULL THEN
+    RAISE EXCEPTION 'Indica el código de cuenta o el nombre que usa la droguería' USING ERRCODE = '22023';
+  END IF;
+  SELECT id, cliente_id INTO v_id, v_otro FROM map_cliente_drogueria
+   WHERE drogueria_id = p_drogueria AND deleted_at IS NULL
+     AND ((p_codigo IS NOT NULL AND codigo_cuenta = p_codigo) OR (p_codigo IS NULL AND codigo_cuenta IS NULL AND nombre_normalizado = v_norm));
+  IF v_id IS NOT NULL AND v_otro <> p_cliente THEN
+    RAISE EXCEPTION 'Ese código/nombre ya está asignado a otra farmacia en esta droguería' USING ERRCODE = '23505';
+  END IF;
+  IF v_id IS NULL THEN
+    INSERT INTO map_cliente_drogueria (drogueria_id, cliente_id, codigo_cuenta, nombre_en_drogueria, es_principal, origen)
+    VALUES (p_drogueria, p_cliente, p_codigo, nullif(btrim(p_nombre), ''),
+            coalesce(p_principal, NOT EXISTS (SELECT 1 FROM map_cliente_drogueria m WHERE m.drogueria_id = p_drogueria
+                                                AND m.cliente_id = p_cliente AND m.es_principal AND m.deleted_at IS NULL)),
+            'manual')
+    RETURNING id INTO v_id;
+  ELSE
+    UPDATE map_cliente_drogueria SET nombre_en_drogueria = coalesce(nullif(btrim(p_nombre), ''), nombre_en_drogueria),
+           es_principal = coalesce(p_principal, es_principal) WHERE id = v_id;
+  END IF;
+  RETURN v_id;
+END $$;
+
+CREATE OR REPLACE FUNCTION homologar_producto(p_drogueria uuid, p_producto uuid, p_codigo text,
+                                              p_descripcion text DEFAULT NULL, p_principal boolean DEFAULT NULL) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_id uuid; v_otro uuid;
+BEGIN
+  IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
+  p_codigo := nullif(btrim(p_codigo), '');
+  IF p_codigo IS NULL THEN RAISE EXCEPTION 'Indica el código que usa la droguería' USING ERRCODE = '22023'; END IF;
+  SELECT id, producto_id INTO v_id, v_otro FROM map_producto_drogueria
+   WHERE drogueria_id = p_drogueria AND codigo_drogueria = p_codigo AND deleted_at IS NULL;
+  IF v_id IS NOT NULL AND v_otro <> p_producto THEN
+    RAISE EXCEPTION 'Ese código ya está asignado a otro producto en esta droguería' USING ERRCODE = '23505';
+  END IF;
+  IF v_id IS NULL THEN
+    INSERT INTO map_producto_drogueria (drogueria_id, producto_id, codigo_drogueria, descripcion_drogueria, es_principal, origen)
+    VALUES (p_drogueria, p_producto, p_codigo, nullif(btrim(p_descripcion), ''),
+            coalesce(p_principal, NOT EXISTS (SELECT 1 FROM map_producto_drogueria m WHERE m.drogueria_id = p_drogueria
+                                                AND m.producto_id = p_producto AND m.es_principal AND m.deleted_at IS NULL)),
+            'manual')
+    RETURNING id INTO v_id;
+  ELSE
+    UPDATE map_producto_drogueria SET descripcion_drogueria = coalesce(nullif(btrim(p_descripcion), ''), descripcion_drogueria),
+           es_principal = coalesce(p_principal, es_principal) WHERE id = v_id;
+  END IF;
+  RETURN v_id;
+END $$;
+
+-- Candidatos para un nombre que la droguería escribe a su manera (similitud de trigramas sobre nombres normalizados).
+CREATE OR REPLACE FUNCTION sugerir_farmacias(p_nombre text, p_limite integer DEFAULT 5)
+RETURNS TABLE (cliente_id uuid, codigo_interno text, nombre_comercial text, razon_social text, brick text, score real)
+LANGUAGE sql STABLE SET search_path = public, extensions AS $$
+  SELECT c.id, c.codigo_interno, c.nombre_comercial, c.razon_social, c.brick,
+         greatest(similarity(app.norm_texto(c.nombre_comercial), app.norm_texto(p_nombre)),
+                  similarity(app.norm_texto(c.razon_social), app.norm_texto(p_nombre)))::real AS score
+    FROM dim_clientes c
+   WHERE c.estado_validacion = 'activo' AND c.deleted_at IS NULL
+   ORDER BY score DESC, c.nombre_comercial LIMIT greatest(p_limite, 1)
+$$;
+
+CREATE OR REPLACE FUNCTION sugerir_productos(p_nombre text, p_limite integer DEFAULT 5)
+RETURNS TABLE (producto_id uuid, sku text, nombre_comercial text, presentacion text, score real)
+LANGUAGE sql STABLE SET search_path = public, extensions AS $$
+  SELECT p.id, p.sku, p.nombre_comercial, p.presentacion,
+         similarity(app.norm_texto(p.nombre_comercial || ' ' || coalesce(p.presentacion, '')), app.norm_texto(p_nombre))::real AS score
+    FROM dim_productos p
+   WHERE p.activo AND p.deleted_at IS NULL
+   ORDER BY score DESC, p.nombre_comercial LIMIT greatest(p_limite, 1)
+$$;
+
+-- Lo que falta por homologar, agrupado y ordenado por volumen: se resuelve primero lo que más pesa.
+CREATE OR REPLACE VIEW vw_pendientes_clientes WITH (security_invoker = true) AS
+SELECT v.drogueria_id, d.nombre AS drogueria, v.cod_cliente_drogueria,
+       mode() WITHIN GROUP (ORDER BY v.nombre_cliente_drogueria) AS nombre_cliente_drogueria,
+       count(*)::integer AS filas, sum(v.unidades)::integer AS unidades, min(v.fecha) AS desde, max(v.fecha) AS hasta
+  FROM fact_ventas_drogueria v JOIN dim_droguerias d ON d.id = v.drogueria_id
+ WHERE v.cliente_id IS NULL
+ GROUP BY v.drogueria_id, d.nombre, v.cod_cliente_drogueria,
+          CASE WHEN v.cod_cliente_drogueria IS NULL THEN app.norm_texto(v.nombre_cliente_drogueria) END;
+
+CREATE OR REPLACE VIEW vw_pendientes_productos WITH (security_invoker = true) AS
+SELECT v.drogueria_id, d.nombre AS drogueria, v.cod_producto_drogueria,
+       mode() WITHIN GROUP (ORDER BY v.nombre_producto_drogueria) AS nombre_producto_drogueria,
+       mode() WITHIN GROUP (ORDER BY v.cod_sap_reportado) AS cod_sap_reportado,
+       count(*)::integer AS filas, sum(v.unidades)::integer AS unidades, min(v.fecha) AS desde, max(v.fecha) AS hasta
+  FROM fact_ventas_drogueria v JOIN dim_droguerias d ON d.id = v.drogueria_id
+ WHERE v.producto_id IS NULL
+ GROUP BY v.drogueria_id, d.nombre, v.cod_producto_drogueria;
+
+-- Salud de la homologación por droguería (para el tablero del administrador).
+CREATE OR REPLACE VIEW vw_estado_homologacion WITH (security_invoker = true) AS
+SELECT d.id AS drogueria_id, d.nombre AS drogueria, count(v.id)::integer AS filas,
+       count(*) FILTER (WHERE v.cliente_id IS NULL)::integer AS filas_sin_farmacia,
+       count(*) FILTER (WHERE v.producto_id IS NULL)::integer AS filas_sin_producto,
+       round(100.0 * count(*) FILTER (WHERE v.cliente_id IS NOT NULL AND v.producto_id IS NOT NULL)
+             / nullif(count(v.id), 0), 1) AS pct_homologado
+  FROM dim_droguerias d LEFT JOIN fact_ventas_drogueria v ON v.drogueria_id = d.id
+ WHERE d.deleted_at IS NULL
+ GROUP BY d.id, d.nombre;
+
+-- Locales que comparten RIF (normal en cadenas; útil para detectar duplicados reales).
+CREATE OR REPLACE VIEW vw_clientes_rif_repetido WITH (security_invoker = true) AS
+SELECT upper(regexp_replace(rif, '[^0-9A-Za-z]', '', 'g')) AS rif_normalizado, count(*)::integer AS locales,
+       array_agg(coalesce(codigo_interno, id::text) ORDER BY nombre_comercial) AS codigos,
+       array_agg(nombre_comercial ORDER BY nombre_comercial) AS nombres
+  FROM dim_clientes WHERE rif IS NOT NULL AND deleted_at IS NULL
+ GROUP BY 1 HAVING count(*) > 1;
+
+-- Importación de reportes de venta de las droguerías (lotes de ~1000 filas; idempotente por checksum + fila).
+--   p_lote  = {"archivo": "...", "checksum": "..."}
+--   p_filas = [{"n":1,"fecha":"2026-03-05","drogueria":"COBECA","cod_cliente":"C-88","nombre_cliente":"...",
+--               "cod_producto":"P-1","nombre_producto":"...","unidades":12,"cod_sap":"SKU-1"}, ...]
+CREATE OR REPLACE FUNCTION importar_ventas_drogueria(p_lote jsonb, p_filas jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_lote uuid; v_ins integer; v_desconocidas jsonb; v_homo jsonb;
+BEGIN
+  IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
+  IF coalesce(p_lote->>'checksum', '') = '' OR jsonb_typeof(p_filas) <> 'array' THEN
+    RAISE EXCEPTION 'Lote inválido: falta checksum o filas' USING ERRCODE = '22023';
+  END IF;
+
+  INSERT INTO import_lotes (archivo, checksum, creado_por)
+  VALUES (coalesce(p_lote->>'archivo', 'sin_nombre'), p_lote->>'checksum', auth.uid())
+  ON CONFLICT (checksum) DO UPDATE SET archivo = import_lotes.archivo
+  RETURNING id INTO v_lote;
+
+  WITH src AS (
+    SELECT (r->>'n')::integer AS fila, (r->>'fecha')::date AS fecha, r->>'drogueria' AS drogueria,
+           nullif(btrim(r->>'cod_cliente'), '') AS cod_cliente, coalesce(nullif(btrim(r->>'nombre_cliente'), ''), 'SIN NOMBRE') AS nombre_cliente,
+           btrim(r->>'cod_producto') AS cod_producto, r->>'nombre_producto' AS nombre_producto,
+           nullif(btrim(r->>'cod_sap'), '') AS cod_sap, (r->>'unidades')::integer AS unidades
+      FROM jsonb_array_elements(p_filas) r),
+  res AS (
+    SELECT s.*, d.id AS drogueria_id
+      FROM src s
+      LEFT JOIN LATERAL (SELECT dd.id FROM dim_droguerias dd
+                          WHERE dd.deleted_at IS NULL
+                            AND (app.norm_texto(dd.codigo) = app.norm_texto(s.drogueria) OR dd.nombre_normalizado = app.norm_texto(s.drogueria))
+                          ORDER BY dd.activo DESC LIMIT 1) d ON true),
+  ins AS (
+    INSERT INTO fact_ventas_drogueria (lote_id, fila, fecha, drogueria_id, cod_cliente_drogueria, nombre_cliente_drogueria,
+                                       cod_producto_drogueria, nombre_producto_drogueria, cod_sap_reportado, unidades)
+    SELECT v_lote, fila, fecha, drogueria_id, cod_cliente, nombre_cliente, cod_producto, nombre_producto, cod_sap, unidades
+      FROM res WHERE drogueria_id IS NOT NULL AND cod_producto <> ''
+    ON CONFLICT (lote_id, fila) DO NOTHING
+    RETURNING 1)
+  SELECT (SELECT count(*) FROM ins),
+         (SELECT coalesce(jsonb_agg(DISTINCT drogueria), '[]'::jsonb) FROM res WHERE drogueria_id IS NULL)
+    INTO v_ins, v_desconocidas;
+
+  UPDATE import_lotes l SET filas = x.n, periodo_desde = x.d1, periodo_hasta = x.d2
+    FROM (SELECT count(*)::integer AS n, min(fecha) AS d1, max(fecha) AS d2 FROM fact_ventas_drogueria WHERE lote_id = v_lote) x
+   WHERE l.id = v_lote;
+
+  v_homo := app.homologar_ventas(NULL, v_lote);
+  INSERT INTO audit_log (usuario_id, accion, detalle)
+  VALUES (auth.uid(), 'importar_ventas', jsonb_build_object('lote', v_lote, 'insertadas', v_ins));
+  RETURN jsonb_build_object('lote_id', v_lote, 'insertadas', v_ins, 'recibidas', jsonb_array_length(p_filas),
+                            'droguerias_desconocidas', v_desconocidas, 'homologacion', v_homo);
+END $$;
+
+CREATE OR REPLACE FUNCTION borrar_lote_ventas(p_lote uuid) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_desde date; v_n integer;
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  SELECT date_trunc('month', periodo_desde::timestamp)::date INTO v_desde FROM import_lotes WHERE id = p_lote;  -- inicio del mes
+  SELECT count(*) INTO v_n FROM fact_ventas_drogueria WHERE lote_id = p_lote;
+  DELETE FROM import_lotes WHERE id = p_lote;
+  PERFORM app.refrescar_compras(v_desde);
+  INSERT INTO audit_log (usuario_id, accion, detalle) VALUES (auth.uid(), 'borrar_lote_ventas', jsonb_build_object('lote', p_lote, 'filas', v_n));
+  RETURN v_n;
+END $$;
+
+CREATE OR REPLACE FUNCTION refrescar_compras_mensual(p_desde date DEFAULT NULL) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL AND NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  RETURN app.refrescar_compras(p_desde);
+END $$;
+
+-- Catálogos maestros por clave natural (código interno / SKU): el navegador no necesita conocer UUID.
+CREATE OR REPLACE FUNCTION importar_catalogo_productos(p jsonb) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer;
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  WITH ins AS (
+    INSERT INTO dim_productos (sku, ean13, nombre_comercial, presentacion, principio_activo, clase_terapeutica, categoria,
+                               laboratorio, equipo_id, empaque_minimo, es_prioritario, activo)
+    SELECT btrim(r->>'sku'), nullif(r->>'ean13', ''), coalesce(nullif(r->>'nombre_comercial', ''), r->>'sku'), nullif(r->>'presentacion', ''),
+           nullif(r->>'principio_activo', ''), nullif(r->>'clase_terapeutica', ''), nullif(r->>'categoria', ''),
+           nullif(r->>'laboratorio', ''), (SELECT e.id FROM dim_equipos e WHERE e.codigo = r->>'equipo'),
+           greatest(coalesce((r->>'empaque_minimo')::integer, 1), 1), coalesce((r->>'es_prioritario')::boolean, false),
+           coalesce((r->>'activo')::boolean, true)
+      FROM jsonb_array_elements(p) r WHERE coalesce(btrim(r->>'sku'), '') <> ''
+    ON CONFLICT (sku) DO UPDATE SET ean13 = excluded.ean13, nombre_comercial = excluded.nombre_comercial,
+        presentacion = excluded.presentacion, principio_activo = excluded.principio_activo,
+        clase_terapeutica = excluded.clase_terapeutica, categoria = excluded.categoria, laboratorio = excluded.laboratorio,
+        equipo_id = coalesce(excluded.equipo_id, dim_productos.equipo_id), empaque_minimo = excluded.empaque_minimo,
+        es_prioritario = excluded.es_prioritario, activo = excluded.activo, deleted_at = NULL
+    RETURNING 1)
+  SELECT count(*) INTO v_n FROM ins;
+  RETURN v_n;
+END $$;
+
+CREATE OR REPLACE FUNCTION importar_catalogo_clientes(p jsonb) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer;
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  WITH ins AS (
+    INSERT INTO dim_clientes (codigo_interno, razon_social, nombre_comercial, rif, rif_verificado, brick, municipio, estado_geografico,
+                              direccion, telefono, bandera, ubicacion, frecuencia_dias, estado_validacion, origen)
+    SELECT btrim(r->>'codigo_interno'), coalesce(nullif(r->>'razon_social', ''), r->>'nombre_comercial', r->>'codigo_interno'),
+           coalesce(nullif(r->>'nombre_comercial', ''), r->>'razon_social', r->>'codigo_interno'), nullif(r->>'rif', ''), true,
+           nullif(r->>'brick', ''), nullif(r->>'municipio', ''), nullif(r->>'estado_geografico', ''), nullif(r->>'direccion', ''),
+           nullif(r->>'telefono', ''), nullif(r->>'bandera', ''),
+           CASE WHEN r->>'lat' IS NOT NULL AND r->>'lon' IS NOT NULL
+                THEN ST_SetSRID(ST_MakePoint((r->>'lon')::float8, (r->>'lat')::float8), 4326)::geography END,
+           (r->>'frecuencia_dias')::smallint, 'activo', 'oficina'
+      FROM jsonb_array_elements(p) r WHERE coalesce(btrim(r->>'codigo_interno'), '') <> ''
+    ON CONFLICT (codigo_interno) DO UPDATE SET razon_social = excluded.razon_social, nombre_comercial = excluded.nombre_comercial,
+        rif = coalesce(excluded.rif, dim_clientes.rif), brick = excluded.brick, municipio = excluded.municipio,
+        estado_geografico = excluded.estado_geografico, direccion = excluded.direccion, telefono = coalesce(excluded.telefono, dim_clientes.telefono),
+        bandera = excluded.bandera, ubicacion = coalesce(excluded.ubicacion, dim_clientes.ubicacion),
+        frecuencia_dias = coalesce(excluded.frecuencia_dias, dim_clientes.frecuencia_dias), deleted_at = NULL
+    RETURNING 1)
+  SELECT count(*) INTO v_n FROM ins;
+  RETURN v_n;
+END $$;
+
+-- Homologaciones por clave natural:
+--   {"clientes":  [{"drogueria":"COBECA","codigo_interno":"CLI-001","codigo_cuenta":"C-88","nombre":"FARMACIA SAN JOSE","principal":false}],
+--    "productos": [{"drogueria":"COBECA","sku":"SKU-1","codigo":"P-1","descripcion":"LOSARTAN 50 MG","principal":false}]}
+-- Lo que no se puede resolver (droguería, farmacia o SKU inexistente; código ya usado por otra farmacia/producto) se
+-- devuelve en "omitidos" para que el usuario lo corrija; el resto se guarda.
+CREATE OR REPLACE FUNCTION importar_homologacion(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_cli integer := 0; v_prod integer := 0; v_omit jsonb := '[]'::jsonb; v_omit2 jsonb;
+BEGIN
+  IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
+
+  -- Farmacias ------------------------------------------------------------------
+  WITH src AS (
+    SELECT t.ord, t.r->>'drogueria' AS drogueria, btrim(t.r->>'codigo_interno') AS codigo_interno,
+           nullif(btrim(t.r->>'codigo_cuenta'), '') AS codigo_cuenta, nullif(btrim(t.r->>'nombre'), '') AS nombre,
+           coalesce((t.r->>'principal')::boolean, false) AS principal
+      FROM jsonb_array_elements(coalesce(p->'clientes', '[]'::jsonb)) WITH ORDINALITY AS t(r, ord)),
+  res AS (
+    SELECT s.*, d.id AS drogueria_id, c.id AS cliente_id
+      FROM src s
+      LEFT JOIN LATERAL (SELECT dd.id FROM dim_droguerias dd WHERE dd.deleted_at IS NULL
+                          AND (app.norm_texto(dd.codigo) = app.norm_texto(s.drogueria) OR dd.nombre_normalizado = app.norm_texto(s.drogueria))
+                          ORDER BY dd.activo DESC LIMIT 1) d ON true
+      LEFT JOIN dim_clientes c ON c.codigo_interno = s.codigo_interno AND c.deleted_at IS NULL),
+  mala AS (
+    SELECT r.* FROM res r
+     WHERE r.drogueria_id IS NULL OR r.cliente_id IS NULL OR (r.codigo_cuenta IS NULL AND app.norm_texto(r.nombre) IS NULL)
+        OR EXISTS (SELECT 1 FROM map_cliente_drogueria m WHERE m.drogueria_id = r.drogueria_id AND m.deleted_at IS NULL
+                    AND m.cliente_id <> r.cliente_id
+                    AND ((r.codigo_cuenta IS NOT NULL AND m.codigo_cuenta = r.codigo_cuenta)
+                         OR (r.codigo_cuenta IS NULL AND m.codigo_cuenta IS NULL AND m.nombre_normalizado = app.norm_texto(r.nombre))))),
+  ins AS (
+    INSERT INTO map_cliente_drogueria (drogueria_id, cliente_id, codigo_cuenta, nombre_en_drogueria, es_principal, origen)
+    SELECT DISTINCT ON (r.drogueria_id, coalesce(r.codigo_cuenta, app.norm_texto(r.nombre)))
+           r.drogueria_id, r.cliente_id, r.codigo_cuenta, r.nombre, r.principal, 'importacion'
+      FROM res r
+     WHERE r.drogueria_id IS NOT NULL AND r.cliente_id IS NOT NULL
+       AND (r.codigo_cuenta IS NOT NULL OR app.norm_texto(r.nombre) IS NOT NULL)
+       AND NOT EXISTS (SELECT 1 FROM mala x WHERE x.ord = r.ord)
+     ORDER BY r.drogueria_id, coalesce(r.codigo_cuenta, app.norm_texto(r.nombre)), r.principal DESC, r.ord
+    ON CONFLICT DO NOTHING
+    RETURNING 1)
+  SELECT (SELECT count(*) FROM ins),
+         (SELECT coalesce(jsonb_agg(jsonb_build_object('tipo', 'cliente', 'drogueria', drogueria, 'codigo_interno', codigo_interno,
+                                                        'codigo_cuenta', codigo_cuenta, 'nombre', nombre)), '[]'::jsonb) FROM mala)
+    INTO v_cli, v_omit;
+
+  -- Productos ------------------------------------------------------------------
+  WITH src AS (
+    SELECT t.ord, t.r->>'drogueria' AS drogueria, btrim(t.r->>'sku') AS sku, btrim(t.r->>'codigo') AS codigo,
+           nullif(btrim(t.r->>'descripcion'), '') AS descripcion, coalesce((t.r->>'principal')::boolean, false) AS principal
+      FROM jsonb_array_elements(coalesce(p->'productos', '[]'::jsonb)) WITH ORDINALITY AS t(r, ord)),
+  res AS (
+    SELECT s.*, d.id AS drogueria_id, pr.id AS producto_id
+      FROM src s
+      LEFT JOIN LATERAL (SELECT dd.id FROM dim_droguerias dd WHERE dd.deleted_at IS NULL
+                          AND (app.norm_texto(dd.codigo) = app.norm_texto(s.drogueria) OR dd.nombre_normalizado = app.norm_texto(s.drogueria))
+                          ORDER BY dd.activo DESC LIMIT 1) d ON true
+      LEFT JOIN dim_productos pr ON pr.sku = s.sku AND pr.deleted_at IS NULL),
+  mala AS (
+    SELECT r.* FROM res r
+     WHERE r.drogueria_id IS NULL OR r.producto_id IS NULL OR coalesce(r.codigo, '') = ''
+        OR EXISTS (SELECT 1 FROM map_producto_drogueria m WHERE m.drogueria_id = r.drogueria_id AND m.deleted_at IS NULL
+                    AND m.codigo_drogueria = r.codigo AND m.producto_id <> r.producto_id)),
+  ins AS (
+    INSERT INTO map_producto_drogueria (drogueria_id, producto_id, codigo_drogueria, descripcion_drogueria, es_principal, origen)
+    SELECT DISTINCT ON (r.drogueria_id, r.codigo) r.drogueria_id, r.producto_id, r.codigo, r.descripcion, r.principal, 'importacion'
+      FROM res r
+     WHERE r.drogueria_id IS NOT NULL AND r.producto_id IS NOT NULL AND coalesce(r.codigo, '') <> ''
+       AND NOT EXISTS (SELECT 1 FROM mala x WHERE x.ord = r.ord)
+     ORDER BY r.drogueria_id, r.codigo, r.principal DESC, r.ord
+    ON CONFLICT DO NOTHING
+    RETURNING 1)
+  SELECT (SELECT count(*) FROM ins),
+         (SELECT coalesce(jsonb_agg(jsonb_build_object('tipo', 'producto', 'drogueria', drogueria, 'sku', sku, 'codigo', codigo)), '[]'::jsonb) FROM mala)
+    INTO v_prod, v_omit2;
+
+  RETURN jsonb_build_object('clientes', v_cli, 'productos', v_prod, 'omitidos', v_omit || v_omit2);
+END $$;
+
+-- ------------------------------------------------------------------------------
 -- 12. ANALÍTICA COMERCIAL: SEGMENTOS Y ALERTAS (regla 6). Ejecutar a diario (pg_cron / Edge Function).
 -- ------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION recalcular_segmentos_clientes() RETURNS integer
@@ -1163,11 +1843,22 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_n integer;
 BEGIN
   IF auth.uid() IS NOT NULL AND NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
-  WITH act AS (
+  -- Ocasiones de compra = pedidos de Nova + meses con compras reportadas por las droguerías; unidades = ambas fuentes.
+  WITH nova AS (
     SELECT p.cliente_id, count(DISTINCT p.id) AS pedidos, coalesce(sum(d.unidades_confirmadas), 0) AS unidades
       FROM fact_pedidos p LEFT JOIN fact_pedido_detalles d ON d.pedido_id = p.id
      WHERE p.created_at >= now() - interval '6 months' AND p.estado IN ('procesado_parcial','procesado_total','facturado')
      GROUP BY p.cliente_id
+  ), sellout AS (
+    SELECT cliente_id, count(DISTINCT periodo) AS pedidos, sum(unidades) AS unidades
+      FROM fact_compras_mensual
+     WHERE deleted_at IS NULL AND periodo >= date_trunc('month', now() - interval '6 months')::date
+     GROUP BY cliente_id
+  ), act AS (
+    SELECT coalesce(n.cliente_id, o.cliente_id) AS cliente_id,
+           coalesce(n.pedidos, 0) + coalesce(o.pedidos, 0) AS pedidos,
+           coalesce(n.unidades, 0) + coalesce(o.unidades, 0) AS unidades
+      FROM nova n FULL JOIN sellout o ON o.cliente_id = n.cliente_id
   ), nuevo AS (
     SELECT c.id,
            CASE WHEN a.pedidos >= app.cfg_num('vip_min_pedidos_6m', 6) AND a.unidades >= app.cfg_num('vip_min_unidades_6m', 1000) THEN 'vip'
@@ -1194,9 +1885,13 @@ BEGIN
 
   -- SKU hueso global: producto activo sin colocarse en ningún cliente en X días.
   WITH ultima AS (
-    SELECT d.producto_id, max(p.created_at) AS ultima
-      FROM fact_pedido_detalles d JOIN fact_pedidos p ON p.id = d.pedido_id
-     WHERE p.estado NOT IN ('borrador','rechazado','cancelado') GROUP BY d.producto_id
+    SELECT producto_id, max(ultima) AS ultima FROM (
+      SELECT d.producto_id, p.created_at AS ultima
+        FROM fact_pedido_detalles d JOIN fact_pedidos p ON p.id = d.pedido_id
+       WHERE p.estado NOT IN ('borrador','rechazado','cancelado')
+      UNION ALL
+      SELECT producto_id, ultima_compra::timestamptz FROM fact_compras_mensual WHERE deleted_at IS NULL) x
+     GROUP BY producto_id
   ), ins AS (
     INSERT INTO alertas_comerciales (tipo, producto_id, equipo_id, severidad, detalle)
     SELECT 'sku_hueso', pr.id, pr.equipo_id, 2,
@@ -1211,13 +1906,17 @@ BEGIN
 
   -- SKU hueso por territorio (brick): productos que se colocan en otros bricks pero no en este.
   WITH bricks AS (SELECT DISTINCT brick FROM dim_clientes WHERE brick IS NOT NULL AND estado_validacion = 'activo'),
-  activos AS (
-    SELECT DISTINCT d.producto_id FROM fact_pedido_detalles d JOIN fact_pedidos p ON p.id = d.pedido_id
+  colocado AS (
+    SELECT p.cliente_id, d.producto_id
+      FROM fact_pedido_detalles d JOIN fact_pedidos p ON p.id = d.pedido_id
      WHERE p.created_at >= now() - make_interval(days => v_dias) AND p.estado NOT IN ('borrador','rechazado','cancelado')
+    UNION
+    SELECT cliente_id, producto_id FROM fact_compras_mensual
+     WHERE deleted_at IS NULL AND ultima_compra >= (now() - make_interval(days => v_dias))::date
+  ), activos AS (
+    SELECT DISTINCT producto_id FROM colocado
   ), ventas AS (
-    SELECT DISTINCT c.brick, d.producto_id
-      FROM fact_pedido_detalles d JOIN fact_pedidos p ON p.id = d.pedido_id JOIN dim_clientes c ON c.id = p.cliente_id
-     WHERE p.created_at >= now() - make_interval(days => v_dias) AND p.estado NOT IN ('borrador','rechazado','cancelado')
+    SELECT DISTINCT c.brick, k.producto_id FROM colocado k JOIN dim_clientes c ON c.id = k.cliente_id
   ), ins AS (
     INSERT INTO alertas_comerciales (tipo, producto_id, equipo_id, territorio, severidad, detalle)
     SELECT 'sku_hueso', a.producto_id, pr.equipo_id, b.brick, 1,
@@ -1232,8 +1931,11 @@ BEGIN
 
   -- Abandono de cliente: superó su ciclo habitual (frecuencia_dias x factor) sin emitir pedidos.
   WITH ult AS (
-    SELECT cliente_id, max(created_at) AS ultimo FROM fact_pedidos
-     WHERE estado NOT IN ('borrador','cancelado') GROUP BY cliente_id
+    SELECT cliente_id, max(ultimo) AS ultimo FROM (
+      SELECT cliente_id, created_at AS ultimo FROM fact_pedidos WHERE estado NOT IN ('borrador','cancelado')
+      UNION ALL
+      SELECT cliente_id, ultima_compra::timestamptz FROM fact_compras_mensual WHERE deleted_at IS NULL) x
+     GROUP BY cliente_id
   ), ins AS (
     INSERT INTO alertas_comerciales (tipo, cliente_id, severidad, detalle)
     SELECT 'churn_riesgo', c.id,
@@ -1262,7 +1964,7 @@ BEGIN
     'dim_productos','map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto',
     'config_reglas_comerciales','config_sistema','secretos_sistema','fact_pedidos','fact_pedido_detalles',
     'pedido_bloqueos','crm_visitas','plantillas_reposicion','plantilla_items','notificaciones',
-    'alertas_comerciales','audit_log']
+    'alertas_comerciales','audit_log','import_lotes','fact_ventas_drogueria','fact_compras_mensual']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
   END LOOP;
@@ -1386,6 +2088,16 @@ CREATE POLICY alertas_lectura ON alertas_comerciales FOR SELECT TO authenticated
          OR equipo_id IS NULL AND cliente_id IS NOT NULL AND app.puede_ver_cliente(cliente_id)
          OR equipo_id = (SELECT equipo_id FROM dim_usuarios WHERE id = (SELECT auth.uid())));
 
+-- Ventas reportadas por las droguerías: solo lectura para el personal (se escriben con importar_ventas_drogueria).
+DROP POLICY IF EXISTS lotes_lectura ON import_lotes;
+CREATE POLICY lotes_lectura ON import_lotes FOR SELECT TO authenticated USING (app.es_staff());
+DROP POLICY IF EXISTS ventas_lectura ON fact_ventas_drogueria;
+CREATE POLICY ventas_lectura ON fact_ventas_drogueria FOR SELECT TO authenticated USING (app.es_staff());
+-- El consolidado mensual baja al dispositivo del vendedor solo para las farmacias que atiende (todos los equipos).
+DROP POLICY IF EXISTS compras_lectura ON fact_compras_mensual;
+CREATE POLICY compras_lectura ON fact_compras_mensual FOR SELECT TO authenticated
+  USING (app.es_staff() OR app.puede_ver_cliente(cliente_id));
+
 DROP POLICY IF EXISTS audit_admin ON audit_log;
 CREATE POLICY audit_admin ON audit_log FOR SELECT TO authenticated USING (app.es_admin());
 
@@ -1407,6 +2119,61 @@ BEGIN
     BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE dim_clientes;      EXCEPTION WHEN duplicate_object THEN NULL; END;
   END IF;
 END $$;
+
+-- ------------------------------------------------------------------------------
+-- 14B. ALTA DE USUARIOS
+-- Toda cuenta nueva de Supabase Auth recibe su fila en dim_usuarios con el MÍNIMO privilegio y DESACTIVADA:
+-- el rol y el equipo NUNCA se toman de los metadatos del registro (los fija quien se registra). Un administrador
+-- la activa y le asigna rol/equipo con admin_configurar_usuario(). Sin fila activa, el usuario no ve datos (RLS).
+-- El primer administrador se promueve una sola vez desde el SQL Editor (ver docs/ARQUITECTURA_OFFLINE_FIRST.md).
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION app.nuevo_usuario_auth() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  INSERT INTO dim_usuarios (id, nombre_completo, email, rol, activo)
+  VALUES (NEW.id,
+          coalesce(nullif(btrim(NEW.raw_user_meta_data->>'nombre_completo'), ''), split_part(coalesce(NEW.email, 'usuario'), '@', 1)),
+          coalesce(NEW.email, NEW.id::text || '@sin-correo.local'), 'vendedor', false)
+  ON CONFLICT DO NOTHING;   -- cualquier choque (id o correo ya existente) no debe impedir el registro en Supabase Auth
+  RETURN NEW;
+END $$;
+
+DO $$
+BEGIN
+  DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+  CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION app.nuevo_usuario_auth();
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE NOTICE 'Sin permiso para crear el trigger en auth.users: créalo desde el SQL Editor con el rol postgres.';
+END $$;
+
+CREATE OR REPLACE FUNCTION admin_configurar_usuario(p_usuario uuid, p_rol rol_usuario, p_equipo_codigo text DEFAULT NULL,
+                                                    p_activo boolean DEFAULT true, p_nombre text DEFAULT NULL,
+                                                    p_telefono text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_equipo uuid;
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  -- El equipo se identifica por su código ('A', 'ETICO'...). Si aún no existe se crea (solo lo hace un administrador);
+  -- 'TODOS'/'AMBOS' significan sin equipo (visión completa).
+  IF nullif(btrim(p_equipo_codigo), '') IS NOT NULL AND upper(btrim(p_equipo_codigo)) NOT IN ('TODOS', 'AMBOS') THEN
+    INSERT INTO dim_equipos (codigo, nombre, linea) VALUES (upper(btrim(p_equipo_codigo)), 'Equipo ' || btrim(p_equipo_codigo), 'otro')
+    ON CONFLICT (upper(codigo)) DO NOTHING;
+    SELECT id INTO v_equipo FROM dim_equipos WHERE upper(codigo) = upper(btrim(p_equipo_codigo));
+  END IF;
+  -- No se permite quedarse sin administradores activos.
+  IF p_usuario = auth.uid() AND (p_rol <> 'admin' OR NOT p_activo) THEN
+    RAISE EXCEPTION 'No puedes quitarte a ti mismo el rol de administrador' USING ERRCODE = '42501';
+  END IF;
+  UPDATE dim_usuarios SET rol = p_rol, equipo_id = v_equipo, activo = p_activo,
+         nombre_completo = coalesce(nullif(btrim(p_nombre), ''), nombre_completo), telefono = coalesce(p_telefono, telefono)
+   WHERE id = p_usuario;
+  IF NOT FOUND THEN RAISE EXCEPTION 'El usuario no existe' USING ERRCODE = 'P0002'; END IF;
+  INSERT INTO audit_log (usuario_id, accion, detalle)
+  VALUES (auth.uid(), 'usuario_configurado', jsonb_build_object('usuario', p_usuario, 'rol', p_rol, 'activo', p_activo));
+END $$;
+REVOKE ALL ON FUNCTION admin_configurar_usuario(uuid, rol_usuario, text, boolean, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION admin_configurar_usuario(uuid, rol_usuario, text, boolean, text, text) TO authenticated;
 
 -- ------------------------------------------------------------------------------
 -- 15. MANTENIMIENTO Y PRUEBAS: PURGA SEGURA DE DATOS DE PRUEBA
@@ -1456,7 +2223,8 @@ BEGIN
   PERFORM setval('seq_correlativo_pedido', 1001, false);
 
   IF NOT solo_transaccional THEN
-    TRUNCATE map_producto_drogueria, map_cliente_drogueria, precios_drogueria_producto, rel_cliente_vendedor,
+    TRUNCATE fact_compras_mensual, fact_ventas_drogueria, import_lotes,
+             map_producto_drogueria, map_cliente_drogueria, precios_drogueria_producto, rel_cliente_vendedor,
              config_reglas_comerciales, dim_clientes, dim_productos, dim_droguerias RESTART IDENTITY CASCADE;
   END IF;
 
@@ -1469,6 +2237,14 @@ REVOKE ALL ON FUNCTION purgar_base_datos_pruebas(text, boolean) FROM PUBLIC, ano
 GRANT EXECUTE ON FUNCTION purgar_base_datos_pruebas(text, boolean) TO authenticated;
 REVOKE ALL ON FUNCTION configurar_password_purga(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION configurar_password_purga(text) TO authenticated;
+REVOKE ALL ON FUNCTION importar_ventas_drogueria(jsonb, jsonb), borrar_lote_ventas(uuid), refrescar_compras_mensual(date),
+  importar_catalogo_productos(jsonb), importar_catalogo_clientes(jsonb), importar_homologacion(jsonb),
+  reprocesar_homologacion(uuid), homologar_cliente(uuid, uuid, text, text, boolean),
+  homologar_producto(uuid, uuid, text, text, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION importar_ventas_drogueria(jsonb, jsonb), borrar_lote_ventas(uuid), refrescar_compras_mensual(date),
+  importar_catalogo_productos(jsonb), importar_catalogo_clientes(jsonb), importar_homologacion(jsonb),
+  reprocesar_homologacion(uuid), homologar_cliente(uuid, uuid, text, text, boolean),
+  homologar_producto(uuid, uuid, text, text, boolean) TO authenticated;
 REVOKE ALL ON FUNCTION recalcular_segmentos_clientes() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION generar_alertas_comerciales() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION recalcular_segmentos_clientes(), generar_alertas_comerciales() TO authenticated;

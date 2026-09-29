@@ -25,6 +25,18 @@ import type {
  * Nota sobre Excel: un CSV en UTF-8 con `bom: true` y delimitador `;` abre directo en Excel (configuración regional es-VE/es-ES).
  */
 
+/**
+ * Entre varios códigos de un mismo producto/farmacia en una droguería, se usa el marcado como principal.
+ * Sin ninguno marcado se toma el más antiguo por orden de llegada y se avisa (no debería ocurrir: el servidor siempre deja uno).
+ */
+export function elegirPrincipal<T extends { es_principal?: boolean }>(mapeos: T[]): { elegido: T | undefined; ambiguo: boolean } {
+  const marcado = mapeos.find((m) => m.es_principal === true);
+  if (marcado) return { elegido: marcado, ambiguo: false };
+  const sinMarca = mapeos.filter((m) => m.es_principal === undefined);
+  if (sinMarca.length > 0) return { elegido: sinMarca[0], ambiguo: sinMarca.length > 1 };
+  return { elegido: mapeos[0], ambiguo: mapeos.length > 0 };
+}
+
 export type CodigoErrorExportacion =
   | 'cliente_no_validado'
   | 'cliente_sin_homologar'
@@ -247,13 +259,26 @@ export function generarArchivoDrogueria(entrada: EntradaExportacion, opciones: O
   if (entrada.cliente.estado_validacion !== 'activo') {
     errores.push({ codigo: 'cliente_no_validado', mensaje: 'La farmacia aún no está validada (RIF/documentación).' });
   }
-  const cuenta = entrada.mapClientes.find((m) => m.cliente_id === entrada.cliente.id && m.drogueria_id === entrada.drogueria.id);
+  // Solo las cuentas con código sirven para escribir el pedido (un alias solo con nombre no identifica a la farmacia ante la droguería).
+  const cuentas = entrada.mapClientes.filter((m) => m.cliente_id === entrada.cliente.id && m.drogueria_id === entrada.drogueria.id && !!m.codigo_cuenta);
+  const { elegido: cuenta, ambiguo: cuentaAmbigua } = elegirPrincipal(cuentas);
+  if (cuentaAmbigua) advertencias.add(`La farmacia tiene varias cuentas en ${entrada.drogueria.nombre} y ninguna marcada como principal: se usó ${cuenta?.codigo_cuenta}.`);
   if (!cuenta) {
     errores.push({ codigo: 'cliente_sin_homologar', mensaje: `La farmacia no tiene código de cuenta en ${entrada.drogueria.nombre}.` });
   }
 
   const productos = Array.isArray(entrada.productos) ? new Map(entrada.productos.map((p) => [p.id, p])) : entrada.productos;
-  const mapPorProducto = new Map(entrada.mapProductos.filter((m) => m.drogueria_id === entrada.drogueria.id).map((m) => [m.producto_id, m]));
+  const codigosPorProducto = new Map<string, LocalMapProducto[]>();
+  for (const m of entrada.mapProductos) {
+    if (m.drogueria_id !== entrada.drogueria.id) continue;
+    codigosPorProducto.set(m.producto_id, [...(codigosPorProducto.get(m.producto_id) ?? []), m]);
+  }
+  const mapPorProducto = new Map<string, LocalMapProducto>();
+  for (const [productoId, codigos] of codigosPorProducto) {
+    const { elegido, ambiguo } = elegirPrincipal(codigos);
+    if (elegido) mapPorProducto.set(productoId, elegido);
+    if (ambiguo) advertencias.add(`Un producto tiene varios códigos en ${entrada.drogueria.nombre} y ninguno principal: se usó ${elegido?.codigo_drogueria}.`);
+  }
   const modo = opciones.cantidad ?? 'auto';
   const usarConfirmadas = modo === 'confirmadas' || (modo === 'auto' && ESTADOS_PROCESADOS.has(entrada.pedido.estado));
 

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Usuario } from '../types/pharmacy';
 import { MOCK_USUARIOS } from '../data/mockData';
 import { getSupabaseClient } from '../services/supabaseClient';
+import { cargarPerfilUsuario } from '../services/nubeV3';
+import type { PerfilUsuario } from '../services/nubeV3';
 import { 
   Lock, 
   Mail, 
@@ -52,18 +54,40 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         if (error) {
           setMensaje({ tipo: 'error', texto: `Error Supabase Auth: ${error.message}` });
         } else if (data.user) {
-          const userMapeado: Usuario = {
-            id: data.user.id,
-            email: data.user.email || email,
-            nombre_completo: data.user.user_metadata?.nombre_completo || email.split('@')[0],
-            rol: data.user.user_metadata?.rol || 'vendedor',
-            equipo: data.user.user_metadata?.equipo || 'A',
-            activo: true,
-            created_at: data.user.created_at,
-          };
-          onUsuarioAutenticado(userMapeado);
-          setMensaje({ tipo: 'exito', texto: '¡Sesión iniciada con éxito en Supabase Auth!' });
-          setTimeout(() => onCerrar(), 1200);
+          // El rol y el equipo salen de dim_usuarios (los fija un administrador), nunca de los metadatos de la cuenta.
+          let perfil: PerfilUsuario | null = null;
+          let fallo = '';
+          try {
+            perfil = await cargarPerfilUsuario(supabase, data.user.id);
+          } catch (e: unknown) {
+            fallo = e instanceof Error ? e.message : String(e);
+          }
+          if (fallo) {
+            await supabase.auth.signOut();
+            setMensaje({ tipo: 'error', texto: `No se pudo cargar tu perfil: ${fallo}` });
+          } else if (!perfil || !perfil.activo) {
+            await supabase.auth.signOut();
+            setMensaje({
+              tipo: 'error',
+              texto: perfil
+                ? 'Tu cuenta está desactivada. Pide a un administrador que la active.'
+                : 'Tu cuenta aún no está activada. Pide a un administrador que le asigne rol y equipo.',
+            });
+          } else {
+            onUsuarioAutenticado({
+              id: data.user.id,
+              email: data.user.email || email,
+              nombre_completo: perfil.nombre_completo,
+              rol: perfil.rol,
+              equipo: perfil.equipo,
+              telefono: perfil.telefono,
+              activo: true,
+              created_at: data.user.created_at,
+            });
+            setMensaje({ tipo: 'exito', texto: '¡Sesión iniciada con éxito en Supabase Auth!' });
+            setTimeout(() => onCerrar(), 1200);
+          }
+          setCargando(false);
           return;
         }
       } catch (err: any) {
