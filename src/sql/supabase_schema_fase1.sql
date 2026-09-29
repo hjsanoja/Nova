@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS fact_historico_ventas (
     drogueria VARCHAR(150) NOT NULL,           -- Droguería distribuidora (Cobeca, Nena, Drobienca, etc.)
     codigo_producto VARCHAR(100) NOT NULL,     -- Código del producto en esa droguería
     nombre_producto VARCHAR(255) NOT NULL,     -- Nombre del producto según la droguería
-    unidades INT NOT NULL CHECK (unidades >= 0),
+    unidades INT NOT NULL DEFAULT 0,            -- Admite ventas positivas y devoluciones/notas de crédito (negativas)
     cod_sap VARCHAR(100),                      -- Código de producto interno SAP / SKU (opcional en origen, autocompletable)
     cliente_ident01 VARCHAR(100),              -- Código maestro de la farmacia homologada (FK lógica a dim_clientes)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -865,16 +865,21 @@ CREATE POLICY "Mapeo Drogueria: Gestion autenticados" ON dim_producto_drogueria_
     WITH CHECK (true);
 
 -- POLÍTICAS PARA FACT_HISTORICO_VENTAS (Ventas diarias por mes)
-DROP POLICY IF EXISTS "Fact Historico Ventas: Lectura autenticados" ON fact_historico_ventas;
-CREATE POLICY "Fact Historico Ventas: Lectura autenticados" ON fact_historico_ventas
-    FOR SELECT TO authenticated
+ALTER TABLE fact_historico_ventas ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Fact Historico Ventas: Lectura" ON fact_historico_ventas;
+CREATE POLICY "Fact Historico Ventas: Lectura" ON fact_historico_ventas
+    FOR SELECT TO anon, authenticated
     USING (true);
 
 DROP POLICY IF EXISTS "Fact Historico Ventas: Insercion y administracion" ON fact_historico_ventas;
 CREATE POLICY "Fact Historico Ventas: Insercion y administracion" ON fact_historico_ventas
-    FOR ALL TO authenticated
+    FOR ALL TO anon, authenticated
     USING (true)
     WITH CHECK (true);
+
+GRANT ALL ON TABLE fact_historico_ventas TO anon, authenticated, service_role;
+NOTIFY pgrst, 'reload schema';
 
 -- 8.6. POLÍTICAS PARA HISTORICO_PEDIDOS_PREVIOS
 DROP POLICY IF EXISTS "Historico: Admin, Gerente y Teletransferencista lectura total" ON historico_pedidos_previos;

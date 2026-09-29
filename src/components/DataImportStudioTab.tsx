@@ -43,6 +43,7 @@ import {
   Sparkles,
   Calculator,
   Calendar,
+  RefreshCw,
   Tag,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
@@ -192,6 +193,10 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
 
   const [infoMesDetectado, setInfoMesDetectado] = useState<{ mesNum: string; mesTexto: string; anio: string; periodo: string } | null>(null);
   const [seccionHistoricoActiva, setSeccionHistoricoActiva] = useState<'cargar' | 'homologar' | 'mapeo_sap' | 'acumulado' | 'guia'>('cargar');
+  const [filasEnSupabase, setFilasEnSupabase] = useState<number | null>(null);
+  const [verificandoSupabase, setVerificandoSupabase] = useState(false);
+  const [sincronizandoSupabase, setSincronizandoSupabase] = useState(false);
+  const [progresoSync, setProgresoSync] = useState<{ insertadas: number; total: number } | null>(null);
 
   // Cambia de sección del histórico y lleva la vista hasta ella (el panel queda debajo de la vista previa del archivo).
   const irASeccionHistorico = (seccion: typeof seccionHistoricoActiva) => {
@@ -204,6 +209,86 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
   const showNotification = (tipo: 'exito' | 'error', texto: string) => {
     setNotificacion({ tipo, texto });
     setTimeout(() => setNotificacion(null), 4000);
+  };
+
+  // Verificar directamente en Supabase cuántas filas hay guardadas en fact_historico_ventas
+  const handleVerificarSupabase = async () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      showNotification('error', 'Supabase no está conectado en este navegador. Haz clic en "Supabase (configurar)" en la barra superior.');
+      return;
+    }
+    setVerificandoSupabase(true);
+    try {
+      const { count, error } = await supabase
+        .from('fact_historico_ventas')
+        .select('*', { count: 'exact', head: true });
+      if (error) {
+        showNotification('error', `Error al consultar Supabase: ${error.message}`);
+      } else {
+        const total = count ?? 0;
+        setFilasEnSupabase(total);
+        showNotification('exito', `Supabase confirmado: ${total.toLocaleString()} filas registradas en fact_historico_ventas.`);
+      }
+    } catch (err: unknown) {
+      showNotification('error', `Fallo de red: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setVerificandoSupabase(false);
+    }
+  };
+
+  // Sincronizar por lotes de 500 filas todo el histórico actual en memoria a Supabase
+  const handleSincronizarTodoASupabase = async () => {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      showNotification('error', 'Supabase no está conectado. Configura tu URL y Anon Key primero.');
+      return;
+    }
+    if (historicoPrevio.length === 0) {
+      showNotification('error', 'No hay registros en memoria para sincronizar.');
+      return;
+    }
+    setSincronizandoSupabase(true);
+    setProgresoSync({ insertadas: 0, total: historicoPrevio.length });
+    try {
+      // Limpiar filas incompletas previas para que la carga empiece limpia y sin duplicados
+      try {
+        await supabase.from('fact_historico_ventas').delete().neq('cod_cliente', '__CLEAN_ALL__');
+      } catch (errClean) {
+        console.warn('Aviso al limpiar registros previos:', errClean);
+      }
+
+      const { insertadas, error } = await insertarPorLotes(
+        supabase,
+        'fact_historico_ventas',
+        historicoPrevio.map((h) => ({
+          fecha: h.fecha_pedido,
+          mes_periodo: h.mes_periodo || h.fecha_pedido.slice(0, 7),
+          archivo_origen: h.archivo_origen || 'historico_acumulado.csv',
+          cod_cliente: h.cod_cliente_drogueria || h.cliente_id,
+          nombre_cliente: h.nombre_cliente || 'Farmacia',
+          drogueria: h.nombre_drogueria || 'Drogueria',
+          codigo_producto: h.codigo_producto_drogueria || h.producto_id,
+          nombre_producto: h.nombre_producto || 'Medicamento',
+          unidades: Number.isFinite(Number(h.cantidad_facturada)) ? Math.round(Number(h.cantidad_facturada)) : 0,
+          cod_sap: h.cod_sap || null,
+          cliente_ident01: h.cliente_ident01 || null,
+        })),
+        500,
+        (ins, tot) => setProgresoSync({ insertadas: ins, total: tot })
+      );
+      if (error) {
+        showNotification('error', `Sincronización parcial: ${error}. Filas insertadas: ${insertadas.toLocaleString()}`);
+      } else {
+        showNotification('exito', `¡Sincronización exitosa! ${insertadas.toLocaleString()} filas respaldadas en Supabase PostgreSQL.`);
+        await handleVerificarSupabase();
+      }
+    } catch (err: unknown) {
+      showNotification('error', `Fallo al sincronizar: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSincronizandoSupabase(false);
+      setProgresoSync(null);
+    }
   };
 
   // Descarga de plantillas CSV oficiales (100% sin acentos para evitar errores de codificación)
@@ -2895,6 +2980,67 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                     <div className="text-[10px] text-purple-600 dark:text-purple-400 font-bold uppercase">Equipo B (Comercial / OTC)</div>
                     <div className="text-lg font-extrabold text-purple-700 dark:text-purple-300">{(metricasHistorico.udsB + metricasHistorico.udsOTC).toLocaleString()} uds</div>
                     <div className="text-[10px] text-purple-600">Portafolio Comercial</div>
+                  </div>
+                </div>
+
+                {/* Panel de Estado y Sincronización Supabase Cloud */}
+                <div className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-3 ${
+                  esClaro ? 'bg-slate-50 border-slate-200' : 'bg-slate-950 border-slate-800'
+                }`}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0">
+                      <Database className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white">
+                          Sincronización Supabase Cloud:
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          filasEnSupabase !== null
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                            : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+                        }`}>
+                          {filasEnSupabase !== null
+                            ? `${filasEnSupabase.toLocaleString()} filas en la nube`
+                            : 'Estado sin verificar'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Memoria local / IndexedDB: <strong>{historicoPrevio.length.toLocaleString()} filas</strong>.
+                        {filasEnSupabase !== null && filasEnSupabase >= historicoPrevio.length
+                          ? ' ¡Todo el histórico está respaldado en Supabase!'
+                          : ' Puedes sincronizar para que no dependa solo de este navegador.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end md:self-auto shrink-0 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleVerificarSupabase}
+                      disabled={verificandoSupabase}
+                      className="min-h-11 inline-flex items-center gap-1.5 px-3.5 rounded-xl text-xs font-bold bg-slate-200 hover:bg-slate-300 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 transition-colors disabled:opacity-50"
+                    >
+                      {verificandoSupabase ? <RefreshCw className="w-4 h-4 animate-spin text-teal-600" /> : <Database className="w-4 h-4 text-teal-600" />}
+                      <span>{verificandoSupabase ? 'Consultando...' : 'Verificar en Supabase'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleSincronizarTodoASupabase}
+                      disabled={sincronizandoSupabase || historicoPrevio.length === 0}
+                      className="min-h-11 inline-flex items-center gap-1.5 px-4 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-sm transition-colors disabled:opacity-50"
+                    >
+                      {sincronizandoSupabase ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UploadCloud className="w-4 h-4" />}
+                      <span>
+                        {progresoSync
+                          ? `Subiendo ${progresoSync.insertadas.toLocaleString()} de ${progresoSync.total.toLocaleString()}...`
+                          : sincronizandoSupabase
+                          ? 'Iniciando subida...'
+                          : 'Subir a Supabase Ahora'}
+                      </span>
+                    </button>
                   </div>
                 </div>
 

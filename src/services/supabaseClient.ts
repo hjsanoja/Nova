@@ -44,14 +44,35 @@ export async function insertarPorLotes(
   client: SupabaseClient,
   tabla: string,
   filas: Record<string, unknown>[],
-  tamanoLote = 500
+  tamanoLote = 500,
+  onProgreso?: (insertadas: number, total: number) => void
 ): Promise<{ insertadas: number; error?: string }> {
   let insertadas = 0;
   for (let i = 0; i < filas.length; i += tamanoLote) {
     const lote = filas.slice(i, i + tamanoLote);
-    const { error } = await client.from(tabla).insert(lote);
-    if (error) return { insertadas, error: error.message };
-    insertadas += lote.length;
+    try {
+      const { error } = await client.from(tabla).insert(lote);
+      if (error) {
+        if (error.message.includes('fact_historico_ventas_unidades_check')) {
+          return {
+            insertadas,
+            error: 'Hay filas con unidades negativas (devoluciones/notas de crédito de droguerías). Ejecuta en Supabase SQL Editor: ALTER TABLE public.fact_historico_ventas DROP CONSTRAINT IF EXISTS fact_historico_ventas_unidades_check;',
+          };
+        }
+        if (error.message.includes('Invalid path') || error.code === '404' || error.message.includes('schema cache')) {
+          return {
+            insertadas,
+            error: `La tabla "${tabla}" no responde o la URL es inválida (${error.message}). Verifica que la Project URL sea https://[id].supabase.co y que hayas ejecutado el Script SQL en Supabase SQL Editor.`,
+          };
+        }
+        return { insertadas, error: error.message };
+      }
+      insertadas += lote.length;
+      if (onProgreso) onProgreso(insertadas, filas.length);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { insertadas, error: msg };
+    }
   }
   return { insertadas };
 }
@@ -74,6 +95,18 @@ export async function probarConexionSupabase(): Promise<{ ok: boolean; mensaje: 
       .select('codigo_drogueria', { count: 'exact', head: true });
 
     if (error) {
+      if (error.message.includes('Invalid path')) {
+        return {
+          ok: false,
+          mensaje: 'URL de Supabase inválida: pegaste la URL del navegador o una ruta errónea. Debe ser exactamente https://[id-de-tu-proyecto].supabase.co',
+        };
+      }
+      if (error.message.includes('relation') || error.message.includes('schema cache') || error.code === '42P01') {
+        return {
+          ok: true,
+          mensaje: 'Conectado a Supabase con éxito, pero la base de datos está vacía. Ve a la pestaña "Script SQL" en NOVA, copia el código y ejecútalo en Supabase SQL Editor.',
+        };
+      }
       return {
         ok: false,
         mensaje: `Error Supabase: ${error.message} (Código: ${error.code || 'N/A'})`,

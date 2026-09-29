@@ -6,6 +6,7 @@ import {
   clearSupabaseConfig, 
   probarConexionSupabase 
 } from '../services/supabaseClient';
+import { limpiarSupabaseUrl, limpiarSupabaseAnonKey } from '../services/supabaseConfig';
 
 interface SupabaseConfigModalProps {
   abierto: boolean;
@@ -44,11 +45,16 @@ export const SupabaseConfigModal: React.FC<SupabaseConfigModalProps> = ({
       return;
     }
 
+    const cleanUrl = limpiarSupabaseUrl(url);
+    const cleanKey = limpiarSupabaseAnonKey(anonKey);
+    setUrl(cleanUrl);
+    setAnonKey(cleanKey);
+
     setProbando(true);
     setResultado(null);
 
-    // Guardar temporalmente para probar
-    saveSupabaseConfig(url, anonKey);
+    // Guardar normalizado para probar
+    saveSupabaseConfig(cleanUrl, cleanKey);
     const res = await probarConexionSupabase();
     setProbando(false);
     setResultado(res);
@@ -101,13 +107,16 @@ export const SupabaseConfigModal: React.FC<SupabaseConfigModalProps> = ({
               Project URL de Supabase *
             </label>
             <input
-              type="url"
+              type="text"
               required
               placeholder="https://xyzabcdefghijklm.supabase.co"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-white font-mono text-xs focus:ring-2 focus:ring-teal-500 focus:outline-none placeholder:text-slate-600"
             />
+            <p className="text-[11px] text-slate-400 mt-1">
+              Obténla en tu proyecto Supabase: <b>Project Settings → Data API → Project URL</b>. (Si pegas el link del dashboard, se corregirá automáticamente).
+            </p>
           </div>
 
           <div>
