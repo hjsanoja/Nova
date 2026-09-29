@@ -3,6 +3,7 @@ import { ChevronDown, Database, Info, LogOut, Lock, Moon, Sun } from 'lucide-rea
 import { RolUsuario, EquipoVentas, Usuario } from '../types/pharmacy';
 import { useTheme } from '../context/ThemeContext';
 import { NovaLogo } from './NovaLogo';
+import { SyncStatusChip } from './SyncStatusChip';
 
 interface HeaderProps {
   rolActual: RolUsuario;
@@ -67,6 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
         <NovaLogo size="md" esClaro={esClaro} />
 
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <SyncStatusChip />
           <button
             type="button"
             onClick={onAbrirConfigSupabase}

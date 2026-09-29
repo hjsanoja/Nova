@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  ClipboardPlus,
   CheckCircle2,
   Database,
   Layers,
@@ -31,9 +32,10 @@ const GUIA: TabDef = { id: 'guia_uso', label: 'Guía de Uso', corto: 'Guía', ic
 export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
   vendedor: [
     { id: 'dashboard', label: 'Mi Rendimiento', corto: 'Inicio', icon: LayoutDashboard, grupo: 'Operación', principal: true },
-    { id: 'nuevo_pedido', label: 'Toma de Pedido', corto: 'Pedido', icon: ShoppingCart, grupo: 'Operación', principal: true },
+    { id: 'captura', label: 'Captura de Pedido (offline)', corto: 'Captura', icon: ClipboardPlus, grupo: 'Operación', principal: true },
     { id: 'sugerido', label: 'Motor Sugerido', corto: 'Sugerido', icon: RefreshCw, grupo: 'Operación', principal: true },
     { id: 'mis_pedidos', label: 'Mis Pedidos', corto: 'Pedidos', icon: ShoppingBag, grupo: 'Operación', principal: true },
+    { id: 'nuevo_pedido', label: 'Toma de Pedido (clásica)', corto: 'Clásica', icon: ShoppingCart, grupo: 'Operación' },
     { id: 'vademecum', label: 'Medicamentos', corto: 'Catálogo', icon: Pill, grupo: 'Consulta' },
     GUIA,
   ],
@@ -53,7 +55,8 @@ export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
   ],
   admin: [
     { id: 'dashboard', label: 'Dashboard', corto: 'Inicio', icon: LayoutDashboard, grupo: 'Operación', principal: true },
-    { id: 'nuevo_pedido', label: 'Toma de Pedidos', corto: 'Pedido', icon: ShoppingCart, grupo: 'Operación' },
+    { id: 'captura', label: 'Captura de Pedido (offline)', corto: 'Captura', icon: ClipboardPlus, grupo: 'Operación' },
+    { id: 'nuevo_pedido', label: 'Toma de Pedidos (clásica)', corto: 'Clásica', icon: ShoppingCart, grupo: 'Operación' },
     { id: 'sugerido', label: 'Sugeridos', corto: 'Sugerido', icon: RefreshCw, grupo: 'Operación' },
     { id: 'mis_pedidos', label: 'Auditoría', corto: 'Auditoría', icon: ShoppingBag, grupo: 'Operación' },
     { id: 'teletransferencia', label: 'Teletransferencias', corto: 'Transfer.', icon: CheckCircle2, grupo: 'Teletransferencia', principal: true },

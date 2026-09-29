@@ -27,6 +27,7 @@ import { tabsDelRol, TAB_INICIAL } from './components/shell/navConfig';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getStoredSupabaseConfig } from './services/supabaseConfig';
 import { getSupabaseClient } from './services/supabaseClient';
+import { descargarCatalogosNube, fusionarPorClave } from './services/nubeV3';
 import { leerClientes, leerDroguerias, leerLista, leerProductos, leerUsuario } from './services/storageMigrations';
 import { ThemeProvider } from './context/ThemeContext';
 import { usePersistentState, EVENTO_ERROR_ALMACENAMIENTO } from './hooks/usePersistentState';
@@ -34,6 +35,7 @@ import { AlertTriangle, X } from 'lucide-react';
 
 // Cada pestaña y cada modal pesado se descarga solo cuando se usa (el bundle inicial se reduce a la shell).
 const RepDashboardTab = lazy(() => import('./components/RepDashboardTab').then((m) => ({ default: m.RepDashboardTab })));
+const PedidoCapturaScreen = lazy(() => import('./components/capture/PedidoCapturaScreen').then((m) => ({ default: m.PedidoCapturaScreen })));
 const OrderTakingTab = lazy(() => import('./components/OrderTakingTab').then((m) => ({ default: m.OrderTakingTab })));
 const SuggestedOrderTab = lazy(() => import('./components/SuggestedOrderTab').then((m) => ({ default: m.SuggestedOrderTab })));
 const MyOrdersTab = lazy(() => import('./components/MyOrdersTab').then((m) => ({ default: m.MyOrdersTab })));
@@ -135,42 +137,51 @@ function AppContent() {
     return () => window.removeEventListener(EVENTO_ERROR_ALMACENAMIENTO, alFallar);
   }, []);
 
-  // Sincronización inicial desde Supabase: descarga clientes, productos y droguerías si existen en la nube
+  // Modo offline-first: base local (IndexedDB), motor de sincronización y, si hay servidor, descarga incremental.
+  // Se importa después del primer render: Dexie y el motor no forman parte del bundle inicial.
+  useEffect(() => {
+    let detener: (() => void) | null = null;
+    let cancelado = false;
+    void import('./offline/arranque').then(async ({ iniciarOffline }) => {
+      const crearRemoto = isSupabaseConectado
+        ? async () => {
+            const { crearRemotoSupabase } = await import('./offline/supabaseRemoto');
+            const cliente = getSupabaseClient();
+            return cliente ? crearRemotoSupabase(cliente) : null;
+          }
+        : null;
+      const parar = await iniciarOffline(crearRemoto);
+      if (cancelado) parar();
+      else detener = parar;
+    });
+    return () => {
+      cancelado = true;
+      detener?.();
+    };
+  }, [isSupabaseConectado]);
+
+  // Sincronización inicial desde Supabase: trae clientes, productos y droguerías (esquema v3) al modelo de las pantallas clásicas.
+  // Se combina por clave natural (ident01 / SKU / código de droguería): lo que solo existe aquí se conserva y el layout de
+  // exportación de cada droguería sigue siendo el local. Sin sesión iniciada, las tablas protegidas devuelven vacío y no cambia nada.
   useEffect(() => {
     if (!isSupabaseConectado) return;
     let activo = true;
-
-    const sincronizarCatalogosNube = async () => {
+    void (async () => {
       const client = getSupabaseClient();
       if (!client) return;
-
       try {
-        // 1. Clientes
-        const { data: dbClientes, error: errCli } = await client.from('dim_clientes').select('*').limit(5000);
-        if (activo && !errCli && dbClientes && dbClientes.length > 0) {
-          const saneados = leerClientes(dbClientes);
-          if (saneados && saneados.length > 0) setClientes(saneados);
-        }
-
-        // 2. Productos
-        const { data: dbProductos, error: errProd } = await client.from('dim_productos').select('*').limit(5000);
-        if (activo && !errProd && dbProductos && dbProductos.length > 0) {
-          const saneados = leerProductos(dbProductos);
-          if (saneados && saneados.length > 0) setProductos(saneados);
-        }
-
-        // 3. Droguerías
-        const { data: dbDroguerias, error: errDrog } = await client.from('dim_droguerias').select('*').limit(100);
-        if (activo && !errDrog && dbDroguerias && dbDroguerias.length > 0) {
-          const saneadas = leerDroguerias(dbDroguerias);
-          if (saneadas && saneadas.length > 0) setDroguerias(saneadas);
-        }
+        const nube = await descargarCatalogosNube(client);
+        if (!activo) return;
+        const clientesNube = leerClientes(nube.clientes);
+        if (clientesNube?.length) setClientes((prev) => fusionarPorClave(prev, clientesNube, (c) => c.ident01, 'nube'));
+        const productosNube = leerProductos(nube.productos);
+        if (productosNube?.length) setProductos((prev) => fusionarPorClave(prev, productosNube, (p) => p.sku, 'nube'));
+        const droguriasNube = leerDroguerias(nube.droguerias);
+        if (droguriasNube?.length) setDroguerias((prev) => fusionarPorClave(prev, droguriasNube, (d) => d.codigo_drogueria, 'local'));
       } catch (err) {
         console.warn('Error al recuperar catálogos desde Supabase:', err);
       }
-    };
-
-    void sincronizarCatalogosNube();
+    })();
     return () => {
       activo = false;
     };
@@ -477,6 +488,10 @@ function AppContent() {
                     detalles={pedidosDetalle}
                     vendedorId={rolActual === 'vendedor' ? usuarioActual?.id : undefined}
                   />
+                )}
+
+                {tabActiva === 'captura' && usuarioActual && (
+                  <PedidoCapturaScreen vendedorId={usuarioActual.id} equipoId={null} />
                 )}
 
                 {tabActiva === 'nuevo_pedido' && (

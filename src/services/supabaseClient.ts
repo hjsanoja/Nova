@@ -37,44 +37,13 @@ export function getSupabaseClient(): SupabaseClient | null {
 }
 
 /**
- * Inserta filas por lotes para no superar el límite de tamaño de petición de PostgREST
- * ni bloquear la pestaña con un único payload de decenas de miles de filas.
+ * Cliente aparte, SIN sesión persistente, para registrar cuentas nuevas (auth.signUp) sin reemplazar la sesión del administrador
+ * que está en pantalla: con el cliente normal, signUp dejaba iniciada la sesión de la cuenta recién creada.
  */
-export async function insertarPorLotes(
-  client: SupabaseClient,
-  tabla: string,
-  filas: Record<string, unknown>[],
-  tamanoLote = 500,
-  onProgreso?: (insertadas: number, total: number) => void
-): Promise<{ insertadas: number; error?: string }> {
-  let insertadas = 0;
-  for (let i = 0; i < filas.length; i += tamanoLote) {
-    const lote = filas.slice(i, i + tamanoLote);
-    try {
-      const { error } = await client.from(tabla).insert(lote);
-      if (error) {
-        if (error.message.includes('fact_historico_ventas_unidades_check')) {
-          return {
-            insertadas,
-            error: 'Hay filas con unidades negativas (devoluciones/notas de crédito de droguerías). Ejecuta en Supabase SQL Editor: ALTER TABLE public.fact_historico_ventas DROP CONSTRAINT IF EXISTS fact_historico_ventas_unidades_check;',
-          };
-        }
-        if (error.message.includes('Invalid path') || error.code === '404' || error.message.includes('schema cache')) {
-          return {
-            insertadas,
-            error: `La tabla "${tabla}" no responde o la URL es inválida (${error.message}). Verifica que la Project URL sea https://[id].supabase.co y que hayas ejecutado el Script SQL en Supabase SQL Editor.`,
-          };
-        }
-        return { insertadas, error: error.message };
-      }
-      insertadas += lote.length;
-      if (onProgreso) onProgreso(insertadas, filas.length);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { insertadas, error: msg };
-    }
-  }
-  return { insertadas };
+export function crearClienteSinSesion(): SupabaseClient | null {
+  const { url, anonKey } = getStoredSupabaseConfig();
+  if (!url || !anonKey) return null;
+  return createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
 }
 
 /**
@@ -92,7 +61,7 @@ export async function probarConexionSupabase(): Promise<{ ok: boolean; mensaje: 
   try {
     const { error } = await client
       .from('dim_droguerias')
-      .select('codigo_drogueria', { count: 'exact', head: true });
+      .select('codigo', { count: 'exact', head: true });
 
     if (error) {
       if (error.message.includes('Invalid path')) {
@@ -104,7 +73,15 @@ export async function probarConexionSupabase(): Promise<{ ok: boolean; mensaje: 
       if (error.message.includes('relation') || error.message.includes('schema cache') || error.code === '42P01') {
         return {
           ok: true,
-          mensaje: 'Conectado a Supabase con éxito, pero la base de datos está vacía. Ve a la pestaña "Script SQL" en NOVA, copia el código y ejecútalo en Supabase SQL Editor.',
+          mensaje: 'Conectado a Supabase con éxito, pero la base de datos está vacía. Ve a la pestaña "Script SQL" en NOVA y sigue los pasos: ejecuta el esquema v3 (y la migración, si ya tenías datos) en el Supabase SQL Editor.',
+        };
+      }
+      // El esquema v3 protege todas las tablas con RLS y no da acceso al rol anónimo: sin sesión, "permission denied"
+      // significa que la URL y la clave son correctas y el esquema existe.
+      if (error.code === '42501' || /permission denied/i.test(error.message)) {
+        return {
+          ok: true,
+          mensaje: 'Conexión correcta. Las tablas están protegidas: inicia sesión con tu usuario (menú de cuenta) para ver y guardar datos.',
         };
       }
       return {

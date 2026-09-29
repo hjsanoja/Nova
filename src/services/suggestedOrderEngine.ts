@@ -50,7 +50,7 @@ export function calcularPedidoSugeridoLocal(
   const nombreFantasia = (cliente.nombre_fantasia || '').toLowerCase();
   const razonSocial = (cliente.razon_social || '').toLowerCase();
 
-  // 1. Procesar historico_pedidos_previos
+  // 1. Procesar el histórico de compras cargado (ventas de las droguerías)
   historicoPrevio.forEach((h) => {
     const nombreFila = h.nombre_cliente ? h.nombre_cliente.toLowerCase() : '';
     const esEsteCliente =
@@ -86,7 +86,7 @@ export function calcularPedidoSugeridoLocal(
     if (h.codigo_producto_drogueria) metricasPorProducto.set(h.codigo_producto_drogueria, actual);
   });
 
-  // 2. Procesar pedidos de la plataforma (pedidos_cabecera con pedidos_detalle procesados)
+  // 2. Procesar los pedidos de la plataforma ya procesados
   const pedidosClienteRecientes = pedidosCabecera.filter((pc) => {
     if (!idsPedido.has(pc.cliente_id)) return false;
     if (esAnteriorAlCorte(pc.fecha_pedido)) return false;

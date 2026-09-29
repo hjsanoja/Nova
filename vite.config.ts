@@ -1,11 +1,22 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import {defineConfig} from 'vite';
+import {defineConfig} from 'vitest/config';
+import type {Plugin} from 'vite';
+
+/** Lista de todos los archivos con hash del build: el Service Worker los precachea para trabajar sin conexión. */
+const manifiestoServiceWorker = (): Plugin => ({
+  name: 'nova-sw-manifest',
+  apply: 'build',
+  generateBundle(_opciones, bundle) {
+    const archivos = Object.keys(bundle).filter((f) => !f.endsWith('.map'));
+    this.emitFile({ type: 'asset', fileName: 'sw-manifest.json', source: JSON.stringify(archivos) });
+  },
+});
 
 export default defineConfig({
   // Rutas relativas: el build funciona igual en GitHub Pages (subruta) que en Cloud Run.
   base: './',
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), manifiestoServiceWorker()],
   build: {
     target: 'es2022',
     // El escáner de códigos (html5-qrcode, ~370 kB) se descarga solo al abrir la cámara.
@@ -22,6 +33,11 @@ export default defineConfig({
         },
       },
     },
+  },
+  test: {
+    environment: 'node',
+    setupFiles: ['./src/offline/testing/setup.ts'],
+    include: ['src/**/*.test.ts'],
   },
   server: {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.

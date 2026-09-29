@@ -8,7 +8,18 @@ import {
   ClienteDrogueriaAlias,
   ProductoDrogueriaMapeo
 } from '../types/pharmacy';
-import { getSupabaseClient, insertarPorLotes } from '../services/supabaseClient';
+import { getSupabaseClient } from '../services/supabaseClient';
+import {
+  contarVentasNube,
+  guardarDroguerias,
+  importarCatalogoClientes,
+  importarCatalogoProductos,
+  importarHomologacion,
+  importarVentas,
+  clienteAV3,
+  drogueriaAV3,
+  productoAV3,
+} from '../services/nubeV3';
 import { prepararNombre, similitudPreparada, detectarMesDeNombreArchivo, crearLectorColumnas, norm } from '../services/importUtils';
 import type { NombrePreparado } from '../services/importUtils';
 import { leerLista } from '../services/storageMigrations';
@@ -211,7 +222,7 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
     setTimeout(() => setNotificacion(null), 4000);
   };
 
-  // Verificar directamente en Supabase cuántas filas hay guardadas en fact_historico_ventas
+  // Verificar directamente en Supabase cuántas filas de ventas de droguerías hay guardadas (fact_ventas_drogueria)
   const handleVerificarSupabase = async () => {
     const supabase = getSupabaseClient();
     if (!supabase) {
@@ -220,24 +231,18 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
     }
     setVerificandoSupabase(true);
     try {
-      const { count, error } = await supabase
-        .from('fact_historico_ventas')
-        .select('*', { count: 'exact', head: true });
-      if (error) {
-        showNotification('error', `Error al consultar Supabase: ${error.message}`);
-      } else {
-        const total = count ?? 0;
-        setFilasEnSupabase(total);
-        showNotification('exito', `Supabase confirmado: ${total.toLocaleString()} filas registradas en fact_historico_ventas.`);
-      }
+      const total = await contarVentasNube(supabase);
+      setFilasEnSupabase(total);
+      showNotification('exito', `Supabase confirmado: ${total.toLocaleString()} filas de ventas registradas en fact_ventas_drogueria.`);
     } catch (err: unknown) {
-      showNotification('error', `Fallo de red: ${err instanceof Error ? err.message : String(err)}`);
+      showNotification('error', `Error al consultar Supabase: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setVerificandoSupabase(false);
     }
   };
 
-  // Sincronizar por lotes de 500 filas todo el histórico actual en memoria a Supabase
+  // Sube todo el histórico en memoria: un lote por archivo, en trozos de 1000 filas. Es idempotente (reenviar no duplica)
+  // y el servidor enlaza cada fila con la farmacia y el producto usando los códigos propios de cada droguería.
   const handleSincronizarTodoASupabase = async () => {
     const supabase = getSupabaseClient();
     if (!supabase) {
@@ -251,38 +256,17 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
     setSincronizandoSupabase(true);
     setProgresoSync({ insertadas: 0, total: historicoPrevio.length });
     try {
-      // Limpiar filas incompletas previas para que la carga empiece limpia y sin duplicados
-      try {
-        await supabase.from('fact_historico_ventas').delete().neq('cod_cliente', '__CLEAN_ALL__');
-      } catch (errClean) {
-        console.warn('Aviso al limpiar registros previos:', errClean);
-      }
-
-      const { insertadas, error } = await insertarPorLotes(
-        supabase,
-        'fact_historico_ventas',
-        historicoPrevio.map((h) => ({
-          fecha: h.fecha_pedido,
-          mes_periodo: h.mes_periodo || h.fecha_pedido.slice(0, 7),
-          archivo_origen: h.archivo_origen || 'historico_acumulado.csv',
-          cod_cliente: h.cod_cliente_drogueria || h.cliente_id,
-          nombre_cliente: h.nombre_cliente || 'Farmacia',
-          drogueria: h.nombre_drogueria || 'Drogueria',
-          codigo_producto: h.codigo_producto_drogueria || h.producto_id,
-          nombre_producto: h.nombre_producto || 'Medicamento',
-          unidades: Number.isFinite(Number(h.cantidad_facturada)) ? Math.round(Number(h.cantidad_facturada)) : 0,
-          cod_sap: h.cod_sap || null,
-          cliente_ident01: h.cliente_ident01 || null,
-        })),
-        500,
-        (ins, tot) => setProgresoSync({ insertadas: ins, total: tot })
+      // El servidor reconoce la droguería de cada fila por su código o nombre: deben existir en la nube.
+      await guardarDroguerias(supabase, droguerias);
+      const r = await importarVentas(supabase, historicoPrevio, (ins, tot) => setProgresoSync({ insertadas: ins, total: tot }));
+      const avisos: string[] = [];
+      if (r.droguerias_desconocidas.length > 0) avisos.push(`droguerías no reconocidas (${r.droguerias_desconocidas.join(', ')})`);
+      showNotification(
+        avisos.length ? 'error' : 'exito',
+        `Histórico subido: ${r.insertadas.toLocaleString()} filas nuevas${r.insertadas < r.recibidas ? ` (${(r.recibidas - r.insertadas).toLocaleString()} ya estaban)` : ''}.` +
+          (avisos.length ? ` Revisar: ${avisos.join('; ')}.` : '')
       );
-      if (error) {
-        showNotification('error', `Sincronización parcial: ${error}. Filas insertadas: ${insertadas.toLocaleString()}`);
-      } else {
-        showNotification('exito', `¡Sincronización exitosa! ${insertadas.toLocaleString()} filas respaldadas en Supabase PostgreSQL.`);
-        await handleVerificarSupabase();
-      }
+      await handleVerificarSupabase();
     } catch (err: unknown) {
       showNotification('error', `Fallo al sincronizar: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -593,39 +577,17 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
         };
       });
 
+      let avisoNube = '';
       if (supabase) {
         try {
-          await supabase.from('dim_clientes').upsert(
-            nuevosClientes.map((c) => ({
-              ident01: c.ident01,
-              codigo_cliente: c.codigo_cliente,
-              rif: c.rif,
-              razon_social: c.razon_social,
-              nombre_fantasia: c.nombre_fantasia,
-              nombre_comercial: c.nombre_comercial,
-              brick: c.brick,
-              municipio_ciudad: c.municipio_ciudad,
-              direccion: c.direccion,
-              estado: c.estado,
-              ciudad: c.ciudad,
-              frecuencia: c.frecuencia,
-              bandera: c.bandera,
-              local_gps_lat: c.local_gps_lat,
-              local_gps_lon: c.local_gps_lon,
-              clasificacion_abc: c.clasificacion_abc,
-              cupo_credito: c.cupo_credito,
-              dias_credito: c.dias_credito,
-              activo: c.activo,
-            })),
-            { onConflict: 'ident01' }
-          );
-        } catch (err: any) {
-          console.warn('Error al guardar en Supabase:', err.message);
+          await importarCatalogoClientes(supabase, nuevosClientes);
+        } catch (err: unknown) {
+          avisoNube = ` Guardadas en este navegador, pero no se pudieron subir a Supabase: ${err instanceof Error ? err.message : String(err)}`;
         }
       }
 
       onImportarClientes(nuevosClientes);
-      showNotification('exito', `Se han cargado e incorporado ${nuevosClientes.length} farmacias a dim_clientes con ident01 como Primary Key.`);
+      showNotification(avisoNube ? 'error' : 'exito', `Se han cargado e incorporado ${nuevosClientes.length} farmacias (código interno = ident01).${avisoNube}`);
     } else if (subTab === 'productos') {
       // 12 Campos exactos (tolerante con o sin acentos al leer del CSV, pero persistiendo sin tildes)
       const nuevosProductos: Producto[] = filasParseadas.map((f, i) => {
@@ -692,39 +654,17 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
         };
       });
 
+      let avisoNube = '';
       if (supabase) {
         try {
-          await supabase.from('dim_productos').upsert(
-            nuevosProductos.map((p) => ({
-              sku: p.sku,
-              codigo_barras_ean13: p.codigo_barras_ean13,
-              principio_activo: p.principio_activo,
-              nombre_comercial: p.nombre_comercial,
-              presentacion: p.presentacion,
-              laboratorio: p.laboratorio,
-              precio_lista: p.precio_lista,
-              descuento_maximo_porc: p.descuento_maximo_porc,
-              es_prioritario: p.es_prioritario,
-              factor_prioridad: p.factor_prioridad,
-              empaque_minimo: p.empaque_minimo,
-              stock_disponible: p.stock_disponible,
-              unidad_negocio: p.unidad_negocio,
-              clase_terapeutica: p.clase_terapeutica,
-              sistemas: p.sistemas,
-              clasificacion_portafolio: p.clasificacion_portafolio,
-              product_code: p.product_code,
-              pack_code: p.pack_code,
-              activo: p.activo,
-            })),
-            { onConflict: 'sku' }
-          );
-        } catch (err: any) {
-          console.warn('Error al guardar en Supabase:', err.message);
+          await importarCatalogoProductos(supabase, nuevosProductos);
+        } catch (err: unknown) {
+          avisoNube = ` Guardados en este navegador, pero no se pudieron subir a Supabase: ${err instanceof Error ? err.message : String(err)}`;
         }
       }
 
       onImportarProductos(nuevosProductos);
-      showNotification('exito', `Se han cargado e incorporado ${nuevosProductos.length} medicamentos a dim_productos.`);
+      showNotification(avisoNube ? 'error' : 'exito', `Se han cargado e incorporado ${nuevosProductos.length} medicamentos a dim_productos.${avisoNube}`);
     } else if (subTab === 'droguerias') {
       const nuevasDroguerias: Drogueria[] = filasParseadas.map((f, i) => {
         const nombre = getCol(f, ['NOMBRE_DROGUERIA', 'NOMBRE', 'DROGUERIA', 'Nombre']) || `Drogueria ${i+1}`;
@@ -1049,67 +989,43 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
         void sincronizarMapeos(nuevosMapeosAprendidos);
       }
 
-      // Sincronizar con Supabase si está disponible (por lotes de 500 filas)
+      // Sincronizar con Supabase si está disponible: el servidor recibe los códigos y nombres de la droguería tal cual
+      // y los enlaza con la farmacia y el producto (lo que no reconoce queda pendiente de homologar).
+      let avisoNube = '';
       if (supabase) {
-        const { error } = await insertarPorLotes(
-          supabase,
-          'fact_historico_ventas',
-          nuevoHistorico.map((h) => ({
-            fecha: h.fecha_pedido,
-            mes_periodo: h.mes_periodo || mesPeriodo,
-            archivo_origen: h.archivo_origen || nombreArchivo,
-            cod_cliente: h.cod_cliente_drogueria || h.cliente_id,
-            nombre_cliente: h.nombre_cliente || 'Farmacia',
-            drogueria: h.nombre_drogueria || 'Drogueria',
-            codigo_producto: h.codigo_producto_drogueria || h.producto_id,
-            nombre_producto: h.nombre_producto || 'Medicamento',
-            unidades: h.cantidad_facturada,
-            cod_sap: h.cod_sap || null,
-            cliente_ident01: h.cliente_ident01 || null,
-          }))
-        );
-        if (error) console.warn('Error al guardar en Supabase fact_historico_ventas:', error);
+        try {
+          await guardarDroguerias(supabase, droguerias);
+          const r = await importarVentas(supabase, nuevoHistorico);
+          if (r.droguerias_desconocidas.length > 0) avisoNube = ` En Supabase no se reconocieron las droguerías: ${r.droguerias_desconocidas.join(', ')}.`;
+        } catch (err: unknown) {
+          avisoNube = ` Guardado en este navegador, pero no se pudo subir a Supabase: ${err instanceof Error ? err.message : String(err)}`;
+        }
       }
 
       onImportarHistorico(nuevoHistorico);
-      showNotification('exito', `Se han procesado e incorporado ${nuevoHistorico.length} registros historicos (${mesPeriodo}) con resolución de Cod SAP y Farmacias.`);
+      showNotification(avisoNube ? 'error' : 'exito', `Se han procesado e incorporado ${nuevoHistorico.length} registros historicos (${mesPeriodo}) con resolución de Cod SAP y Farmacias.${avisoNube}`);
     }
 
     setArchivoTexto('');
     setNombreArchivo('');
   };
 
-  // Homologación de farmacias y diccionario Cod SAP: se guardan localmente y, si hay Supabase, se sincronizan.
-  const sincronizarAliases = async (alias: ClienteDrogueriaAlias[]) => {
+  // Homologación de farmacias y diccionario Cod SAP: se guardan localmente y, si hay Supabase, se sincronizan por clave natural
+  // (droguería + ident01/SKU + los códigos que ESA droguería usa). Lo que el servidor no puede resolver se avisa.
+  const sincronizarHomologacion = async (entrada: { alias?: ClienteDrogueriaAlias[]; mapeos?: ProductoDrogueriaMapeo[] }) => {
     const supabase = getSupabaseClient();
-    if (!supabase || alias.length === 0) return;
-    const { error } = await supabase.from('dim_cliente_drogueria_alias').upsert(
-      alias.map((a) => ({
-        cliente_ident01: a.cliente_ident01,
-        drogueria: a.drogueria,
-        cod_cliente_drogueria: a.cod_cliente_drogueria ?? null,
-        nombre_cliente_drogueria: a.nombre_cliente_drogueria,
-        verificado: a.verificado,
-      })),
-      { onConflict: 'drogueria,nombre_cliente_drogueria,cod_cliente_drogueria' }
-    );
-    if (error) console.warn('No se pudo sincronizar alias con Supabase:', error.message);
+    if (!supabase || ((entrada.alias?.length ?? 0) === 0 && (entrada.mapeos?.length ?? 0) === 0)) return;
+    try {
+      const r = await importarHomologacion(supabase, entrada);
+      if (r.omitidos.length > 0) {
+        showNotification('error', `${r.omitidos.length} homologación(es) no se subieron a Supabase (droguería, farmacia o SKU inexistente, o código ya asignado a otro). Revisa que los catálogos estén cargados en la nube.`);
+      }
+    } catch (err: unknown) {
+      console.warn('No se pudo sincronizar la homologación con Supabase:', err instanceof Error ? err.message : err);
+    }
   };
-
-  const sincronizarMapeos = async (mapeos: ProductoDrogueriaMapeo[]) => {
-    const supabase = getSupabaseClient();
-    if (!supabase || mapeos.length === 0) return;
-    const { error } = await supabase.from('dim_producto_drogueria_mapeo').upsert(
-      mapeos.map((m) => ({
-        cod_sap: m.cod_sap,
-        drogueria: m.drogueria,
-        codigo_producto_drogueria: m.codigo_producto_drogueria,
-        nombre_producto_drogueria: m.nombre_producto_drogueria ?? null,
-      })),
-      { onConflict: 'drogueria,codigo_producto_drogueria' }
-    );
-    if (error) console.warn('No se pudo sincronizar el diccionario con Supabase:', error.message);
-  };
+  const sincronizarAliases = (alias: ClienteDrogueriaAlias[]) => sincronizarHomologacion({ alias });
+  const sincronizarMapeos = (mapeos: ProductoDrogueriaMapeo[]) => sincronizarHomologacion({ mapeos });
 
   const agregarAliases = (nuevos: ClienteDrogueriaAlias[]) => {
     const claves = new Set(nuevos.map((a) => `${norm(a.drogueria)}|${norm(a.nombre_cliente_drogueria)}`));
@@ -1407,94 +1323,95 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     );
   }, [clientes, filtroBusquedaCliente]);
 
-  // SQL Script Generator para Supabase SQL Editor
+  // Generador de SQL para el SQL Editor de Supabase (esquema v3). Se ejecuta como el rol postgres, así que usa INSERT directos
+  // (las funciones importar_* exigen una sesión de administrador y son para la app). Reutiliza los mismos mapeos que la app.
   const sqlGenerado = useMemo(() => {
     if (subTab !== 'sql_generator') return '';
+    const q = (v: unknown): string =>
+      v === null || v === undefined || v === '' ? 'NULL' : typeof v === 'number' || typeof v === 'boolean' ? String(v) : `'${String(v).replace(/'/g, "''")}'`;
     const lines: string[] = [
-      '-- SCRIPT DE CARGA DIRECTA PARA SUPABASE SQL EDITOR',
-      '-- Generado automaticamente desde NOVA Data Studio',
+      '-- SCRIPT DE CARGA DIRECTA PARA SUPABASE SQL EDITOR (esquema v3: nova_produccion_v3.sql)',
+      '-- Generado automaticamente desde NOVA Data Studio. Requiere haber ejecutado antes el esquema v3.',
       'BEGIN;',
       '',
-      '-- 1. CARGA DE DROGUERIAS (dim_droguerias con ID numerico Primary Key)',
+      '-- 1. DROGUERIAS (dim_droguerias) con su layout de exportacion',
     ];
 
     droguerias.forEach((d) => {
-      const cfg = JSON.stringify(d.formato_csv_config || {}).replace(/'/g, "''");
-      const nom = (d.nombre_drogueria || '').replace(/'/g, "''");
-      const cod = (d.codigo_drogueria || '').replace(/'/g, "''");
-      const rif = (d.rif || 'J-00000000-0').replace(/'/g, "''");
-      const web = (d.pagina_web || '').replace(/'/g, "''");
-      const email = (d.email_pedidos || '').replace(/'/g, "''");
-      const tel = (d.telefono || '').replace(/'/g, "''");
+      const r = drogueriaAV3(d);
       lines.push(
-        `INSERT INTO dim_droguerias (id_numero, codigo_drogueria, rif, nombre_drogueria, email_pedidos, pagina_web, telefono, tiempo_entrega_promedio_dias, formato_csv_config, activo) ` +
-        `VALUES (${d.id_numero || 1}, '${cod}', '${rif}', '${nom}', '${email}', '${web}', '${tel}', ${d.tiempo_entrega_promedio_dias || 2}, '${cfg}'::jsonb, ${d.activo ? 'true' : 'false'}) ` +
-        `ON CONFLICT (codigo_drogueria) DO UPDATE SET id_numero = EXCLUDED.id_numero, pagina_web = EXCLUDED.pagina_web, formato_csv_config = EXCLUDED.formato_csv_config;`
+        `INSERT INTO dim_droguerias (codigo, nombre, rif, email_pedidos, telefono, dias_entrega, formato_export, activo) ` +
+        `VALUES (${q(r.codigo)}, ${q(r.nombre)}, ${q(r.rif)}, ${q(r.email_pedidos)}, ${q(r.telefono)}, ${q(r.dias_entrega)}, ${q(JSON.stringify(r.formato_export))}::jsonb, ${q(r.activo)}) ` +
+        `ON CONFLICT (codigo) DO UPDATE SET nombre = EXCLUDED.nombre, email_pedidos = EXCLUDED.email_pedidos, telefono = EXCLUDED.telefono, ` +
+        `dias_entrega = EXCLUDED.dias_entrega, formato_export = EXCLUDED.formato_export, activo = EXCLUDED.activo, deleted_at = NULL;`
       );
     });
 
-    lines.push('', '-- 2. CARGA DE PRODUCTOS (dim_productos - 12 Campos)');
+    lines.push('', '-- 2. PRODUCTOS (dim_productos; el SKU es el Cod SAP)');
     productos.forEach((p) => {
-      const sku = (p.codigo || p.sku || '').replace(/'/g, "''");
-      const packCode = (p.pack_code || p.codigo_barras_ean13 || '').replace(/'/g, "''");
-      const molecula = (p.molecula || p.principio_activo || '').replace(/'/g, "''");
-      const nombre = (p.product || p.nombre_comercial || '').replace(/'/g, "''");
-      const presentacion = (p.pack || p.presentacion || '').replace(/'/g, "''");
-      const lab = (p.unidad_negocio || p.laboratorio || '').replace(/'/g, "''");
-      const clase = (p.clase_terapeutica || '').replace(/'/g, "''");
-      const sistemas = (p.sistemas || '').replace(/'/g, "''");
-      const portafolio = (p.clasificacion_portafolio || '').replace(/'/g, "''");
-      const prodCode = (p.product_code || '').replace(/'/g, "''");
-
+      const r = productoAV3(p);
       lines.push(
-        `INSERT INTO dim_productos (sku, codigo_barras_ean13, principio_activo, nombre_comercial, presentacion, laboratorio, precio_lista, descuento_maximo_porc, es_prioritario, factor_prioridad, empaque_minimo, stock_disponible, unidad_negocio, clase_terapeutica, sistemas, clasificacion_portafolio, product_code, pack_code, activo) ` +
-        `VALUES ('${sku}', '${packCode}', '${molecula}', '${nombre}', '${presentacion}', '${lab}', ${p.precio_lista || 0}, ${p.descuento_maximo_porc || 15}, ${p.es_prioritario ? 'true' : 'false'}, ${p.factor_prioridad || 1.3}, ${p.empaque_minimo || 10}, ${p.stock_disponible || 500}, '${lab}', '${clase}', '${sistemas}', '${portafolio}', '${prodCode}', '${packCode}', ${p.activo ? 'true' : 'false'}) ` +
-        `ON CONFLICT (sku) DO NOTHING;`
+        `INSERT INTO dim_productos (sku, ean13, nombre_comercial, presentacion, principio_activo, clase_terapeutica, categoria, laboratorio, empaque_minimo, es_prioritario, activo) ` +
+        `VALUES (${q(r.sku)}, ${q(r.ean13)}, ${q(r.nombre_comercial)}, ${q(r.presentacion)}, ${q(r.principio_activo)}, ${q(r.clase_terapeutica)}, ${q(r.categoria)}, ${q(r.laboratorio)}, ${q(r.empaque_minimo)}, ${q(r.es_prioritario)}, ${q(r.activo)}) ` +
+        `ON CONFLICT (sku) DO UPDATE SET nombre_comercial = EXCLUDED.nombre_comercial, presentacion = EXCLUDED.presentacion, principio_activo = EXCLUDED.principio_activo, ` +
+        `categoria = EXCLUDED.categoria, laboratorio = EXCLUDED.laboratorio, empaque_minimo = EXCLUDED.empaque_minimo, es_prioritario = EXCLUDED.es_prioritario, activo = EXCLUDED.activo, deleted_at = NULL;`
       );
     });
 
-    lines.push('', '-- 3. CARGA DE CLIENTES (dim_clientes - 11 Campos con ident01 como Primary Key)');
+    lines.push('', '-- 3. FARMACIAS (dim_clientes; ident01 = codigo_interno. El RIF puede repetirse: una cadena comparte razon social entre locales)');
     clientes.forEach((c) => {
-      const id01 = (c.ident01 || c.codigo_cliente || c.id || '').replace(/'/g, "''");
-      const rif = (c.rif || 'J-00000000-0').replace(/'/g, "''");
-      const razon = (c.razon_social || '').replace(/'/g, "''");
-      const fantasia = (c.nombre_fantasia || c.nombre_comercial || '').replace(/'/g, "''");
-      const brick = (c.brick || '').replace(/'/g, "''");
-      const mun = (c.municipio_ciudad || c.ciudad || '').replace(/'/g, "''");
-      const est = (c.estado || '').replace(/'/g, "''");
-      const frec = (c.frecuencia || 'Semanal').replace(/'/g, "''");
-      const bandera = (c.bandera || 'Independiente').replace(/'/g, "''");
-      const lat = c.local_gps_lat !== undefined && !isNaN(Number(c.local_gps_lat)) ? Number(c.local_gps_lat) : 10.4800;
-      const lon = c.local_gps_lon !== undefined && !isNaN(Number(c.local_gps_lon)) ? Number(c.local_gps_lon) : -66.8600;
-
+      const r = clienteAV3(c);
+      const punto = r.lat !== null && r.lon !== null ? `ST_SetSRID(ST_MakePoint(${r.lon}, ${r.lat}), 4326)::geography` : 'NULL';
       lines.push(
-        `INSERT INTO dim_clientes (ident01, codigo_cliente, rif, razon_social, nombre_fantasia, nombre_comercial, brick, municipio_ciudad, direccion, estado, ciudad, frecuencia, bandera, local_gps_lat, local_gps_lon, activo) ` +
-        `VALUES ('${id01}', '${id01}', '${rif}', '${razon}', '${fantasia}', '${fantasia}', '${brick}', '${mun}', '${mun}, ${est}', '${est}', '${mun}', '${frec}', '${bandera}', ${lat}, ${lon}, ${c.activo ? 'true' : 'false'}) ` +
-        `ON CONFLICT (ident01) DO UPDATE SET razon_social = EXCLUDED.razon_social, nombre_fantasia = EXCLUDED.nombre_fantasia, brick = EXCLUDED.brick, estado = EXCLUDED.estado, local_gps_lat = EXCLUDED.local_gps_lat, local_gps_lon = EXCLUDED.local_gps_lon;`
+        `INSERT INTO dim_clientes (codigo_interno, razon_social, nombre_comercial, rif, rif_verificado, brick, municipio, estado_geografico, direccion, telefono, bandera, ubicacion, frecuencia_dias, estado_validacion, origen) ` +
+        `VALUES (${q(r.codigo_interno)}, ${q(r.razon_social)}, ${q(r.nombre_comercial)}, ${q(r.rif)}, true, ${q(r.brick)}, ${q(r.municipio)}, ${q(r.estado_geografico)}, ${q(r.direccion)}, ${q(r.telefono)}, ${q(r.bandera)}, ${punto}, ${q(r.frecuencia_dias)}, ${c.activo ? "'activo'" : "'inactivo'"}, 'oficina') ` +
+        `ON CONFLICT (codigo_interno) DO UPDATE SET razon_social = EXCLUDED.razon_social, nombre_comercial = EXCLUDED.nombre_comercial, brick = EXCLUDED.brick, ` +
+        `estado_geografico = EXCLUDED.estado_geografico, ubicacion = COALESCE(EXCLUDED.ubicacion, dim_clientes.ubicacion), frecuencia_dias = COALESCE(EXCLUDED.frecuencia_dias, dim_clientes.frecuencia_dias), deleted_at = NULL;`
       );
     });
 
-    if (historicoPrevio.length > 0) {
-      lines.push('', '-- 4. HISTORICO DE VENTAS (8 Columnas Oficiales)');
-      historicoPrevio.slice(0, 40).forEach((h) => {
-        const fec = (h.fecha_pedido || '2026-02-15').replace(/'/g, "''");
-        const codCli = (h.cod_cliente_drogueria || h.cliente_id || '').replace(/'/g, "''");
-        const nomCli = (h.nombre_cliente || '').replace(/'/g, "''");
-        const drog = (h.nombre_drogueria || h.drogueria_id || '').replace(/'/g, "''");
-        const codProdDrog = (h.codigo_producto_drogueria || '').replace(/'/g, "''");
-        const nomProd = (h.nombre_producto || '').replace(/'/g, "''");
-        const uds = h.cantidad_facturada || 0;
-        const codSap = (h.cod_sap || h.producto_id || '').replace(/'/g, "''");
-        lines.push(
-          `INSERT INTO fact_historico_ventas (fecha, cod_cliente, nombre_cliente, drogueria, codigo_producto, nombre_producto, unidades, cod_sap) ` +
-          `VALUES ('${fec}', '${codCli}', '${nomCli}', '${drog}', '${codProdDrog}', '${nomProd}', ${uds}, '${codSap}');`
-        );
-      });
+    const alias = aliasesFarmacias.filter((a) => a.verificado);
+    if (alias.length > 0) {
+      lines.push('', '-- 4. HOMOLOGACION DE FARMACIAS: como cada drogueria llama (codigo de cuenta y/o nombre) a cada farmacia');
+      lines.push(
+        'INSERT INTO map_cliente_drogueria (drogueria_id, cliente_id, codigo_cuenta, nombre_en_drogueria, es_principal, origen)',
+        'SELECT DISTINCT ON (d.id, coalesce(v.cuenta, app.norm_texto(v.nombre))) d.id, c.id, v.cuenta, v.nombre, false, \'importacion\'',
+        '  FROM (VALUES',
+        alias.map((a) => `    (${q(a.drogueria)}, ${q(a.cliente_ident01)}, ${q(a.cod_cliente_drogueria)}, ${q(a.nombre_cliente_drogueria)})`).join(',\n'),
+        '  ) AS v(drogueria, ident01, cuenta, nombre)',
+        '  JOIN dim_droguerias d ON app.norm_texto(d.codigo) = app.norm_texto(v.drogueria) OR d.nombre_normalizado = app.norm_texto(v.drogueria)',
+        '  JOIN dim_clientes c ON c.codigo_interno = v.ident01',
+        ' WHERE v.cuenta IS NOT NULL OR app.norm_texto(v.nombre) IS NOT NULL',
+        ' ORDER BY d.id, coalesce(v.cuenta, app.norm_texto(v.nombre))',
+        'ON CONFLICT DO NOTHING;'
+      );
+    }
+    if (mapeosProductosDrogueria.length > 0) {
+      lines.push('', '-- 5. HOMOLOGACION DE PRODUCTOS: Cod SAP (SKU interno) <-> codigo que cada drogueria usa (varios codigos por producto: el primero es el principal)');
+      lines.push(
+        'INSERT INTO map_producto_drogueria (drogueria_id, producto_id, codigo_drogueria, descripcion_drogueria, es_principal, origen)',
+        'SELECT DISTINCT ON (d.id, v.codigo) d.id, p.id, v.codigo, v.descripcion, false, \'importacion\'',
+        '  FROM (VALUES',
+        mapeosProductosDrogueria.map((m) => `    (${q(m.drogueria)}, ${q(m.cod_sap)}, ${q(m.codigo_producto_drogueria)}, ${q(m.nombre_producto_drogueria)})`).join(',\n'),
+        '  ) AS v(drogueria, sku, codigo, descripcion)',
+        '  JOIN dim_droguerias d ON app.norm_texto(d.codigo) = app.norm_texto(v.drogueria) OR d.nombre_normalizado = app.norm_texto(v.drogueria)',
+        '  JOIN dim_productos p ON p.sku = v.sku',
+        ' WHERE v.codigo IS NOT NULL',
+        ' ORDER BY d.id, v.codigo',
+        'ON CONFLICT DO NOTHING;'
+      );
     }
 
-    lines.push('', 'COMMIT;');
+    lines.push(
+      '',
+      '-- Las ventas historicas NO van aqui: se suben desde la pestana Historico (boton "Subir a Supabase Ahora"),',
+      '-- que envia los codigos de cada drogueria y deja que el servidor los enlace con la farmacia y el producto.',
+      '-- Al insertar homologaciones nuevas, las ventas ya cargadas se enlazan solas (triggers de map_*).',
+      '',
+      'COMMIT;'
+    );
     return lines.join('\n');
-  }, [subTab, droguerias, productos, clientes, historicoPrevio]);
+  }, [subTab, droguerias, productos, clientes, aliasesFarmacias, mapeosProductosDrogueria]);
 
   const handleCopiarSql = () => {
     navigator.clipboard.writeText(sqlGenerado);
@@ -1508,42 +1425,35 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     if (estrategia1M === 'agregada') {
       if (lenguajeScript1M === 'sql') {
         return `-- ==============================================================================
--- TABLA HISTÓRICA PARA SUPABASE CON TUS 8 COLUMNAS EXACTAS
+-- CARGA MASIVA DE VENTAS DE DROGUERIAS (esquema v3) DESDE UN CSV DE 8 COLUMNAS
 -- Fecha | Cod Cliente | Nombre_cliente | Drogueria | Codigo Producto | Nombre Producto | Unidades | Cod Sap
+-- Cada fila conserva los codigos y nombres que uso la drogueria; el servidor los enlaza con la farmacia y el producto
+-- (map_cliente_drogueria / map_producto_drogueria). Lo que no reconozca queda en vw_pendientes_clientes / _productos.
 -- ==============================================================================
-
-CREATE TABLE IF NOT EXISTS fact_historico_ventas (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    fecha DATE NOT NULL,
-    cod_cliente VARCHAR(100) NOT NULL,         -- Código de la farmacia en la droguería
-    nombre_cliente VARCHAR(255) NOT NULL,      -- Razón social / nombre de la farmacia
-    drogueria VARCHAR(150) NOT NULL,           -- Droguería distribuidora (Cobeca, Nena, etc.)
-    codigo_producto VARCHAR(100) NOT NULL,     -- Código del producto en esa droguería
-    nombre_producto VARCHAR(255) NOT NULL,     -- Descripción comercial del medicamento
-    unidades INT NOT NULL CHECK (unidades >= 0),
-    cod_sap VARCHAR(100) NOT NULL,             -- Tu código interno maestro (SKU Vademécum)
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE UNLOGGED TABLE IF NOT EXISTS staging_ventas (
+    fecha date, cod_cliente text, nombre_cliente text, drogueria text,
+    codigo_producto text, nombre_producto text, unidades integer, cod_sap text
 );
+TRUNCATE staging_ventas;
+-- Desde psql:  \\COPY staging_ventas FROM 'ventas.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';');
 
--- Índices de alta velocidad para el Motor de Sugeridos
-CREATE INDEX IF NOT EXISTS idx_hist_cod_sap ON fact_historico_ventas(cod_sap);
-CREATE INDEX IF NOT EXISTS idx_hist_cod_cliente ON fact_historico_ventas(cod_cliente);
-CREATE INDEX IF NOT EXISTS idx_hist_drogueria ON fact_historico_ventas(drogueria);
-CREATE INDEX IF NOT EXISTS idx_hist_fecha ON fact_historico_ventas(fecha DESC);
+INSERT INTO import_lotes (archivo, checksum)
+VALUES ('ventas.csv', 'ventas.csv|' || (SELECT count(*) FROM staging_ventas) || '|' || (SELECT coalesce(sum(unidades), 0) FROM staging_ventas))
+ON CONFLICT (checksum) DO NOTHING;
 
--- Agrupación mensual en PostgreSQL si tienes una tabla staging con 1M filas:
--- SELECT 
---     TO_CHAR(fecha, 'YYYY-MM') AS fecha_mes,
---     cod_cliente,
---     nombre_cliente,
---     drogueria,
---     codigo_producto,
---     nombre_producto,
---     SUM(unidades) AS total_unidades,
---     cod_sap
--- FROM staging_ventas_brutas
--- GROUP BY TO_CHAR(fecha, 'YYYY-MM'), cod_cliente, nombre_cliente, drogueria, codigo_producto, nombre_producto, cod_sap;`;
-      } else {
+INSERT INTO fact_ventas_drogueria (lote_id, fila, fecha, drogueria_id, cod_cliente_drogueria, nombre_cliente_drogueria,
+                                   cod_producto_drogueria, nombre_producto_drogueria, cod_sap_reportado, unidades)
+SELECT (SELECT id FROM import_lotes WHERE archivo = 'ventas.csv' ORDER BY created_at DESC LIMIT 1),
+       row_number() OVER (ORDER BY s.fecha, s.cod_cliente, s.codigo_producto), s.fecha, d.id,
+       nullif(btrim(s.cod_cliente), ''), coalesce(nullif(btrim(s.nombre_cliente), ''), 'SIN NOMBRE'),
+       btrim(s.codigo_producto), s.nombre_producto, nullif(btrim(s.cod_sap), ''), s.unidades
+  FROM staging_ventas s
+  JOIN dim_droguerias d ON app.norm_texto(d.codigo) = app.norm_texto(s.drogueria) OR d.nombre_normalizado = app.norm_texto(s.drogueria)
+ON CONFLICT (lote_id, fila) DO NOTHING;
+
+-- Enlaza con farmacias/productos, aprende codigos desde el Cod SAP del reporte y actualiza el consolidado mensual:
+SELECT app.homologar_ventas();
+SELECT * FROM vw_estado_homologacion ORDER BY filas_sin_farmacia + filas_sin_producto DESC;`;      } else {
         return `# ==============================================================================
 # SCRIPT PYTHON: CONDENSAR TUS 8 COLUMNAS Y 1.000.000 DE FILAS EN < 4 SEGUNDOS
 # Columnas: Fecha | Cod Cliente | Nombre_cliente | Drogueria | Codigo Producto | Nombre Producto | Unidades | Cod Sap
@@ -1575,27 +1485,33 @@ print(f"¡Listo! Se redujo de {len(df):,} filas diarias a {len(resumen):,} filas
       }
     } else if (estrategia1M === 'ventana90') {
       return `-- ==============================================================================
--- ESTRATEGIA VENTANA MÓVIL 90 DÍAS CON TUS 8 COLUMNAS
+-- ESTRATEGIA VENTANA MÓVIL: solo los últimos 90 días de ventas por farmacia y producto
 -- ==============================================================================
--- Filtra en tu base de datos o Excel solo las ventas de los últimos 90 días:
-SELECT 
-    fecha,
-    cod_cliente,
-    nombre_cliente,
-    drogueria,
-    codigo_producto,
-    nombre_producto,
-    unidades,
-    cod_sap
-FROM fact_historico_ventas
-WHERE fecha >= CURRENT_DATE - INTERVAL '90 days'
-ORDER BY fecha DESC;`;
+-- Detalle diario tal como lo reportó cada droguería (sus códigos y nombres):
+SELECT v.fecha, d.nombre AS drogueria, v.cod_cliente_drogueria, v.nombre_cliente_drogueria,
+       v.cod_producto_drogueria, v.nombre_producto_drogueria, v.unidades, p.sku AS cod_sap
+  FROM fact_ventas_drogueria v
+  JOIN dim_droguerias d ON d.id = v.drogueria_id
+  LEFT JOIN dim_productos p ON p.id = v.producto_id
+ WHERE v.fecha >= CURRENT_DATE - INTERVAL '90 days'
+ ORDER BY v.fecha DESC;
+
+-- Lo que usa el pedido sugerido en el celular: el consolidado por farmacia, producto y mes (ya homologado).
+SELECT c.codigo_interno, p.sku, m.periodo, m.unidades
+  FROM fact_compras_mensual m
+  JOIN dim_clientes c ON c.id = m.cliente_id
+  JOIN dim_productos p ON p.id = m.producto_id
+ WHERE m.deleted_at IS NULL AND m.periodo >= date_trunc('month', CURRENT_DATE - INTERVAL '3 months')
+ ORDER BY c.codigo_interno, p.sku, m.periodo DESC;`;
     } else {
       return `# ==============================================================================
 # CARGA MASIVA DIRECTA POR CLI POSTGRESQL (1.000.000 FILAS EN ~40 SEGUNDOS)
+# 1) Crea staging_ventas y ejecuta el script SQL de esta guía (estrategia "agregada" / SQL) hasta el TRUNCATE.
+# 2) Carga el CSV a la tabla staging con COPY:
 # ==============================================================================
 psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgres" \\
-  -c "\\COPY fact_historico_ventas(fecha, cod_cliente, nombre_cliente, drogueria, codigo_producto, nombre_producto, unidades, cod_sap) FROM 'historico_1M.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';');"`;
+  -c "\\COPY staging_ventas(fecha, cod_cliente, nombre_cliente, drogueria, codigo_producto, nombre_producto, unidades, cod_sap) FROM 'historico_1M.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';');"
+# 3) Ejecuta el resto del script SQL (INSERT INTO import_lotes ... SELECT app.homologar_ventas();).`;
     }
   }, [subTab, seccionHistoricoActiva, estrategia1M, lenguajeScript1M]);
 
@@ -1783,7 +1699,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                   <span>
                     Importacion Masiva para:{' '}
                     <strong className="text-teal-600">
-                      {subTab === 'droguerias' ? 'dim_droguerias' : subTab === 'productos' ? 'dim_productos (12 Campos)' : subTab === 'clientes' ? 'dim_clientes' : 'historico_pedidos_previos'}
+                      {subTab === 'droguerias' ? 'dim_droguerias' : subTab === 'productos' ? 'dim_productos (12 Campos)' : subTab === 'clientes' ? 'dim_clientes' : 'fact_ventas_drogueria (ventas de las droguerías)'}
                     </strong>
                   </span>
                 </h3>
