@@ -1,0 +1,7 @@
+{
+  "name": "PharmaTransfer - Pedidos y Teletransferencias Farmacéuticas",
+  "description": "Plataforma de toma de pedidos, motor de sugeridos consolidado y teletransferencias farmacéuticas con exportación CSV dinámica por droguería y Supabase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
