@@ -20,7 +20,6 @@ import {
   Save,
   ChevronDown
 } from 'lucide-react';
-import { useTheme } from '../context/ThemeContext';
 
 interface OrderTakingTabProps {
   clientes: Cliente[];
@@ -54,7 +53,6 @@ export const OrderTakingTab: React.FC<OrderTakingTabProps> = ({
   itemsExternos = [],
   onConsumirItemsExternos,
 }) => {
-  const { esClaro } = useTheme();
   const [clienteId, setClienteId] = useState<string>(clientes[0]?.id || '');
   const [drogueriaId, setDrogueriaId] = useState<string>(droguerias[0]?.id || '');
   const [observaciones, setObservaciones] = useState<string>('');
@@ -65,11 +63,7 @@ export const OrderTakingTab: React.FC<OrderTakingTabProps> = ({
     producto: Producto;
     cantidad: number;
     descuento: number;
-  }[]>([
-    { producto: productos[0] || { id: 'p1', sku: '7591001', nombre_comercial: 'Losartán Potásico 50mg x 30', principio_activo: 'Losartán Potásico', concentracion: '50mg', presentacion: 'Caja x 30', laboratorio: 'Genven', categoria: 'Cardiovascular', precio_lista: 1.45, descuento_maximo_porc: 15, stock_disponible: 520, empaque_minimo: 10, es_prioritario: true, codigo_barras_ean13: '7591001001', dias_vencimiento_lote: 400, created_at: '' }, cantidad: 40, descuento: 0 },
-    { producto: productos[1] || { id: 'p2', sku: '7591002', nombre_comercial: 'Atamel Pediátrico Gotas 15ml', principio_activo: 'Acetaminofén', concentracion: '100mg/ml', presentacion: 'Frasco 15ml', laboratorio: 'Pfizer', categoria: 'Analgésicos', precio_lista: 1.90, descuento_maximo_porc: 12, stock_disponible: 180, empaque_minimo: 10, es_prioritario: false, codigo_barras_ean13: '7591001002', dias_vencimiento_lote: 300, created_at: '' }, cantidad: 20, descuento: 0 },
-    { producto: productos[2] || { id: 'p3', sku: '7591003', nombre_comercial: 'Amoxicilina 875mg / Clavulánico 125mg', principio_activo: 'Amoxicilina + Clavulánico', concentracion: '875/125mg', presentacion: 'Caja x 14', laboratorio: 'Calox', categoria: 'Antibióticos', precio_lista: 2.85, descuento_maximo_porc: 10, stock_disponible: 30, empaque_minimo: 5, es_prioritario: true, codigo_barras_ean13: '7591001003', dias_vencimiento_lote: 250, created_at: '' }, cantidad: 10, descuento: 0 },
-  ]);
+  }[]>([]);
 
   const [toastMensaje, setToastMensaje] = useState<string | null>(null);
 
@@ -82,12 +76,16 @@ export const OrderTakingTab: React.FC<OrderTakingTabProps> = ({
   React.useEffect(() => {
     if (itemsExternos && itemsExternos.length > 0) {
       setLineas((prev) => {
+        // Sin mutar las líneas previas: en StrictMode el updater corre dos veces y duplicaba las cantidades.
         const copy = [...prev];
         itemsExternos.forEach((it) => {
           const idx = copy.findIndex((l) => l.producto.id === it.producto.id);
           if (idx >= 0) {
-            copy[idx].cantidad += it.cantidad;
-            copy[idx].descuento = Math.min(it.producto.descuento_maximo_porc, it.descuento);
+            copy[idx] = {
+              ...copy[idx],
+              cantidad: copy[idx].cantidad + it.cantidad,
+              descuento: Math.min(it.producto.descuento_maximo_porc, it.descuento),
+            };
           } else {
             copy.push(it);
           }

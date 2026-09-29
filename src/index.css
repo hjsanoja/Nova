@@ -1,46 +1,110 @@
 @import "tailwindcss";
 
-@layer base {
-  :root {
-    --color-primary: #001428;
-    --color-primary-container: #0f2942;
-    --color-on-primary: #ffffff;
-    --color-secondary: #006398;
-    --color-tertiary: #059669;
-    --color-surface: #f8f9ff;
-    --color-surface-container-lowest: #ffffff;
-    --color-surface-container-low: #eff4ff;
-    --color-surface-container: #e5eeff;
-    --color-surface-container-high: #dce9ff;
-    --color-on-surface: #0b1c30;
-    --color-on-surface-variant: #43474d;
-    --color-outline: #74777e;
-    --color-outline-variant: #c3c6ce;
-  }
+/* El modo oscuro se controla con la clase `dark` en <html> (ThemeContext), no con prefers-color-scheme. */
+@custom-variant dark (&:where(.dark, .dark *));
 
-  body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: var(--color-surface);
-    color: var(--color-on-surface);
-    -webkit-font-smoothing: antialiased;
-  }
+/*
+ * Tokens de diseño de NOVA. Punto único para aplicar cambios del sistema visual
+ * (tipografías, radios, alturas táctiles) sin tocar cada componente.
+ */
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --animate-nova-in: nova-in 0.18s ease-out;
 
-  h1, h2, h3, h4, h5, h6 {
-    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  }
+  /* Paleta "Stitch" del dashboard (design.md): disponible como bg-primary, text-on-surface, etc. */
+  --color-primary: #001428;
+  --color-primary-container: #0f2942;
+  --color-on-primary: #ffffff;
+  --color-secondary: #006398;
+  --color-tertiary: #059669;
+  --color-surface: #f8f9ff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #eff4ff;
+  --color-surface-container: #e5eeff;
+  --color-surface-container-high: #dce9ff;
+  --color-on-surface: #0b1c30;
+  --color-on-surface-variant: #43474d;
+  --color-outline: #74777e;
+  --color-outline-variant: #c3c6ce;
 
-  .font-display {
-    font-family: 'Plus Jakarta Sans', sans-serif;
-  }
-
-  .font-numeric-tabular {
-    font-family: 'Inter', monospace;
-    font-variant-numeric: tabular-nums;
+  @keyframes nova-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 }
 
-/* Material symbol baseline alignment */
-.material-symbols-outlined {
-  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-  vertical-align: middle;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+
+  button, [role="button"], a, select, summary {
+    touch-action: manipulation;
+  }
+
+  :where(button, a, input, select, textarea, summary):focus-visible {
+    outline: 2px solid #0d9488;
+    outline-offset: 2px;
+  }
+
+  /* iOS Safari hace zoom al enfocar campos con fuente < 16px: se evita en móvil y tablet vertical. */
+  @media (max-width: 1023px) {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Compatibilidad con las clases `animate-in fade-in slide-in-from-*` ya usadas en los componentes. */
+  .animate-in {
+    animation: var(--animate-nova-in);
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Márgenes seguros para iPhone/iPad con notch o barra de inicio. */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* Listas largas: el navegador omite el render de filas fuera de pantalla. */
+  .cv-auto {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 88px;
+  }
 }

@@ -24,6 +24,14 @@ export function calcularPedidoSugeridoLocal(
   // Fecha límite de corte hacia atrás
   const fechaCorte = new Date();
   fechaCorte.setDate(fechaCorte.getDate() - dias_analisis);
+  const corteIso = fechaCorte.toISOString().slice(0, 10);
+
+  // Las fechas ISO (YYYY-MM-DD) se comparan como texto; solo los formatos raros pasan por Date.
+  const esAnteriorAlCorte = (fechaTexto: string): boolean => {
+    if (/^\d{4}-\d{2}-\d{2}/.test(fechaTexto)) return fechaTexto.slice(0, 10) < corteIso;
+    const fecha = new Date(fechaTexto);
+    return !isNaN(fecha.getTime()) && fecha < fechaCorte;
+  };
 
   // Mapa de agregación por producto_id
   const metricasPorProducto = new Map<string, {
@@ -34,19 +42,24 @@ export function calcularPedidoSugeridoLocal(
     descuentosPonderadosSuma: number;
   }>();
 
+  // Textos del cliente normalizados una sola vez (antes se recalculaban en cada fila del histórico).
+  const idsCliente = new Set(
+    [cliente.id, cliente.ident01, cliente.codigo_cliente, cliente.rif].filter((v): v is string => !!v)
+  );
+  const idsPedido = new Set([cliente.id, cliente.ident01, cliente.codigo_cliente].filter((v): v is string => !!v));
+  const nombreFantasia = (cliente.nombre_fantasia || '').toLowerCase();
+  const razonSocial = (cliente.razon_social || '').toLowerCase();
+
   // 1. Procesar historico_pedidos_previos
   historicoPrevio.forEach((h) => {
-    const esEsteCliente = 
-      h.cliente_id === cliente.id || 
-      (cliente.ident01 && h.cliente_id === cliente.ident01) || 
-      (cliente.codigo_cliente && h.cliente_id === cliente.codigo_cliente) ||
-      (cliente.rif && h.cliente_id === cliente.rif) ||
-      (h.nombre_cliente && cliente.nombre_fantasia && h.nombre_cliente.toLowerCase().includes(cliente.nombre_fantasia.toLowerCase())) ||
-      (h.nombre_cliente && cliente.razon_social && h.nombre_cliente.toLowerCase().includes(cliente.razon_social.toLowerCase()));
+    const nombreFila = h.nombre_cliente ? h.nombre_cliente.toLowerCase() : '';
+    const esEsteCliente =
+      idsCliente.has(h.cliente_id) ||
+      (nombreFila !== '' && nombreFantasia !== '' && nombreFila.includes(nombreFantasia)) ||
+      (nombreFila !== '' && razonSocial !== '' && nombreFila.includes(razonSocial));
 
     if (!esEsteCliente) return;
-    const fecha = new Date(h.fecha_pedido);
-    if (!isNaN(fecha.getTime()) && fecha < fechaCorte) return;
+    if (esAnteriorAlCorte(h.fecha_pedido)) return;
 
     const actual = 
       metricasPorProducto.get(h.producto_id) || 
@@ -75,39 +88,43 @@ export function calcularPedidoSugeridoLocal(
 
   // 2. Procesar pedidos de la plataforma (pedidos_cabecera con pedidos_detalle procesados)
   const pedidosClienteRecientes = pedidosCabecera.filter((pc) => {
-    const esEsteCliente = 
-      pc.cliente_id === cliente.id || 
-      (cliente.ident01 && pc.cliente_id === cliente.ident01) || 
-      (cliente.codigo_cliente && pc.cliente_id === cliente.codigo_cliente);
-    if (!esEsteCliente) return false;
-    const fecha = new Date(pc.fecha_pedido);
-    if (!isNaN(fecha.getTime()) && fecha < fechaCorte) return false;
+    if (!idsPedido.has(pc.cliente_id)) return false;
+    if (esAnteriorAlCorte(pc.fecha_pedido)) return false;
     return pc.estado === 'procesado_total' || pc.estado === 'procesado_parcial' || pc.estado === 'facturado';
   });
 
-  pedidosClienteRecientes.forEach((pc) => {
-    const detalles = pedidosDetalle.filter((pd) => pd.pedido_id === pc.id);
-    detalles.forEach((det) => {
-      const actual = metricasPorProducto.get(det.producto_id) || {
-        totalUnidades: 0,
-        unidadesEquipoA: 0,
-        unidadesEquipoB: 0,
-        frecuenciaPedidos: 0,
-        descuentosPonderadosSuma: 0,
-      };
-
-      actual.totalUnidades += det.cantidad_confirmada;
-      if (pc.equipo_origen === 'A') {
-        actual.unidadesEquipoA += det.cantidad_confirmada;
-      } else {
-        actual.unidadesEquipoB += det.cantidad_confirmada;
-      }
-      actual.frecuenciaPedidos += 1;
-      actual.descuentosPonderadosSuma += det.descuento_porcentaje * det.cantidad_confirmada;
-
-      metricasPorProducto.set(det.producto_id, actual);
+  if (pedidosClienteRecientes.length > 0) {
+    // Detalles indexados por pedido: evita recorrer todos los detalles por cada pedido.
+    const detallesPorPedido = new Map<string, PedidoDetalle[]>();
+    pedidosDetalle.forEach((pd) => {
+      const lista = detallesPorPedido.get(pd.pedido_id);
+      if (lista) lista.push(pd);
+      else detallesPorPedido.set(pd.pedido_id, [pd]);
     });
-  });
+
+    pedidosClienteRecientes.forEach((pc) => {
+      (detallesPorPedido.get(pc.id) ?? []).forEach((det) => {
+        const actual = metricasPorProducto.get(det.producto_id) || {
+          totalUnidades: 0,
+          unidadesEquipoA: 0,
+          unidadesEquipoB: 0,
+          frecuenciaPedidos: 0,
+          descuentosPonderadosSuma: 0,
+        };
+
+        actual.totalUnidades += det.cantidad_confirmada;
+        if (pc.equipo_origen === 'A') {
+          actual.unidadesEquipoA += det.cantidad_confirmada;
+        } else {
+          actual.unidadesEquipoB += det.cantidad_confirmada;
+        }
+        actual.frecuenciaPedidos += 1;
+        actual.descuentosPonderadosSuma += det.descuento_porcentaje * det.cantidad_confirmada;
+
+        metricasPorProducto.set(det.producto_id, actual);
+      });
+    });
+  }
 
   // 3. Generar la lista de sugeridos para el vademécum activo
   const resultado: SugeridoItem[] = [];

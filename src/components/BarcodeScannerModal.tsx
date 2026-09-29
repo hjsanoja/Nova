@@ -2,15 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Producto } from '../types/pharmacy';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { 
-  Camera, 
   CameraOff, 
   Barcode, 
   Check, 
   X, 
   AlertTriangle, 
-  Plus, 
-  Sparkles,
-  Package
 } from 'lucide-react';
 
 interface BarcodeScannerModalProps {
@@ -29,7 +25,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const [escaneando, setEscaneando] = useState(false);
   const [errorCamara, setErrorCamara] = useState<string | null>(null);
   const [productoDetectado, setProductoDetectado] = useState<Producto | null>(null);
-  const [codigoLeido, setCodigoLeido] = useState<string>('');
   const [cantidad, setCantidad] = useState<number>(10);
   const [descuento, setDescuento] = useState<number>(0);
 
@@ -121,7 +116,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const procesarCodigo = (codigo: string) => {
     const limpio = (codigo || '').trim();
     if (!limpio) return;
-    setCodigoLeido(limpio);
 
     // Buscar en el catálogo por EAN13 o SKU o código o pack_code
     const match = productos.find(
@@ -149,7 +143,6 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     if (!productoDetectado) return;
     onProductoEscaneado(productoDetectado, cantidad, descuento);
     setProductoDetectado(null);
-    setCodigoLeido('');
     onCerrar();
   };
 

@@ -16,8 +16,6 @@ import {
   ShoppingCart, 
   Check, 
   Star, 
-  ArrowRight,
-  Package,
   Plus,
   Minus
 } from 'lucide-react';

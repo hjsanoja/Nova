@@ -6,8 +6,6 @@ import {
   Check, 
   Database, 
   Sparkles, 
-  Building2,
-  FileText
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
@@ -27,8 +25,7 @@ export const DrugstoreInventoryUploadTab: React.FC<DrugstoreInventoryUploadTabPr
 }) => {
   const { esClaro } = useTheme();
   const [drogueriaSeleccionadaId, setDrogueriaSeleccionadaId] = useState<string>(droguerias[0]?.id || '');
-  const [archivoTexto, setArchivoTexto] = useState<string>('');
-  const [nombreArchivo, setNombreArchivo] = useState<string>('');
+    const [nombreArchivo, setNombreArchivo] = useState<string>('');
   const [filasMapeadas, setFilasMapeadas] = useState<{
     sku: string;
     nombre: string;
@@ -70,7 +67,6 @@ SKU-OME-20;COB-1006;600;5.00`;
   };
 
   const procesarContenidoCsv = (csv: string) => {
-    setArchivoTexto(csv);
     const lineas = csv.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (lineas.length <= 1) return;
 
@@ -123,7 +119,6 @@ SKU-OME-20;COB-1006;600;5.00`;
     onActualizarInventarioDrogueria(drogueriaSeleccionadaId, validos);
     setNotificacion(`¡Se actualizaron con éxito ${validos.length} medicamentos para ${drogueriaActual.nombre_drogueria}!`);
     setFilasMapeadas([]);
-    setArchivoTexto('');
     setNombreArchivo('');
     setTimeout(() => setNotificacion(null), 4000);
   };

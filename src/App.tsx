@@ -1,210 +1,122 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  RolUsuario, 
-  EquipoVentas, 
-  Producto, 
-  Cliente, 
-  Drogueria, 
-  HistoricoPedidoPrevio, 
-  PedidoCabecera, 
-  PedidoDetalle, 
-  MotivoAjuste, 
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  RolUsuario,
+  EquipoVentas,
+  Producto,
+  Cliente,
+  Drogueria,
+  HistoricoPedidoPrevio,
+  PedidoCabecera,
+  PedidoDetalle,
+  MotivoAjuste,
   EstadoPedido,
-  Usuario 
+  Usuario,
 } from './types/pharmacy';
-import { 
-  MOCK_USUARIOS, 
-  MOCK_DROGUERIAS, 
-  MOCK_PRODUCTOS, 
-  MOCK_CLIENTES, 
-  MOCK_HISTORICO_PREVIO, 
-  MOCK_PEDIDOS_CABECERA, 
-  MOCK_PEDIDOS_DETALLE 
+import {
+  MOCK_USUARIOS,
+  MOCK_DROGUERIAS,
+  MOCK_PRODUCTOS,
+  MOCK_CLIENTES,
+  MOCK_HISTORICO_PREVIO,
+  MOCK_PEDIDOS_CABECERA,
+  MOCK_PEDIDOS_DETALLE,
 } from './data/mockData';
 import { Header } from './components/Header';
-import { SqlStudioTab } from './components/SqlStudioTab';
-import { SuggestedOrderTab } from './components/SuggestedOrderTab';
-import { DrugstoreCsvTab } from './components/DrugstoreCsvTab';
-import { InventoryCatalogTab } from './components/InventoryCatalogTab';
-import { TeletransferQueueTab } from './components/TeletransferQueueTab';
-import { OrderTakingTab } from './components/OrderTakingTab';
-import { MyOrdersTab } from './components/MyOrdersTab';
-import { RepDashboardTab } from './components/RepDashboardTab';
-import { UserGuideTab } from './components/UserGuideTab';
-import { AdminUsersTab } from './components/AdminUsersTab';
-import { DataImportStudioTab } from './components/DataImportStudioTab';
-import { DrugstoreInventoryUploadTab } from './components/DrugstoreInventoryUploadTab';
-import { BarcodeScannerModal } from './components/BarcodeScannerModal';
-import { VoiceDictationModal } from './components/VoiceDictationModal';
-import { AuthModal } from './components/AuthModal';
-import { SupabaseConfigModal } from './components/SupabaseConfigModal';
-import { AboutModal } from './components/AboutModal';
-import { getStoredSupabaseConfig } from './services/supabaseClient';
-import { ThemeProvider, useTheme } from './context/ThemeContext';
-import sqlSchemaRaw from './sql/supabase_schema_fase1.sql?raw';
+import { SideNav, BottomNav } from './components/shell/Navigation';
+import { tabsDelRol, TAB_INICIAL } from './components/shell/navConfig';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { getStoredSupabaseConfig } from './services/supabaseConfig';
+import { leerClientes, leerDroguerias, leerLista, leerProductos, leerUsuario } from './services/storageMigrations';
+import { ThemeProvider } from './context/ThemeContext';
+import { usePersistentState, EVENTO_ERROR_ALMACENAMIENTO } from './hooks/usePersistentState';
+import { AlertTriangle, X } from 'lucide-react';
+
+// Cada pestaña y cada modal pesado se descarga solo cuando se usa (el bundle inicial se reduce a la shell).
+const RepDashboardTab = lazy(() => import('./components/RepDashboardTab').then((m) => ({ default: m.RepDashboardTab })));
+const OrderTakingTab = lazy(() => import('./components/OrderTakingTab').then((m) => ({ default: m.OrderTakingTab })));
+const SuggestedOrderTab = lazy(() => import('./components/SuggestedOrderTab').then((m) => ({ default: m.SuggestedOrderTab })));
+const MyOrdersTab = lazy(() => import('./components/MyOrdersTab').then((m) => ({ default: m.MyOrdersTab })));
+const TeletransferQueueTab = lazy(() => import('./components/TeletransferQueueTab').then((m) => ({ default: m.TeletransferQueueTab })));
+const DrugstoreCsvTab = lazy(() => import('./components/DrugstoreCsvTab').then((m) => ({ default: m.DrugstoreCsvTab })));
+const DrugstoreInventoryUploadTab = lazy(() => import('./components/DrugstoreInventoryUploadTab').then((m) => ({ default: m.DrugstoreInventoryUploadTab })));
+const InventoryCatalogTab = lazy(() => import('./components/InventoryCatalogTab').then((m) => ({ default: m.InventoryCatalogTab })));
+const AdminUsersTab = lazy(() => import('./components/AdminUsersTab').then((m) => ({ default: m.AdminUsersTab })));
+const DataImportStudioTab = lazy(() => import('./components/DataImportStudioTab').then((m) => ({ default: m.DataImportStudioTab })));
+const SqlStudioTab = lazy(() => import('./components/SqlStudioTab').then((m) => ({ default: m.SqlStudioTab })));
+const UserGuideTab = lazy(() => import('./components/UserGuideTab').then((m) => ({ default: m.UserGuideTab })));
+const BarcodeScannerModal = lazy(() => import('./components/BarcodeScannerModal').then((m) => ({ default: m.BarcodeScannerModal })));
+const VoiceDictationModal = lazy(() => import('./components/VoiceDictationModal').then((m) => ({ default: m.VoiceDictationModal })));
+const AuthModal = lazy(() => import('./components/AuthModal').then((m) => ({ default: m.AuthModal })));
+const SupabaseConfigModal = lazy(() => import('./components/SupabaseConfigModal').then((m) => ({ default: m.SupabaseConfigModal })));
+const AboutModal = lazy(() => import('./components/AboutModal').then((m) => ({ default: m.AboutModal })));
+
+type ItemPedido = { producto: Producto; cantidad: number; descuento: number };
+
+const leerTabDelHash = () => window.location.hash.replace(/^#\/?/, '');
+
+const PestanaCargando = () => (
+  <div role="status" className="animate-pulse space-y-4" aria-busy="true" aria-label="Cargando sección">
+    <div className="h-8 w-64 rounded-lg bg-slate-200 dark:bg-slate-800" />
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="h-24 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+      ))}
+    </div>
+    <div className="h-64 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+  </div>
+);
 
 function AppContent() {
-  const { esClaro } = useTheme();
+  // Usuario autenticado en Supabase Auth / local (Hernando Sanoja Dev & Admin por defecto)
+  const [usuarioActual, setUsuarioActual] = usePersistentState<Usuario | null>(
+    'PHARMA_AUTH_USER',
+    () => MOCK_USUARIOS[0],
+    leerUsuario
+  );
+  const [usuarios, setUsuarios] = usePersistentState<Usuario[]>('PHARMA_USUARIOS', () => MOCK_USUARIOS, leerLista);
+  const [productos, setProductos] = usePersistentState<Producto[]>('PHARMA_PRODUCTOS', () => MOCK_PRODUCTOS, leerProductos);
+  const [clientes, setClientes] = usePersistentState<Cliente[]>('PHARMA_CLIENTES', () => MOCK_CLIENTES, leerClientes);
+  const [droguerias, setDroguerias] = usePersistentState<Drogueria[]>('PHARMA_DROGUERIAS_V2', () => MOCK_DROGUERIAS, leerDroguerias);
+  const [historicoPrevio, setHistoricoPrevio] = usePersistentState<HistoricoPedidoPrevio[]>(
+    'PHARMA_HISTORICO',
+    () => MOCK_HISTORICO_PREVIO,
+    leerLista
+  );
+  const [pedidosCabecera, setPedidosCabecera] = usePersistentState<PedidoCabecera[]>(
+    'PHARMA_PEDIDOS_CAB',
+    () => MOCK_PEDIDOS_CABECERA,
+    leerLista
+  );
+  const [pedidosDetalle, setPedidosDetalle] = usePersistentState<PedidoDetalle[]>(
+    'PHARMA_PEDIDOS_DET',
+    () => MOCK_PEDIDOS_DETALLE,
+    leerLista
+  );
 
-  // Usuario Autenticado en Supabase Auth / Local (Hernando Sanoja Dev & Admin por defecto)
-  const [usuarioActual, setUsuarioActual] = useState<Usuario | null>(() => {
-    const saved = localStorage.getItem('PHARMA_AUTH_USER');
-    if (saved) {
-      try { return JSON.parse(saved); } catch { /* ignore */ }
-    }
-    return MOCK_USUARIOS[0]; // Hernando Sanoja (Lead Dev & Admin)
-  });
-
-  // Lista de Usuarios del Sistema (Hernando Sanoja como Dev inicial, creador de los demás)
-  const [usuarios, setUsuarios] = useState<Usuario[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_USUARIOS');
-    if (guardado) {
-      try { return JSON.parse(guardado); } catch { /* ignore */ }
-    }
-    return MOCK_USUARIOS;
-  });
-
-  // El Rol y el Equipo provienen estrictamente del usuario que tiene la sesión iniciada
+  // El rol y el equipo provienen estrictamente del usuario que tiene la sesión iniciada
   const rolActual: RolUsuario = usuarioActual?.rol || 'admin';
   const equipoActual: EquipoVentas = usuarioActual?.equipo || 'TODOS';
-  const [tabActiva, setTabActiva] = useState<string>('dashboard');
 
-  // Estado del Vademécum, Clientes, Droguerías y Pedidos (Persistidos y Sanitizados)
-  const [productos, setProductos] = useState<Producto[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_PRODUCTOS');
-    if (guardado) {
-      try {
-        const parsed = JSON.parse(guardado);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((p: any) => ({
-            ...p,
-            sku: p.sku || p.codigo || `SKU-${p.id}`,
-            codigo: p.codigo || p.sku || `SKU-${p.id}`,
-            nombre_comercial: p.nombre_comercial || p.product || 'Medicamento',
-            product: p.product || p.nombre_comercial || 'Medicamento',
-            principio_activo: p.principio_activo || p.molecula || 'Principio Activo',
-            molecula: p.molecula || p.principio_activo || 'Principio Activo',
-            presentacion: p.presentacion || p.pack || 'Caja x 30',
-            pack: p.pack || p.presentacion || 'Caja x 30',
-            laboratorio: p.laboratorio || p.unidad_negocio || 'La Sante',
-            unidad_negocio: p.unidad_negocio || p.laboratorio || 'La Sante',
-            precio_lista: typeof p.precio_lista === 'number' ? p.precio_lista : 0,
-            descuento_maximo_porc: typeof p.descuento_maximo_porc === 'number' ? p.descuento_maximo_porc : 15,
-            empaque_minimo: typeof p.empaque_minimo === 'number' ? p.empaque_minimo : 10,
-            stock_disponible: typeof p.stock_disponible === 'number' ? p.stock_disponible : 500,
-            codigo_barras_ean13: p.codigo_barras_ean13 || p.pack_code || '7590000000000',
-            pack_code: p.pack_code || p.codigo_barras_ean13 || '7590000000000',
-            activo: p.activo !== false,
-          }));
-        }
-      } catch { /* ignore */ }
-    }
-    return MOCK_PRODUCTOS;
-  });
+  const tabs = useMemo(() => tabsDelRol(rolActual), [rolActual]);
 
-  const [clientes, setClientes] = useState<Cliente[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_CLIENTES');
-    if (guardado) {
-      try {
-        const parsed = JSON.parse(guardado);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((c: any, idx: number) => {
-            const ident01 = c.ident01 || c.codigo_cliente || c.id || `CLI-100${idx + 1}`;
-            const nombreFantasia = c.nombre_fantasia || c.nombre_comercial || c.razon_social || `Farmacia ${idx + 1}`;
-            const munCiudad = c.municipio_ciudad || c.ciudad || 'Caracas';
-            return {
-              ...c,
-              id: c.id || ident01,
-              ident01: ident01,
-              codigo_cliente: c.codigo_cliente || ident01,
-              razon_social: c.razon_social || nombreFantasia,
-              nombre_fantasia: nombreFantasia,
-              nombre_comercial: c.nombre_comercial || nombreFantasia,
-              brick: c.brick || 'CCS-CENTRO-01',
-              municipio_ciudad: munCiudad,
-              ciudad: c.ciudad || munCiudad,
-              direccion: c.direccion || `${munCiudad}, ${c.estado || 'Miranda'}`,
-              estado: c.estado || 'Miranda',
-              rif: c.rif || 'J-00000000-0',
-              frecuencia: c.frecuencia || 'Semanal',
-              bandera: c.bandera || 'Independiente',
-              local_gps_lat: typeof c.local_gps_lat === 'number' ? c.local_gps_lat : 10.4800,
-              local_gps_lon: typeof c.local_gps_lon === 'number' ? c.local_gps_lon : -66.8600,
-              clasificacion_abc: c.clasificacion_abc || 'B',
-              cupo_credito: typeof c.cupo_credito === 'number' ? c.cupo_credito : 5000,
-              dias_credito: typeof c.dias_credito === 'number' ? c.dias_credito : 15,
-              activo: c.activo !== false,
-            };
-          });
-        }
-      } catch { /* ignore */ }
-    }
-    return MOCK_CLIENTES;
-  });
+  // Pestaña activa sincronizada con el hash (#/pestana): el botón "atrás" del móvil navega entre módulos.
+  const [tabSolicitada, setTabSolicitada] = useState<string>(() => leerTabDelHash() || TAB_INICIAL[rolActual]);
+  const tabActiva = tabs.some((t) => t.id === tabSolicitada) ? tabSolicitada : tabs[0].id;
 
-  const [droguerias, setDroguerias] = useState<Drogueria[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_DROGUERIAS_V2');
-    if (guardado) {
-      try {
-        const parsed = JSON.parse(guardado);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((d: any, idx: number) => ({
-            ...d,
-            id: d.id || `drog-${idx + 1}`,
-            id_numero: typeof d.id_numero === 'number' ? d.id_numero : (idx + 1),
-            nombre_drogueria: d.nombre_drogueria || `Drogueria ${idx + 1}`,
-            codigo_drogueria: d.codigo_drogueria || `DROG-${idx + 1}`,
-            email_pedidos: d.email_pedidos || 'pedidos@drogueria.com',
-            formato_csv_config: d.formato_csv_config || {
-              delimitador: ';',
-              incluir_encabezados: true,
-              entrecomillado: 'solo_texto',
-              codificacion: 'UTF-8',
-              salto_linea: '\r\n',
-              formato_decimal: 'coma',
-              columnas: [
-                { campo_origen: 'codigo_cliente', nombre_encabezado: 'COD_CLIENTE', orden: 1, formato: 'texto' },
-                { campo_origen: 'rif_cliente', nombre_encabezado: 'RIF_FARMACIA', orden: 2, formato: 'texto' },
-                { campo_origen: 'sku', nombre_encabezado: 'SKU_PRODUCTO', orden: 3, formato: 'texto' },
-                { campo_origen: 'cantidad_confirmada', nombre_encabezado: 'CANTIDAD', orden: 4, formato: 'entero' },
-                { campo_origen: 'descuento_porcentaje', nombre_encabezado: 'DESCUENTO', orden: 5, formato: 'decimal_coma' },
-                { campo_origen: 'numero_pedido', nombre_encabezado: 'NUMERO_ORDEN', orden: 6, formato: 'texto' },
-              ],
-            },
-            activo: d.activo !== false,
-          }));
-        }
-      } catch { /* ignore */ }
-    }
-    return MOCK_DROGUERIAS;
-  });
+  const irATab = useCallback((tab: string) => {
+    setTabSolicitada(tab);
+    if (leerTabDelHash() !== tab) window.history.pushState(null, '', `#/${tab}`);
+    window.scrollTo({ top: 0 });
+  }, []);
 
-  const [historicoPrevio, setHistoricoPrevio] = useState<HistoricoPedidoPrevio[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_HISTORICO');
-    if (guardado) {
-      try { return JSON.parse(guardado); } catch { /* ignore */ }
-    }
-    return MOCK_HISTORICO_PREVIO;
-  });
-  
-  const [pedidosCabecera, setPedidosCabecera] = useState<PedidoCabecera[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_PEDIDOS_CAB');
-    if (guardado) {
-      try { return JSON.parse(guardado); } catch { /* ignore */ }
-    }
-    return MOCK_PEDIDOS_CABECERA;
-  });
+  useEffect(() => {
+    const alNavegar = () => setTabSolicitada(leerTabDelHash() || TAB_INICIAL[rolActual]);
+    window.addEventListener('popstate', alNavegar);
+    return () => window.removeEventListener('popstate', alNavegar);
+  }, [rolActual]);
 
-  const [pedidosDetalle, setPedidosDetalle] = useState<PedidoDetalle[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_PEDIDOS_DET');
-    if (guardado) {
-      try { return JSON.parse(guardado); } catch { /* ignore */ }
-    }
-    return MOCK_PEDIDOS_DETALLE;
-  });
-
-  // Modales
-  const [isSupabaseConectado, setIsSupabaseConectado] = useState(false);
+  // Modales: solo se montan (y descargan) cuando se abren.
+  const [isSupabaseConectado, setIsSupabaseConectado] = useState(() => getStoredSupabaseConfig().isConnected);
   const [modalSupabaseAbierto, setModalSupabaseAbierto] = useState(false);
   const [modalAuthAbierto, setModalAuthAbierto] = useState(false);
   const [modalEscanerAbierto, setModalEscanerAbierto] = useState(false);
@@ -212,53 +124,15 @@ function AppContent() {
   const [modalCreditosAbierto, setModalCreditosAbierto] = useState(false);
 
   // Items añadidos externamente desde Escáner o Voz al borrador de pedido
-  const [itemsExternosAñadidos, setItemsExternosAñadidos] = useState<{
-    producto: Producto;
-    cantidad: number;
-    descuento: number;
-  }[]>([]);
+  const [itemsExternosAñadidos, setItemsExternosAñadidos] = useState<ItemPedido[]>([]);
 
+  // Aviso cuando localStorage se llena (p. ej. histórico de ventas muy grande).
+  const [almacenamientoLleno, setAlmacenamientoLleno] = useState(false);
   useEffect(() => {
-    const config = getStoredSupabaseConfig();
-    setIsSupabaseConectado(config.isConnected);
+    const alFallar = () => setAlmacenamientoLleno(true);
+    window.addEventListener(EVENTO_ERROR_ALMACENAMIENTO, alFallar);
+    return () => window.removeEventListener(EVENTO_ERROR_ALMACENAMIENTO, alFallar);
   }, []);
-
-  // Persistencia local
-  useEffect(() => {
-    localStorage.setItem('PHARMA_PRODUCTOS', JSON.stringify(productos));
-  }, [productos]);
-
-  useEffect(() => {
-    localStorage.setItem('PHARMA_CLIENTES', JSON.stringify(clientes));
-  }, [clientes]);
-
-  useEffect(() => {
-    localStorage.setItem('PHARMA_DROGUERIAS_V2', JSON.stringify(droguerias));
-  }, [droguerias]);
-
-  useEffect(() => {
-    localStorage.setItem('PHARMA_HISTORICO', JSON.stringify(historicoPrevio));
-  }, [historicoPrevio]);
-
-  useEffect(() => {
-    localStorage.setItem('PHARMA_USUARIOS', JSON.stringify(usuarios));
-  }, [usuarios]);
-
-  useEffect(() => {
-    localStorage.setItem('PHARMA_PEDIDOS_CAB', JSON.stringify(pedidosCabecera));
-  }, [pedidosCabecera]);
-
-  useEffect(() => {
-    localStorage.setItem('PHARMA_PEDIDOS_DET', JSON.stringify(pedidosDetalle));
-  }, [pedidosDetalle]);
-
-  useEffect(() => {
-    if (usuarioActual) {
-      localStorage.setItem('PHARMA_AUTH_USER', JSON.stringify(usuarioActual));
-    } else {
-      localStorage.removeItem('PHARMA_AUTH_USER');
-    }
-  }, [usuarioActual]);
 
   const handleCrearUsuario = (nuevo: Omit<Usuario, 'id' | 'created_at'> & { password?: string }) => {
     const userCreado: Usuario = {
@@ -272,13 +146,6 @@ function AppContent() {
       created_at: new Date().toISOString(),
     };
     setUsuarios((prev) => [userCreado, ...prev]);
-  };
-
-  const handleActualizarUsuario = (usuarioId: string, cambios: Partial<Usuario>) => {
-    setUsuarios((prev) => prev.map((u) => (u.id === usuarioId ? { ...u, ...cambios } : u)));
-    if (usuarioActual?.id === usuarioId) {
-      setUsuarioActual((prev) => (prev ? { ...prev, ...cambios } : null));
-    }
   };
 
   const handleImportarClientes = (nuevos: Cliente[]) => {
@@ -314,19 +181,11 @@ function AppContent() {
 
   const handleUsuarioAutenticado = (usuario: Usuario) => {
     setUsuarioActual(usuario);
-
-    if (usuario.rol === 'vendedor') {
-      setTabActiva('dashboard');
-    } else if (usuario.rol === 'teletransferencista') {
-      setTabActiva('teletransferencia');
-    } else {
-      setTabActiva('dashboard');
-    }
+    irATab(TAB_INICIAL[usuario.rol]);
   };
 
   const handleCerrarSesion = () => {
     setUsuarioActual(null);
-    localStorage.removeItem('PHARMA_AUTH_USER');
   };
 
   const handleActualizarStock = (productoId: string, nuevoStock: number) => {
@@ -336,19 +195,16 @@ function AppContent() {
   };
 
   const handleCrearProducto = (nuevoProd: Omit<Producto, 'id' | 'created_at'>) => {
-    const id = `prod-custom-${Date.now()}`;
     const nuevo: Producto = {
       ...nuevoProd,
-      id,
+      id: `prod-custom-${Date.now()}`,
       created_at: new Date().toISOString(),
     };
     setProductos((prev) => [nuevo, ...prev]);
   };
 
   const handleEditarProducto = (productoActualizado: Producto) => {
-    setProductos((prev) =>
-      prev.map((p) => (p.id === productoActualizado.id ? productoActualizado : p))
-    );
+    setProductos((prev) => prev.map((p) => (p.id === productoActualizado.id ? productoActualizado : p)));
   };
 
   const handleEliminarProducto = (productoId: string) => {
@@ -363,9 +219,7 @@ function AppContent() {
   };
 
   const handleEditarDrogueria = (drogueriaActualizada: Drogueria) => {
-    setDroguerias((prev) =>
-      prev.map((d) => (d.id === drogueriaActualizada.id ? drogueriaActualizada : d))
-    );
+    setDroguerias((prev) => prev.map((d) => (d.id === drogueriaActualizada.id ? drogueriaActualizada : d)));
   };
 
   const handleEliminarDrogueria = (drogueriaId: string) => {
@@ -379,17 +233,13 @@ function AppContent() {
   const handleEditarCliente = (clienteActualizado: Cliente) => {
     setClientes((prev) =>
       prev.map((c) =>
-        c.ident01 === clienteActualizado.ident01 || c.id === clienteActualizado.id
-          ? clienteActualizado
-          : c
+        c.ident01 === clienteActualizado.ident01 || c.id === clienteActualizado.id ? clienteActualizado : c
       )
     );
   };
 
   const handleEliminarCliente = (clienteIdent01: string) => {
-    setClientes((prev) =>
-      prev.filter((c) => c.ident01 !== clienteIdent01 && c.id !== clienteIdent01)
-    );
+    setClientes((prev) => prev.filter((c) => c.ident01 !== clienteIdent01 && c.id !== clienteIdent01));
   };
 
   const handleActualizarDetalle = (
@@ -398,137 +248,71 @@ function AppContent() {
     motivoAjuste: MotivoAjuste,
     observaciones?: string
   ) => {
-    setPedidosDetalle((prev) => {
-      const actualizados = prev.map((d) => {
-        if (d.id !== detalleId) return d;
-        const subtotalConf = Number(
-          (cantidadConfirmada * d.precio_unitario * (1 - d.descuento_porcentaje / 100)).toFixed(2)
-        );
-        return {
-          ...d,
-          cantidad_confirmada: cantidadConfirmada,
-          subtotal_confirmado: subtotalConf,
-          motivo_ajuste: motivoAjuste,
-          observaciones_linea: observaciones !== undefined ? observaciones : d.observaciones_linea,
-        };
-      });
+    const original = pedidosDetalle.find((d) => d.id === detalleId);
+    if (!original) return;
 
-      const detalleModificado = actualizados.find((d) => d.id === detalleId);
-      if (detalleModificado) {
-        const lineasPedido = actualizados.filter((d) => d.pedido_id === detalleModificado.pedido_id);
-        let sol = 0;
-        let conf = 0;
-        lineasPedido.forEach((l) => {
-          sol += l.cantidad_solicitada;
-          conf += l.cantidad_confirmada;
-        });
-        const fill = sol > 0 ? Number(((conf / sol) * 100).toFixed(2)) : 100;
+    const actualizado: PedidoDetalle = {
+      ...original,
+      cantidad_confirmada: cantidadConfirmada,
+      subtotal_confirmado: Number(
+        (cantidadConfirmada * original.precio_unitario * (1 - original.descuento_porcentaje / 100)).toFixed(2)
+      ),
+      motivo_ajuste: motivoAjuste,
+      observaciones_linea: observaciones !== undefined ? observaciones : original.observaciones_linea,
+    };
 
-        setPedidosCabecera((prevCab) =>
-          prevCab.map((cab) =>
-            cab.id === detalleModificado.pedido_id
-              ? {
-                  ...cab,
-                  total_confirmado: conf,
-                  fill_rate: fill,
-                  updated_at: new Date().toISOString(),
-                }
-              : cab
-          )
-        );
-      }
-
-      return actualizados;
+    let solicitado = 0;
+    let confirmado = 0;
+    pedidosDetalle.forEach((d) => {
+      if (d.pedido_id !== original.pedido_id) return;
+      const linea = d.id === detalleId ? actualizado : d;
+      solicitado += linea.cantidad_solicitada;
+      confirmado += linea.cantidad_confirmada;
     });
+    const fillRate = solicitado > 0 ? Number(((confirmado / solicitado) * 100).toFixed(2)) : 100;
+
+    setPedidosDetalle((prev) => prev.map((d) => (d.id === detalleId ? actualizado : d)));
+    setPedidosCabecera((prev) =>
+      prev.map((cab) =>
+        cab.id === original.pedido_id
+          ? { ...cab, total_confirmado: confirmado, fill_rate: fillRate, updated_at: new Date().toISOString() }
+          : cab
+      )
+    );
   };
 
-  const handleCambiarEstadoPedido = (pedidoId: string, nuevoEstado: EstadoPedido) => {
+  const handleCambiarEstadoPedido = (pedidoId: string, nuevoEstado: EstadoPedido, numeroFactura?: string) => {
+    const ahora = new Date().toISOString();
     setPedidosCabecera((prev) =>
       prev.map((p) =>
         p.id === pedidoId
           ? {
               ...p,
               estado: nuevoEstado,
-              fecha_procesamiento: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
+              numero_factura: numeroFactura ?? p.numero_factura,
+              transferencista_id: usuarioActual?.rol === 'teletransferencista' ? usuarioActual.id : p.transferencista_id,
+              fecha_procesamiento: ahora,
+              updated_at: ahora,
             }
           : p
       )
     );
   };
 
-  const handleGenerarPedidoDesdeSugerido = (
-    clienteId: string,
-    itemsSeleccionados: { producto: Producto; cantidad: number; descuento: number }[]
-  ) => {
-    const nuevoPedidoId = `ped-cab-${Date.now()}`;
-    const fechaActual = new Date().toISOString();
-    const numeroPedido = `PED-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(
-      100 + Math.random() * 900
-    )}`;
-
-    let totalSol = 0;
-    const nuevosDetalles: PedidoDetalle[] = itemsSeleccionados.map((it, idx) => {
-      const subtotal = Number((it.cantidad * it.producto.precio_lista * (1 - it.descuento / 100)).toFixed(2));
-      totalSol += subtotal;
-
-      return {
-        id: `det-${nuevoPedidoId}-${idx + 1}`,
-        pedido_id: nuevoPedidoId,
-        producto_id: it.producto.id,
-        cantidad_solicitada: it.cantidad,
-        cantidad_confirmada: it.cantidad,
-        precio_unitario: it.producto.precio_lista,
-        descuento_porcentaje: it.descuento,
-        subtotal_solicitado: subtotal,
-        subtotal_confirmado: subtotal,
-        motivo_ajuste: 'sin_quiebre',
-        created_at: fechaActual,
-      };
-    });
-
-    const nuevaCabecera: PedidoCabecera = {
-      id: nuevoPedidoId,
-      numero_pedido: numeroPedido,
-      cliente_id: clienteId,
-      vendedor_id: usuarioActual?.id || MOCK_USUARIOS[0].id,
-      drogueria_id: droguerias[0].id,
-      fecha_pedido: fechaActual,
-      equipo_origen: equipoActual === 'AMBOS' ? 'A' : equipoActual,
-      estado: 'enviado_teletransferencia',
-      observaciones: 'Generado desde el Motor de Pedido Sugerido.',
-      total_solicitado: totalSol,
-      total_confirmado: totalSol,
-      fill_rate: 100.0,
-      created_at: fechaActual,
-      updated_at: fechaActual,
-    };
-
-    setPedidosCabecera((prev) => [nuevaCabecera, ...prev]);
-    setPedidosDetalle((prev) => [...nuevosDetalles, ...prev]);
-    setTabActiva(rolActual === 'vendedor' ? 'dashboard' : 'teletransferencia');
-  };
-
-  const handleTransmitirPedido = (
-    clienteId: string,
-    drogueriaId: string,
-    items: { producto: Producto; cantidad: number; descuento: number }[],
-    observaciones: string
-  ) => {
-    const nuevoPedidoId = `ped-cab-${Date.now()}`;
-    const fechaActual = new Date().toISOString();
-    const numeroPedido = `PED-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(
-      100 + Math.random() * 900
-    )}`;
+  /** Crea cabecera + detalle de un pedido nuevo (toma en campo o sugerido) y lo envía a teletransferencia. */
+  const crearPedido = (clienteId: string, drogueriaId: string, items: ItemPedido[], observaciones: string) => {
+    const ahora = new Date();
+    const fechaActual = ahora.toISOString();
+    const pedidoId = `ped-cab-${ahora.getTime()}`;
+    const numeroPedido = `PED-${fechaActual.slice(0, 10).replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`;
 
     let totalSol = 0;
     const nuevosDetalles: PedidoDetalle[] = items.map((it, idx) => {
       const subtotal = Number((it.cantidad * it.producto.precio_lista * (1 - it.descuento / 100)).toFixed(2));
       totalSol += subtotal;
-
       return {
-        id: `det-${nuevoPedidoId}-${idx + 1}`,
-        pedido_id: nuevoPedidoId,
+        id: `det-${pedidoId}-${idx + 1}`,
+        pedido_id: pedidoId,
         producto_id: it.producto.id,
         cantidad_solicitada: it.cantidad,
         cantidad_confirmada: it.cantidad,
@@ -542,7 +326,7 @@ function AppContent() {
     });
 
     const nuevaCabecera: PedidoCabecera = {
-      id: nuevoPedidoId,
+      id: pedidoId,
       numero_pedido: numeroPedido,
       cliente_id: clienteId,
       vendedor_id: usuarioActual?.id || MOCK_USUARIOS[0].id,
@@ -550,7 +334,7 @@ function AppContent() {
       fecha_pedido: fechaActual,
       equipo_origen: equipoActual === 'AMBOS' ? 'A' : equipoActual,
       estado: 'enviado_teletransferencia',
-      observaciones: observaciones || 'Pedido tomado en campo.',
+      observaciones,
       total_solicitado: totalSol,
       total_confirmado: totalSol,
       fill_rate: 100.0,
@@ -560,25 +344,26 @@ function AppContent() {
 
     setPedidosCabecera((prev) => [nuevaCabecera, ...prev]);
     setPedidosDetalle((prev) => [...nuevosDetalles, ...prev]);
-    setTabActiva(rolActual === 'vendedor' ? 'dashboard' : 'teletransferencia');
+    irATab(rolActual === 'vendedor' ? 'dashboard' : 'teletransferencia');
   };
 
+  const handleGenerarPedidoDesdeSugerido = (clienteId: string, items: ItemPedido[]) =>
+    crearPedido(clienteId, droguerias[0]?.id ?? '', items, 'Generado desde el Motor de Pedido Sugerido.');
+
+  const handleTransmitirPedido = (clienteId: string, drogueriaId: string, items: ItemPedido[], observaciones: string) =>
+    crearPedido(clienteId, drogueriaId, items, observaciones || 'Pedido tomado en campo.');
+
   const handleActualizarInventarioDrogueria = (
-    drogueriaId: string,
+    _drogueriaId: string,
     registros: { sku: string; stock: number; precioDrogueria?: number; codigoArticuloDrogueria?: string }[]
   ) => {
+    const porSku = new Map(registros.map((r) => [(r.sku || '').toLowerCase(), r]));
     setProductos((prev) =>
       prev.map((prod) => {
-        const prodSku = (prod.sku || prod.codigo || '').toLowerCase();
-        const reg = registros.find((r) => (r.sku || '').toLowerCase() === prodSku);
-        if (reg) {
-          return {
-            ...prod,
-            stock_disponible: reg.stock,
-            precio_lista: reg.precioDrogueria ?? prod.precio_lista,
-          };
-        }
-        return prod;
+        const reg = porSku.get((prod.sku || prod.codigo || '').toLowerCase());
+        return reg
+          ? { ...prod, stock_disponible: reg.stock, precio_lista: reg.precioDrogueria ?? prod.precio_lista }
+          : prod;
       })
     );
   };
@@ -587,238 +372,235 @@ function AppContent() {
     setItemsExternosAñadidos((prev) => [...prev, { producto, cantidad, descuento }]);
   };
 
-  const handleItemsDictados = (items: { producto: Producto; cantidad: number; descuento: number }[]) => {
+  const handleItemsDictados = (items: ItemPedido[]) => {
     setItemsExternosAñadidos((prev) => [...prev, ...items]);
   };
 
+  const actualizarEstadoSupabase = () => setIsSupabaseConectado(getStoredSupabaseConfig().isConnected);
+
   return (
-    <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${
-      esClaro ? 'bg-slate-50 text-slate-800' : 'bg-slate-950 text-slate-100'
-    }`}>
-      
-      {/* Header con Nova Branding, Sesión Autenticada y Navegación Segregada */}
+    <div className="min-h-dvh flex flex-col font-sans text-slate-800 dark:text-slate-100">
       <Header
         rolActual={rolActual}
         equipoActual={equipoActual}
         isSupabaseConectado={isSupabaseConectado}
         onAbrirConfigSupabase={() => setModalSupabaseAbierto(true)}
-        tabActiva={tabActiva}
-        onCambiarTab={setTabActiva}
         usuarioActual={usuarioActual}
         onAbrirAuthModal={() => setModalAuthAbierto(true)}
         onAbrirCreditos={() => setModalCreditosAbierto(true)}
         onCerrarSesion={handleCerrarSesion}
       />
 
-      {/* Contenido Principal según Pestaña Activa y Rol - Espacio inferior amplio en móvil (pb-28) para no solaparse con el Bottom Nav */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3.5 sm:px-6 lg:px-8 py-4 sm:py-6 pb-28 lg:pb-8">
-        
-        {/* Pestaña: Dashboard de Control del Vendedor (Requerimiento #5) */}
-        {tabActiva === 'dashboard' && (
-          <RepDashboardTab
-            pedidos={pedidosCabecera}
-            detalles={pedidosDetalle}
-            clientes={clientes}
-            droguerias={droguerias}
-            productos={productos}
-            vendedorId={rolActual === 'vendedor' ? usuarioActual?.id : undefined}
-          />
-        )}
+      <div className="flex flex-1 min-w-0">
+        <SideNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} />
 
-        {/* Pestaña: Toma de Pedido en Movilidad */}
-        {tabActiva === 'nuevo_pedido' && (
-          <OrderTakingTab
-            clientes={clientes}
-            droguerias={droguerias}
-            productos={productos}
-            rolActual={rolActual}
-            equipoActual={equipoActual}
-            onAbrirEscaner={() => setModalEscanerAbierto(true)}
-            onAbrirDictadoVoz={() => setModalDictadoAbierto(true)}
-            onTransmitirPedido={handleTransmitirPedido}
-            onIrASugeridos={() => setTabActiva('sugerido')}
-            itemsExternos={itemsExternosAñadidos}
-            onConsumirItemsExternos={() => setItemsExternosAñadidos([])}
-          />
-        )}
-
-        {/* Pestaña: Motor de Sugerido Global */}
-        {tabActiva === 'sugerido' && (
-          <SuggestedOrderTab
-            clientes={clientes}
-            productos={productos}
-            historicoPrevio={historicoPrevio}
-            pedidosCabecera={pedidosCabecera}
-            pedidosDetalle={pedidosDetalle}
-            onGenerarPedidoDesdeSugerido={handleGenerarPedidoDesdeSugerido}
-          />
-        )}
-
-        {/* Pestaña: Mis Pedidos en Campo */}
-        {tabActiva === 'mis_pedidos' && (
-          <MyOrdersTab
-            pedidos={pedidosCabecera}
-            detalles={pedidosDetalle}
-            clientes={clientes}
-            droguerias={droguerias}
-            productos={productos}
-          />
-        )}
-
-        {/* Pestaña: Cola de Teletransferencia & Fill-Rate */}
-        {tabActiva === 'teletransferencia' && (
-          <TeletransferQueueTab
-            pedidosCabecera={pedidosCabecera}
-            pedidosDetalle={pedidosDetalle}
-            clientes={clientes}
-            droguerias={droguerias}
-            productos={productos}
-            onActualizarDetalle={handleActualizarDetalle}
-            onCambiarEstadoPedido={handleCambiarEstadoPedido}
-          />
-        )}
-
-        {/* Pestaña: Droguerías & Layouts CSV Dinámicos */}
-        {tabActiva === 'droguerias_csv' && (
-          <DrugstoreCsvTab
-            droguerias={droguerias}
-            pedidosCabecera={pedidosCabecera}
-            pedidosDetalle={pedidosDetalle}
-            clientes={clientes}
-            productos={productos}
-          />
-        )}
-
-        {/* Pestaña: Carga Masiva de Inventario & Precios por Droguería */}
-        {tabActiva === 'carga_inventario' && (
-          <DrugstoreInventoryUploadTab
-            droguerias={droguerias}
-            productos={productos}
-            onActualizarInventarioDrogueria={handleActualizarInventarioDrogueria}
-          />
-        )}
-
-        {/* Pestaña: Vademécum & Medicamentos */}
-        {tabActiva === 'vademecum' && (
-          <InventoryCatalogTab
-            productos={productos}
-            onActualizarStock={handleActualizarStock}
-            onCrearProducto={handleCrearProducto}
-            onEditarProducto={handleEditarProducto}
-            onEliminarProducto={handleEliminarProducto}
-          />
-        )}
-
-        {/* Pestaña: Gestión de Usuarios y Accesos (Solo Admin) */}
-        {tabActiva === 'usuarios' && (
-          <AdminUsersTab
-            usuarios={usuarios}
-            onCrearUsuario={handleCrearUsuario}
-            onActualizarUsuario={handleActualizarUsuario}
-            onSimularUsuario={handleUsuarioAutenticado}
-            usuarioActual={usuarioActual}
-          />
-        )}
-
-        {/* Pestaña: Carga Masiva de Dimensiones e Histórico */}
-        {tabActiva === 'carga_datos' && (
-          <DataImportStudioTab
-            clientes={clientes}
-            productos={productos}
-            droguerias={droguerias}
-            historicoPrevio={historicoPrevio}
-            onImportarClientes={handleImportarClientes}
-            onEditarCliente={handleEditarCliente}
-            onEliminarCliente={handleEliminarCliente}
-            onCrearCliente={handleCrearCliente}
-            onImportarProductos={handleImportarProductos}
-            onImportarDroguerias={handleImportarDroguerias}
-            onEditarDrogueria={handleEditarDrogueria}
-            onEliminarDrogueria={handleEliminarDrogueria}
-            onCrearDrogueria={handleCrearDrogueria}
-            onEditarProducto={handleEditarProducto}
-            onEliminarProducto={handleEliminarProducto}
-            onCrearProducto={handleCrearProducto}
-            onImportarHistorico={handleImportarHistorico}
-          />
-        )}
-
-        {/* Pestaña: Script SQL Supabase */}
-        {tabActiva === 'sql_script' && (
-          <SqlStudioTab sqlContent={sqlSchemaRaw} />
-        )}
-
-        {/* Pestaña: Guía de Uso & Manual Operativo (Requerimiento #4) */}
-        {tabActiva === 'guia_uso' && (
-          <UserGuideTab />
-        )}
-
-      </main>
-
-      {/* Footer discreto con créditos públicos */}
-      <footer className={`border-t py-4 text-xs transition-colors ${
-        esClaro ? 'bg-white border-slate-200 text-slate-500' : 'bg-slate-950 border-slate-850 text-slate-400'
-      }`}>
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2.5">
-          <div className="flex items-center gap-2">
-            <span className="font-extrabold tracking-tight text-slate-800 dark:text-slate-100">NOVA</span>
-            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 font-bold border border-teal-500/20">
-              v2.0.0
-            </span>
-            <span className="text-slate-300 dark:text-slate-700">·</span>
-            <span>Sistema Comercial & Teletransferencias Farmacéuticas</span>
-          </div>
-
-          <div className="flex items-center gap-3 text-[11px]">
-            <span>Desarrollo & Admin: <strong className="text-slate-700 dark:text-slate-200 font-semibold">Hernando Sanoja</strong></span>
-            <span className="text-slate-300 dark:text-slate-700">·</span>
-            <span>Product Owner: <strong className="text-slate-700 dark:text-slate-200 font-semibold">Dubrasli Fajardo</strong></span>
-            <button
-              onClick={() => setModalCreditosAbierto(true)}
-              className="text-teal-600 dark:text-teal-400 hover:underline font-bold ml-1"
+        <div className="flex-1 min-w-0 flex flex-col">
+          {almacenamientoLleno && (
+            <div
+              role="alert"
+              className="mx-3.5 sm:mx-6 lg:mx-8 mt-3 p-3 rounded-xl border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200 text-xs flex items-start gap-2.5"
             >
-              Créditos
-            </button>
-          </div>
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <p className="flex-1">
+                El almacenamiento local del navegador está lleno: los últimos cambios siguen en memoria pero no se
+                guardarán al cerrar. Conecta Supabase para conservar el histórico de ventas.
+              </p>
+              <button
+                type="button"
+                onClick={() => setAlmacenamientoLleno(false)}
+                aria-label="Cerrar aviso"
+                className="p-1 -m-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          <main className="flex-1 w-full max-w-[1680px] mx-auto px-3.5 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24 md:pb-8">
+            <ErrorBoundary compacto resetKey={tabActiva}>
+              <Suspense fallback={<PestanaCargando />}>
+                {tabActiva === 'dashboard' && (
+                  <RepDashboardTab
+                    pedidos={pedidosCabecera}
+                    detalles={pedidosDetalle}
+                    vendedorId={rolActual === 'vendedor' ? usuarioActual?.id : undefined}
+                  />
+                )}
+
+                {tabActiva === 'nuevo_pedido' && (
+                  <OrderTakingTab
+                    clientes={clientes}
+                    droguerias={droguerias}
+                    productos={productos}
+                    rolActual={rolActual}
+                    equipoActual={equipoActual}
+                    onAbrirEscaner={() => setModalEscanerAbierto(true)}
+                    onAbrirDictadoVoz={() => setModalDictadoAbierto(true)}
+                    onTransmitirPedido={handleTransmitirPedido}
+                    onIrASugeridos={() => irATab('sugerido')}
+                    itemsExternos={itemsExternosAñadidos}
+                    onConsumirItemsExternos={() => setItemsExternosAñadidos([])}
+                  />
+                )}
+
+                {tabActiva === 'sugerido' && (
+                  <SuggestedOrderTab
+                    clientes={clientes}
+                    productos={productos}
+                    historicoPrevio={historicoPrevio}
+                    pedidosCabecera={pedidosCabecera}
+                    pedidosDetalle={pedidosDetalle}
+                    onGenerarPedidoDesdeSugerido={handleGenerarPedidoDesdeSugerido}
+                  />
+                )}
+
+                {tabActiva === 'mis_pedidos' && (
+                  <MyOrdersTab
+                    pedidos={pedidosCabecera}
+                    detalles={pedidosDetalle}
+                    clientes={clientes}
+                    droguerias={droguerias}
+                    productos={productos}
+                  />
+                )}
+
+                {tabActiva === 'teletransferencia' && (
+                  <TeletransferQueueTab
+                    pedidosCabecera={pedidosCabecera}
+                    pedidosDetalle={pedidosDetalle}
+                    clientes={clientes}
+                    droguerias={droguerias}
+                    productos={productos}
+                    onActualizarDetalle={handleActualizarDetalle}
+                    onCambiarEstadoPedido={handleCambiarEstadoPedido}
+                  />
+                )}
+
+                {tabActiva === 'droguerias_csv' && (
+                  <DrugstoreCsvTab
+                    droguerias={droguerias}
+                    pedidosCabecera={pedidosCabecera}
+                    pedidosDetalle={pedidosDetalle}
+                    clientes={clientes}
+                    productos={productos}
+                  />
+                )}
+
+                {tabActiva === 'carga_inventario' && (
+                  <DrugstoreInventoryUploadTab
+                    droguerias={droguerias}
+                    productos={productos}
+                    onActualizarInventarioDrogueria={handleActualizarInventarioDrogueria}
+                  />
+                )}
+
+                {tabActiva === 'vademecum' && (
+                  <InventoryCatalogTab
+                    productos={productos}
+                    onActualizarStock={handleActualizarStock}
+                    onCrearProducto={handleCrearProducto}
+                    onEditarProducto={handleEditarProducto}
+                    onEliminarProducto={handleEliminarProducto}
+                  />
+                )}
+
+                {tabActiva === 'usuarios' && (
+                  <AdminUsersTab
+                    usuarios={usuarios}
+                    onCrearUsuario={handleCrearUsuario}
+                    onSimularUsuario={handleUsuarioAutenticado}
+                    usuarioActual={usuarioActual}
+                  />
+                )}
+
+                {tabActiva === 'carga_datos' && (
+                  <DataImportStudioTab
+                    clientes={clientes}
+                    productos={productos}
+                    droguerias={droguerias}
+                    historicoPrevio={historicoPrevio}
+                    onImportarClientes={handleImportarClientes}
+                    onEditarCliente={handleEditarCliente}
+                    onEliminarCliente={handleEliminarCliente}
+                    onCrearCliente={handleCrearCliente}
+                    onImportarProductos={handleImportarProductos}
+                    onImportarDroguerias={handleImportarDroguerias}
+                    onEditarDrogueria={handleEditarDrogueria}
+                    onEliminarDrogueria={handleEliminarDrogueria}
+                    onCrearDrogueria={handleCrearDrogueria}
+                    onEditarProducto={handleEditarProducto}
+                    onEliminarProducto={handleEliminarProducto}
+                    onCrearProducto={handleCrearProducto}
+                    onImportarHistorico={handleImportarHistorico}
+                  />
+                )}
+
+                {tabActiva === 'sql_script' && <SqlStudioTab />}
+
+                {tabActiva === 'guia_uso' && <UserGuideTab />}
+              </Suspense>
+            </ErrorBoundary>
+          </main>
+
+          <footer className="hidden md:block border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 py-3 text-xs text-slate-500 dark:text-slate-400">
+            <div className="max-w-[1680px] mx-auto px-6 lg:px-8 flex items-center justify-between gap-3">
+              <span>
+                <strong className="font-extrabold text-slate-800 dark:text-slate-100">NOVA</strong> v2.1 · Sistema
+                Comercial &amp; Teletransferencias Farmacéuticas
+              </span>
+              <button
+                type="button"
+                onClick={() => setModalCreditosAbierto(true)}
+                className="text-teal-600 dark:text-teal-400 hover:underline font-bold"
+              >
+                Créditos
+              </button>
+            </div>
+          </footer>
         </div>
-      </footer>
+      </div>
 
-      {/* Modales de Movilidad, Configuración & Créditos */}
-      <AboutModal
-        abierto={modalCreditosAbierto}
-        onCerrar={() => setModalCreditosAbierto(false)}
-      />
-      <BarcodeScannerModal
-        abierto={modalEscanerAbierto}
-        onCerrar={() => setModalEscanerAbierto(false)}
-        productos={productos}
-        onProductoEscaneado={handleProductoEscaneado}
-      />
+      <BottomNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} />
 
-      <VoiceDictationModal
-        abierto={modalDictadoAbierto}
-        onCerrar={() => setModalDictadoAbierto(false)}
-        productos={productos}
-        onAgregarItemsAlPedido={handleItemsDictados}
-      />
+      <Suspense fallback={null}>
+        {modalCreditosAbierto && <AboutModal abierto onCerrar={() => setModalCreditosAbierto(false)} />}
 
-      <AuthModal
-        abierto={modalAuthAbierto}
-        onCerrar={() => setModalAuthAbierto(false)}
-        usuarioActual={usuarioActual}
-        onUsuarioAutenticado={handleUsuarioAutenticado}
-        onCerrarSesion={handleCerrarSesion}
-      />
+        {modalEscanerAbierto && (
+          <BarcodeScannerModal
+            abierto
+            onCerrar={() => setModalEscanerAbierto(false)}
+            productos={productos}
+            onProductoEscaneado={handleProductoEscaneado}
+          />
+        )}
 
-      <SupabaseConfigModal
-        abierto={modalSupabaseAbierto}
-        onCerrar={() => setModalSupabaseAbierto(false)}
-        onConexionActualizada={() => {
-          const config = getStoredSupabaseConfig();
-          setIsSupabaseConectado(config.isConnected);
-        }}
-      />
+        {modalDictadoAbierto && (
+          <VoiceDictationModal
+            abierto
+            onCerrar={() => setModalDictadoAbierto(false)}
+            productos={productos}
+            onAgregarItemsAlPedido={handleItemsDictados}
+          />
+        )}
 
+        {modalAuthAbierto && (
+          <AuthModal
+            abierto
+            onCerrar={() => setModalAuthAbierto(false)}
+            usuarioActual={usuarioActual}
+            onUsuarioAutenticado={handleUsuarioAutenticado}
+            onCerrarSesion={handleCerrarSesion}
+          />
+        )}
+
+        {modalSupabaseAbierto && (
+          <SupabaseConfigModal
+            abierto
+            onCerrar={() => setModalSupabaseAbierto(false)}
+            onConexionActualizada={actualizarEstadoSupabase}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

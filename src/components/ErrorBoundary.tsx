@@ -1,8 +1,12 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertCircle, RotateCcw, Trash2 } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
+  /** Al cambiar (p. ej. de pestaña) el error se descarta y se reintenta el render. */
+  resetKey?: string;
+  /** Muestra el error dentro del contenido (sin ocupar toda la pantalla). */
+  compacto?: boolean;
 }
 
 interface State {
@@ -18,6 +22,12 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  public componentDidUpdate(prev: Props) {
+    if (this.state.hasError && prev.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, error: null });
+    }
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
@@ -43,9 +53,31 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   public render() {
+    if (this.state.hasError && this.props.compacto) {
+      return (
+        <div role="alert" className="p-6 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200 space-y-3">
+          <div className="flex items-center gap-2 font-bold text-sm">
+            <AlertCircle className="w-4 h-4" />
+            No se pudo cargar esta sección
+          </div>
+          <p className="text-xs">
+            {this.state.error?.message || 'Error inesperado.'} Si estás sin conexión, vuelve a intentarlo al recuperar señal.
+          </p>
+          <button
+            type="button"
+            onClick={this.handleReload}
+            className="min-h-11 inline-flex items-center gap-2 px-4 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white"
+          >
+            <RotateCcw className="w-4 h-4" />
+            Reintentar
+          </button>
+        </div>
+      );
+    }
+
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4">
+        <div className="min-h-dvh bg-slate-950 text-white flex items-center justify-center p-4">
           <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-center space-y-4">
             <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center mx-auto">
               <AlertCircle className="w-6 h-6" />

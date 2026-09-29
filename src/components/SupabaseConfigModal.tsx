@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Database, Key, Check, AlertCircle, RefreshCw, X, ExternalLink, ShieldCheck } from 'lucide-react';
+import { Database, Check, AlertCircle, RefreshCw, X, ExternalLink, ShieldCheck } from 'lucide-react';
 import { 
   getStoredSupabaseConfig, 
   saveSupabaseConfig, 

@@ -20,8 +20,10 @@
 
 ## 2. Arquitectura Tecnológica y Alojamiento
 
-* **Frontend:** React 18+ estructurado con Vite y TypeScript estricto.
-* **Estilos:** Tailwind CSS con soporte de modo Claro y Oscuro nativo (`ThemeContext`).
+* **Frontend:** React 19 con Vite 8 y TypeScript estricto (`strict`, `noUnusedLocals`, `noUnusedParameters`; `npm run lint` = `tsc --noEmit`).
+* **Estilos:** Tailwind CSS v4 con modo Claro y Oscuro (`ThemeContext` alterna la clase `dark` en `<html>`; el variante `dark:` de Tailwind está enlazado a esa clase en `src/index.css`). Los tokens de diseño (fuentes, paleta Stitch, animación) viven en el bloque `@theme` de `src/index.css`.
+* **Rendimiento:** cada pestaña y cada modal se cargan con `React.lazy` (bundle inicial ≈ 105 kB gzip); `@supabase/supabase-js` y `html5-qrcode` solo se descargan cuando se usan; el estado persistido en `localStorage` se escribe con debounce y tolera cuota llena (`src/hooks/usePersistentState.ts`).
+* **Navegación responsiva:** móvil (<768 px) barra inferior + hoja "Más"; tablet y laptop pequeña (768–1279 px) riel lateral compacto; PC (≥1280 px) barra lateral agrupada. La pestaña activa se sincroniza con el hash (`#/teletransferencia`) para que el botón "atrás" funcione.
 * **Diseño para Alojamiento:** **100% Estático y Gratuito**. Puede desplegarse en **GitHub Pages** (con soporte de SPA mediante script de redirección 404 o hash routing) y en contenedores **Google Cloud Run / AI Studio**.
 * **Backend & Base de Datos:** **Supabase (PostgreSQL 15+)**:
   * Autenticación con Supabase Auth (correo/contraseña, recuperación nativa).
@@ -118,30 +120,44 @@ El script SQL maestro se encuentra en: `/src/sql/supabase_schema_fase1.sql`.
 ├── .env.example                       # Variables de entorno Supabase (URL y Anon Key)
 ├── index.html                         # Punto de entrada HTML con meta tags
 ├── metadata.json                      # Metadatos del applet en AI Studio
-├── package.json                       # Dependencias: React, Lucide, @zxing/library
+├── package.json                       # Dependencias: React, Lucide, Supabase, html5-qrcode
 ├── tsconfig.json                      # Configuración TypeScript estricta
 ├── vite.config.ts                     # Configuración de Vite
 ├── SYSTEM_CONTEXT.md                  # Este documento de contexto para IA
 └── src/
-    ├── App.tsx                        # Componente raíz, orquestación de tabs y sincronización
+    ├── App.tsx                        # Raíz: estado global, handlers, pestañas/modales perezosos, hash-routing
     ├── main.tsx                       # Montaje React DOM
+    ├── index.css                      # Tailwind v4, tokens @theme, utilidades (safe-area, cv-auto, scrollbar-none)
     ├── context/
-    │   └── ThemeContext.tsx           # Contexto de Modo Claro / Oscuro con persistencia
+    │   └── ThemeContext.tsx           # Modo Claro / Oscuro con persistencia
+    ├── hooks/
+    │   └── usePersistentState.ts      # useState persistido: debounce, flush al cerrar, aviso si localStorage se llena
     ├── data/
     │   └── mockData.ts                # Datos semilla de 17 droguerías, productos, farmacias e histórico
     ├── services/
-    │   └── supabaseClient.ts          # Inicializador dinámico de cliente Supabase
+    │   ├── supabaseConfig.ts          # URL/Anon Key (sin cargar el SDK de Supabase)
+    │   ├── supabaseClient.ts          # Cliente Supabase, inserción por lotes y prueba de conexión
+    │   ├── storageMigrations.ts       # Saneado de datos guardados (productos, clientes, droguerías) y CSV por defecto
+    │   ├── importUtils.ts             # Similitud de nombres, detección de mes, lector de columnas indexado
+    │   ├── suggestedOrderEngine.ts    # Motor de pedido sugerido 30/60/90
+    │   ├── csvExportEngine.ts         # Exportación CSV dinámica por droguería
+    │   └── voiceParserEngine.ts       # Parser semántico del dictado por voz
     ├── sql/
     │   └── supabase_schema_fase1.sql  # Script DDL completo, RLS, triggers y funciones
     ├── types/
     │   └── pharmacy.ts                # Interfaces TypeScript de todo el dominio farmacéutico
     └── components/
-        ├── Header.tsx                 # Barra superior con selector de rol, equipo comercial y Supabase
+        ├── Header.tsx                 # Barra superior compacta: estado Supabase, tema y menú de perfil
+        ├── shell/
+        │   ├── navConfig.ts           # Pestañas por rol (vendedor, teletransferencista, gerente, admin)
+        │   └── Navigation.tsx         # SideNav (riel/barra lateral) y BottomNav (móvil)
+        ├── import/
+        │   └── HomologationPanels.tsx # Paneles "Homologar Farmacias" y "Diccionario Cod SAP"
         ├── RepDashboardTab.tsx        # Dashboard del representante (KPIs, pedidos del día, visitas)
         ├── SuggestedOrderTab.tsx      # Motor analítico de pedido sugerido 30/60/90 días
         ├── OrderTakingTab.tsx         # Toma de pedidos en mostrador (catálogo, carrito, voz, escáner)
         ├── MyOrdersTab.tsx            # Historial de pedidos tomados por el vendedor
-        ├── TeletransferQueueTab.tsx   # Cola de teletransferencias y gestión de fill-rate
+        ├── TeletransferQueueTab.tsx   # Cola del transferencista: lista + conciliación de unidades facturadas
         ├── DrugstoreCsvTab.tsx        # Generador dinámico de CSV según layout de cada droguería
         ├── DrugstoreInventoryUploadTab.tsx # Carga de inventario y precios actualizados por droguería
         ├── InventoryCatalogTab.tsx    # Vademécum de productos con empaques y prioridades
@@ -153,7 +169,9 @@ El script SQL maestro se encuentra en: `/src/sql/supabase_schema_fase1.sql`.
         ├── BarcodeScannerModal.tsx    # Escáner de código de barras/QR con cámara trasera
         ├── AuthModal.tsx              # Modal de login/registro de Supabase Auth
         ├── SupabaseConfigModal.tsx    # Modal de conexión directa con URL y Anon Key
-        └── AboutModal.tsx             # Modal informativo de créditos y versión
+        ├── AboutModal.tsx             # Modal informativo de créditos y versión
+        ├── ErrorBoundary.tsx          # Captura errores (global y por pestaña, incluye fallo de descarga de chunk)
+        └── NovaLogo.tsx               # Logotipo
 ```
 
 ---
@@ -200,4 +218,6 @@ Cualquier IA o ingeniero que trabaje en fases subsiguientes debe considerar las 
 2. **Respetar Nombres y Schemas:** No alterar las 11 columnas de `dim_clientes` ni las 12 columnas de `dim_productos`. No renombrar `ident01` (clave primaria de farmacias) ni `sku` (clave primaria de productos).
 3. **Sin Coste en Infraestructura:** Mantener la arquitectura compatible con hosting estático gratuito y capa gratuita de Supabase (500 MB DB / RLS).
 4. **TypeScript Estricto:** Evitar el uso indiscriminado de `any`. Utilizar las interfaces definidas en `/src/types/pharmacy.ts`.
-5. **Estilos:** Usar exclusivamente clases de utilidad de Tailwind CSS con soporte para temas claro y oscuro (`esClaro ? '...' : '...'`).
+5. **Estilos:** Usar exclusivamente clases de utilidad de Tailwind CSS con soporte para temas claro y oscuro. Preferir el variante `dark:` (`bg-white dark:bg-slate-900`); `esClaro ? '...' : '...'` sigue siendo válido en componentes existentes.
+6. **Rendimiento:** toda pestaña o modal nuevo debe cargarse con `React.lazy` desde `App.tsx`; el estado que se guarda en `localStorage` usa `usePersistentState` (nunca `localStorage.setItem` dentro de un `useEffect` por cada cambio); en cargas masivas se indexa con `Map`/`Set` o se memoiza por valor distinto, no se llama `.find()` sobre catálogos por cada fila.
+7. **Táctil y responsivo:** objetivos táctiles de al menos 44 px (`min-h-11`), campos de formulario a 16 px en móvil (regla global en `index.css`, evita el zoom de iOS), tablas anchas se convierten en tarjetas bajo `md`.

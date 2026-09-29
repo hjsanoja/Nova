@@ -1,63 +1,59 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { getStoredSupabaseConfig } from './supabaseConfig';
 
-// Claves de almacenamiento local para configuración dinámica en el navegador
-const STORAGE_KEY_URL = 'PHARMA_SUPABASE_URL';
-const STORAGE_KEY_ANON_KEY = 'PHARMA_SUPABASE_ANON_KEY';
-
-export interface SupabaseConfig {
-  url: string;
-  anonKey: string;
-  isConnected: boolean;
-}
-
-export function getStoredSupabaseConfig(): SupabaseConfig {
-  const envUrl = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_SUPABASE_URL || '';
-  const envKey = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_SUPABASE_ANON_KEY || '';
-
-  const localUrl = localStorage.getItem(STORAGE_KEY_URL) || envUrl;
-  const localKey = localStorage.getItem(STORAGE_KEY_ANON_KEY) || envKey;
-
-  return {
-    url: localUrl.trim(),
-    anonKey: localKey.trim(),
-    isConnected: !!(localUrl.trim() && localKey.trim()),
-  };
-}
-
-export function saveSupabaseConfig(url: string, anonKey: string): void {
-  localStorage.setItem(STORAGE_KEY_URL, url.trim());
-  localStorage.setItem(STORAGE_KEY_ANON_KEY, anonKey.trim());
-}
-
-export function clearSupabaseConfig(): void {
-  localStorage.removeItem(STORAGE_KEY_URL);
-  localStorage.removeItem(STORAGE_KEY_ANON_KEY);
-}
+export { getStoredSupabaseConfig, saveSupabaseConfig, clearSupabaseConfig } from './supabaseConfig';
+export type { SupabaseConfig } from './supabaseConfig';
 
 let activeClient: SupabaseClient | null = null;
+let activeClientKey = '';
 
 export function getSupabaseClient(): SupabaseClient | null {
-  const config = getStoredSupabaseConfig();
-  if (!config.url || !config.anonKey) {
+  const { url, anonKey } = getStoredSupabaseConfig();
+  if (!url || !anonKey) {
     activeClient = null;
+    activeClientKey = '';
     return null;
   }
 
-  if (!activeClient) {
+  // Si el usuario cambia URL o clave desde el modal, se recrea el cliente (antes quedaba el anterior).
+  const key = `${url}|${anonKey}`;
+  if (!activeClient || activeClientKey !== key) {
     try {
-      activeClient = createClient(config.url, config.anonKey, {
+      activeClient = createClient(url, anonKey, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,
         },
       });
+      activeClientKey = key;
     } catch (err) {
       console.error('Error al inicializar cliente Supabase:', err);
+      activeClient = null;
       return null;
     }
   }
 
   return activeClient;
+}
+
+/**
+ * Inserta filas por lotes para no superar el límite de tamaño de petición de PostgREST
+ * ni bloquear la pestaña con un único payload de decenas de miles de filas.
+ */
+export async function insertarPorLotes(
+  client: SupabaseClient,
+  tabla: string,
+  filas: Record<string, unknown>[],
+  tamanoLote = 500
+): Promise<{ insertadas: number; error?: string }> {
+  let insertadas = 0;
+  for (let i = 0; i < filas.length; i += tamanoLote) {
+    const lote = filas.slice(i, i + tamanoLote);
+    const { error } = await client.from(tabla).insert(lote);
+    if (error) return { insertadas, error: error.message };
+    insertadas += lote.length;
+  }
+  return { insertadas };
 }
 
 /**

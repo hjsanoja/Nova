@@ -7,7 +7,6 @@ import {
   Check, 
   Copy, 
   Code2, 
-  Building2
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
