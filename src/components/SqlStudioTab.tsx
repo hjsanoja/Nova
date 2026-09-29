@@ -1,12 +1,10 @@
 import React, { useState } from 'react';
-import { Copy, Check, Download, Database, FileCode2, ExternalLink } from 'lucide-react';
+import { Copy, Check, Download, FileCode2, ExternalLink } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+// Se importa aquí (pestaña perezosa) para que el script de ~60 KB no viaje en el bundle inicial.
+import sqlContent from '../sql/supabase_schema_fase1.sql?raw';
 
-interface SqlStudioTabProps {
-  sqlContent: string;
-}
-
-export const SqlStudioTab: React.FC<SqlStudioTabProps> = ({ sqlContent }) => {
+export const SqlStudioTab: React.FC = () => {
   const { esClaro } = useTheme();
   const [copiado, setCopiado] = useState(false);
 

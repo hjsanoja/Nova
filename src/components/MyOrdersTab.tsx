@@ -1,15 +1,7 @@
 import React, { useState } from 'react';
 import { PedidoCabecera, PedidoDetalle, Cliente, Drogueria, Producto } from '../types/pharmacy';
 import { 
-  ShoppingBag, 
-  Calendar, 
-  Building2, 
-  Clock, 
-  CheckCircle2, 
-  AlertCircle, 
   Eye, 
-  Send,
-  Package
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
@@ -28,7 +20,6 @@ export const MyOrdersTab: React.FC<MyOrdersTabProps> = ({
   clientes,
   droguerias,
   productos,
-  onTransmitirBorrador,
 }) => {
   const { esClaro } = useTheme();
   const [pedidoDetalleAbiertoId, setPedidoDetalleAbiertoId] = useState<string | null>(null);

@@ -8,10 +8,6 @@ import {
   Check, 
   X, 
   AlertCircle, 
-  Plus, 
-  Volume2, 
-  Layers,
-  ArrowRight
 } from 'lucide-react';
 
 interface VoiceDictationModalProps {
@@ -35,6 +31,9 @@ export const VoiceDictationModal: React.FC<VoiceDictationModalProps> = ({
 
   // Referencia a la instancia de SpeechRecognition
   const recognitionRef = useRef<any>(null);
+  // El catálogo se lee desde una ref para no recrear (ni dejar abierto) el reconocedor cuando cambia.
+  const productosRef = useRef(productos);
+  productosRef.current = productos;
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -58,7 +57,7 @@ export const VoiceDictationModal: React.FC<VoiceDictationModalProps> = ({
             textoActual += event.results[i][0].transcript + ' ';
           }
           setTranscripcion(textoActual.trim());
-          const parseados = parsearDictadoVoz(textoActual, productos);
+          const parseados = parsearDictadoVoz(textoActual, productosRef.current);
           setItemsReconocidos(parseados);
         };
 
@@ -81,7 +80,16 @@ export const VoiceDictationModal: React.FC<VoiceDictationModalProps> = ({
         setSoportaVoz(false);
       }
     }
-  }, [productos]);
+
+    // Al cerrar el modal se libera el micrófono.
+    return () => {
+      const activo = recognitionRef.current;
+      recognitionRef.current = null;
+      try {
+        activo?.abort();
+      } catch { /* ya detenido */ }
+    };
+  }, []);
 
   useEffect(() => {
     if (!abierto && escuchando) {
@@ -163,7 +171,9 @@ export const VoiceDictationModal: React.FC<VoiceDictationModalProps> = ({
         <div className="flex flex-col items-center justify-center py-4 bg-slate-950/60 rounded-2xl border border-slate-800 relative overflow-hidden">
           <button
             onClick={escuchando ? detenerEscucha : iniciarEscucha}
-            className={`w-20 h-20 rounded-full flex items-center justify-center shadow-2xl transition-all relative z-10 ${
+            disabled={!soportaVoz}
+            aria-label={escuchando ? 'Detener dictado' : 'Iniciar dictado'}
+            className={`disabled:opacity-40 disabled:cursor-not-allowed w-20 h-20 rounded-full flex items-center justify-center shadow-2xl transition-all relative z-10 ${
               escuchando
                 ? 'bg-red-500 text-white animate-pulse ring-8 ring-red-500/20'
                 : 'bg-teal-500 hover:bg-teal-400 text-slate-950 shadow-teal-500/20 hover:scale-105'
@@ -173,7 +183,9 @@ export const VoiceDictationModal: React.FC<VoiceDictationModalProps> = ({
           </button>
 
           <span className="text-xs font-bold text-slate-300 mt-3">
-            {escuchando ? 'Escuchando... habla con naturalidad' : 'Presiona para hablar'}
+            {!soportaVoz
+              ? 'Este navegador no soporta dictado por voz (usa Chrome o Safari). Prueba los comandos de abajo.'
+              : escuchando ? 'Escuchando... habla con naturalidad' : 'Presiona para hablar'}
           </span>
 
           <span className="text-[11px] text-slate-500 mt-0.5">

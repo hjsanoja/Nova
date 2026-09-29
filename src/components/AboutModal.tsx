@@ -5,12 +5,9 @@ import {
   X, 
   Code, 
   Lightbulb, 
-  ShieldCheck, 
   Database, 
   GitBranch, 
   CheckCircle2,
-  Layers,
-  Sparkles
 } from 'lucide-react';
 
 interface AboutModalProps {

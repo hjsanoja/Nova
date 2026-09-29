@@ -8,11 +8,9 @@ import {
   Key, 
   Check, 
   AlertCircle, 
-  UserCheck, 
   RefreshCw, 
   X, 
   ShieldCheck, 
-  HelpCircle 
 } from 'lucide-react';
 
 interface AuthModalProps {

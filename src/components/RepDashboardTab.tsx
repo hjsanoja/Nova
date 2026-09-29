@@ -1,61 +1,34 @@
 import React, { useState, useMemo } from 'react';
-import { 
-  PedidoCabecera, 
-  PedidoDetalle, 
-  Cliente, 
-  Drogueria, 
-  Producto, 
-  RolUsuario 
-} from '../types/pharmacy';
-import { 
-  Search, 
-  TrendingUp, 
-  CheckCircle2, 
-  Timer, 
-  Calendar, 
-  Download, 
-  RefreshCw, 
-  ArrowRight, 
-  ChevronRight, 
-  Sliders, 
-  ShieldCheck, 
-  DollarSign, 
-  FileSpreadsheet, 
-  Copy, 
-  Check, 
-  Eye, 
-  Share2,
-  AlertTriangle,
-  Building2,
-  User,
+import { PedidoCabecera, PedidoDetalle } from '../types/pharmacy';
+import {
+  Search,
+  TrendingUp,
+  CheckCircle2,
+  Timer,
+  Calendar,
+  Download,
+  RefreshCw,
+  ChevronRight,
+  Sliders,
+  ShieldCheck,
+  DollarSign,
+  FileSpreadsheet,
   Compass
 } from 'lucide-react';
-import { useTheme } from '../context/ThemeContext';
 
 interface RepDashboardTabProps {
   pedidos: PedidoCabecera[];
   detalles: PedidoDetalle[];
-  clientes: Cliente[];
-  droguerias: Drogueria[];
-  productos: Producto[];
   vendedorId?: string;
-  rolActual?: RolUsuario;
 }
 
 export const RepDashboardTab: React.FC<RepDashboardTabProps> = ({
   pedidos,
   detalles,
-  clientes,
-  droguerias,
-  productos,
   vendedorId,
-  rolActual = 'vendedor',
 }) => {
-  const { esClaro } = useTheme();
   const [busquedaVendedor, setBusquedaVendedor] = useState<string>('');
   const [pedidoDetalleModalId, setPedidoDetalleModalId] = useState<string | null>(null);
-  const [copiadoId, setCopiadoId] = useState<string | null>(null);
-  const [horaSeleccionada, setHoraSeleccionada] = useState<string>('13h');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -71,14 +44,13 @@ export const RepDashboardTab: React.FC<RepDashboardTabProps> = ({
 
   // Cálculos de métricas consolidadas
   const metricas = useMemo(() => {
-    const ahora = new Date().getTime();
     let totalTransferido = 0;
     let pendientesCola = 0;
     let procesadas = 0;
     let sumaFillRate = 0;
     let countProcesadas = 0;
 
-    pedidos.forEach((p) => {
+    pedidosVendedor.forEach((p) => {
       totalTransferido += p.total_confirmado || p.total_solicitado;
       if (p.estado === 'borrador' || p.estado === 'enviado_teletransferencia') {
         pendientesCola++;
@@ -93,13 +65,13 @@ export const RepDashboardTab: React.FC<RepDashboardTabProps> = ({
 
     return {
       totalTransferidoHoy: totalTransferido > 0 ? totalTransferido : 18420.00,
-      totalOrdenes: pedidos.length > 0 ? pedidos.length : 24,
+      totalOrdenes: pedidosVendedor.length > 0 ? pedidosVendedor.length : 24,
       procesadas: procesadas > 0 ? procesadas : 19,
       pendientesCola: pendientesCola > 0 ? pendientesCola : 5,
       fillRatePromedio,
       tiempoMedioMin: 18,
     };
-  }, [pedidos]);
+  }, [pedidosVendedor]);
 
   // Vendedores simulados en campo con actividad en tiempo real
   const vendedoresCampo = [
@@ -128,29 +100,6 @@ export const RepDashboardTab: React.FC<RepDashboardTabProps> = ({
     if (!pedidoModalSeleccionado) return [];
     return detalles.filter((d) => d.pedido_id === pedidoModalSeleccionado.id);
   }, [detalles, pedidoModalSeleccionado]);
-
-  // Copiar resumen del pedido para enviarlo por WhatsApp
-  const handleCopiarResumenWhatsApp = (pedido: PedidoCabecera) => {
-    const cli = clientes.find((c) => c.id === pedido.cliente_id || c.ident01 === pedido.cliente_id);
-    const drog = droguerias.find((d) => d.id === pedido.drogueria_id);
-    const lineas = detalles.filter((d) => d.pedido_id === pedido.id);
-    const totalUds = lineas.reduce((acc, curr) => acc + curr.cantidad_solicitada, 0);
-
-    const nombreCli = cli?.nombre_fantasia || cli?.nombre_comercial || cli?.razon_social || 'Farmacia';
-    const rifCli = cli?.rif ? ` (${cli.rif})` : '';
-
-    const texto = `📦 *PEDIDO TRANSMITIDO: ${pedido.numero_pedido}*
-🏥 Farmacia: ${nombreCli}${rifCli}
-🚚 Droguería: ${drog?.nombre_drogueria || 'Droguería'}
-📊 Estado: ${(pedido.estado || '').toUpperCase()}
-🔢 Total Unidades: ${totalUds} uds (${lineas.length} medicamentos)
-✨ Fill-Rate: ${pedido.fill_rate}%`;
-
-    navigator.clipboard.writeText(texto);
-    setCopiadoId(pedido.id);
-    showToast('Resumen copiado para WhatsApp');
-    setTimeout(() => setCopiadoId(null), 2500);
-  };
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-[1600px] mx-auto">
@@ -457,8 +406,7 @@ export const RepDashboardTab: React.FC<RepDashboardTabProps> = ({
               ].map((bar) => (
                 <div 
                   key={bar.hora}
-                  onClick={() => setHoraSeleccionada(bar.hora)}
-                  className={`flex-1 flex flex-col items-center gap-2 h-full justify-end group cursor-pointer transition-all ${
+                  className={`flex-1 flex flex-col items-center gap-2 h-full justify-end group transition-all ${
                     bar.proximo ? 'opacity-40' : ''
                   }`}
                 >

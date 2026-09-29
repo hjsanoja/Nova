@@ -235,6 +235,7 @@ export interface PedidoCabecera {
   total_confirmado: number;
   fill_rate: number; // Porcentaje confirmado/solicitado
   transferencista_id?: string;
+  numero_factura?: string; // Factura emitida por la droguería al conciliar
   fecha_procesamiento?: string;
   created_at: string;
   updated_at: string;

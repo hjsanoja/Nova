@@ -8,25 +8,19 @@ import {
   User, 
   Layers, 
   Search, 
-  Check, 
   AlertCircle, 
   Key, 
   LogIn, 
-  RefreshCw, 
   X,
   Phone,
   Mail,
-  Sliders,
   CheckCircle2,
-  Lock,
-  Building2
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
 interface AdminUsersTabProps {
   usuarios: Usuario[];
   onCrearUsuario: (nuevo: Omit<Usuario, 'id' | 'created_at'> & { password?: string }) => void;
-  onActualizarUsuario: (usuarioId: string, cambios: Partial<Usuario>) => void;
   onSimularUsuario: (usuario: Usuario) => void;
   usuarioActual: Usuario | null;
 }
@@ -34,7 +28,6 @@ interface AdminUsersTabProps {
 export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
   usuarios,
   onCrearUsuario,
-  onActualizarUsuario,
   onSimularUsuario,
   usuarioActual,
 }) => {
@@ -160,16 +153,25 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
       return;
     }
 
+    // El navegador no puede fijar la clave de otro usuario (requiere la service key): solo se envía el
+    // correo de restablecimiento de Supabase. Antes se mostraba un "éxito" aunque no se hubiera hecho nada.
     const supabase = getSupabaseClient();
-    if (supabase) {
-      try {
-        await supabase.auth.resetPasswordForEmail(modalResetAbierto.email);
-      } catch {
-        /* ignore */
+    if (!supabase) {
+      showNotification('error', 'Conecta Supabase para restablecer contraseñas: en modo local no hay claves que cambiar.');
+      return;
+    }
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(modalResetAbierto.email);
+      if (error) {
+        showNotification('error', `No se pudo enviar el correo: ${error.message}`);
+        return;
       }
+    } catch (err: unknown) {
+      showNotification('error', `Fallo de red al enviar el correo: ${err instanceof Error ? err.message : String(err)}`);
+      return;
     }
 
-    showNotification('exito', `Contraseña restablecida con éxito para ${modalResetAbierto.nombre_completo}.`);
+    showNotification('exito', `Se envió a ${modalResetAbierto.email} un enlace para restablecer su contraseña.`);
     setModalResetAbierto(null);
     setNuevaPassword('');
   };
@@ -320,7 +322,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
             <select
               value={filtroRol}
               onChange={(e) => setFiltroRol(e.target.value)}
-              className={`text-xs rounded-xl px-3 py-2.5 border focus:outline-none focus:ring-1 focus:ring-teal-500 flex-1 md:flex-none ${
+              className={`text-xs rounded-xl px-3 py-2.5 border focus:outline-none focus:ring-1 focus:ring-teal-500 min-w-0 flex-1 md:flex-none ${
                 esClaro 
                   ? 'bg-slate-50 border-slate-200 text-slate-900' 
                   : 'bg-slate-950 border-slate-700 text-white'
@@ -336,7 +338,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
             <select
               value={filtroEquipo}
               onChange={(e) => setFiltroEquipo(e.target.value)}
-              className={`text-xs rounded-xl px-3 py-2.5 border focus:outline-none focus:ring-1 focus:ring-teal-500 flex-1 md:flex-none ${
+              className={`text-xs rounded-xl px-3 py-2.5 border focus:outline-none focus:ring-1 focus:ring-teal-500 min-w-0 flex-1 md:flex-none ${
                 esClaro 
                   ? 'bg-slate-50 border-slate-200 text-slate-900' 
                   : 'bg-slate-950 border-slate-700 text-white'
@@ -555,7 +557,7 @@ export const AdminUsersTab: React.FC<AdminUsersTabProps> = ({
               <div className="flex items-center gap-2">
                 <UserPlus className="w-5 h-5 text-teal-600 dark:text-teal-400" />
                 <h3 className="text-base font-bold">
-                  Registrar Nuevo Usuario en PharmaTransfer
+                  Registrar nuevo usuario en NOVA
                 </h3>
               </div>
               <button

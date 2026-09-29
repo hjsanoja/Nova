@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useDeferredValue } from 'react';
 import { 
   Cliente, 
   Producto, 
@@ -8,7 +8,13 @@ import {
   ClienteDrogueriaAlias,
   ProductoDrogueriaMapeo
 } from '../types/pharmacy';
-import { getSupabaseClient } from '../services/supabaseClient';
+import { getSupabaseClient, insertarPorLotes } from '../services/supabaseClient';
+import { prepararNombre, similitudPreparada, detectarMesDeNombreArchivo, crearLectorColumnas, norm } from '../services/importUtils';
+import type { NombrePreparado } from '../services/importUtils';
+import { leerLista } from '../services/storageMigrations';
+import { usePersistentState } from '../hooks/usePersistentState';
+import { PanelHomologarFarmacias, PanelMapeoSap } from './import/HomologationPanels';
+import type { FarmaciaPendiente, ProductoPendiente } from './import/HomologationPanels';
 import { 
   UploadCloud, 
   Download, 
@@ -16,21 +22,17 @@ import {
   Check, 
   AlertCircle, 
   Database, 
-  FileText, 
   Copy, 
   Users, 
   Pill, 
   History,
   Building2,
-  Table,
-  ArrowRight,
   ExternalLink,
   Globe,
   HelpCircle,
   Pencil,
   Trash2,
   Plus,
-  X,
   MapPin,
   Search,
   Link2,
@@ -38,80 +40,30 @@ import {
   Zap,
   CheckCircle2,
   Terminal,
-  Code2,
   Sparkles,
   Calculator,
-  TrendingUp,
-  BarChart3,
-  ShieldCheck,
   Calendar,
   Tag,
-  Sliders,
-  Layers,
-  Filter
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 
-// Algoritmo de similitud de nombres de farmacias (Token Dice-Sørensen + Substring)
-export function calcularSimilitudNombres(nombreA: string, nombreB: string): number {
-  if (!nombreA || !nombreB) return 0;
-  const a = nombreA.toLowerCase().trim().replace(/[.,\-_/]/g, ' ');
-  const b = nombreB.toLowerCase().trim().replace(/[.,\-_/]/g, ' ');
-  if (a === b) return 100;
-  if (a.includes(b) || b.includes(a)) return 85;
+const AHORA_SEMILLA = '2026-01-01T00:00:00.000Z';
 
-  const palabrasStop = new Set(['farmacia', 'farmacias', 'botica', 'drogueria', 'c.a', 'ca', 's.a', 'sa', 's.r.l', 'srl', 'de', 'la', 'el', 'los', 'las', 'y']);
-  const tokensA = a.split(/\s+/).filter(t => t.length > 1 && !palabrasStop.has(t));
-  const tokensB = b.split(/\s+/).filter(t => t.length > 1 && !palabrasStop.has(t));
+const ALIAS_SEMILLA: ClienteDrogueriaAlias[] = [
+  { id: 'alias-001', cliente_ident01: 'CLI-1001', drogueria: 'COBECA', cod_cliente_drogueria: 'COB-1001', nombre_cliente_drogueria: 'FARMATODO LAS MERCEDES CARACAS', verificado: true, created_at: AHORA_SEMILLA },
+  { id: 'alias-002', cliente_ident01: 'CLI-1001', drogueria: 'NENA', cod_cliente_drogueria: 'NEN-4410', nombre_cliente_drogueria: 'FTO LAS MERCEDES AV PPAL', verificado: true, created_at: AHORA_SEMILLA },
+  { id: 'alias-003', cliente_ident01: 'CLI-1002', drogueria: 'DROBIENCA', cod_cliente_drogueria: 'DROB-882', nombre_cliente_drogueria: 'DROG Y FARM LA PAZ CHACAO', verificado: true, created_at: AHORA_SEMILLA },
+  { id: 'alias-004', cliente_ident01: 'CLI-1003', drogueria: 'COBECA', cod_cliente_drogueria: 'COB-2041', nombre_cliente_drogueria: 'FARMACIA SAN RAFAEL BARCELONA', verificado: true, created_at: AHORA_SEMILLA },
+];
 
-  if (tokensA.length === 0 || tokensB.length === 0) {
-    return a.slice(0, 4) === b.slice(0, 4) ? 60 : 0;
-  }
+const MAPEO_SEMILLA: ProductoDrogueriaMapeo[] = [
+  { id: 'map-001', cod_sap: 'SKU-LOS-50', drogueria: 'COBECA', codigo_producto_drogueria: 'COB-LOS-50', nombre_producto_drogueria: 'Losartan Potasico 50mg x 30 Tab', created_at: AHORA_SEMILLA },
+  { id: 'map-002', cod_sap: 'SKU-ATO-20', drogueria: 'NENA', codigo_producto_drogueria: 'NEN-ATO-20', nombre_producto_drogueria: 'Atorvastatina 20mg x 30 Tab', created_at: AHORA_SEMILLA },
+  { id: 'map-003', cod_sap: 'SKU-AMX-500', drogueria: 'DROBIENCA', codigo_producto_drogueria: 'DRO-AMX-500', nombre_producto_drogueria: 'Clavumox 500/125mg', created_at: AHORA_SEMILLA },
+  { id: 'map-004', cod_sap: 'SKU-ATA-500', drogueria: 'COBECA', codigo_producto_drogueria: 'COB-ATA-500', nombre_producto_drogueria: 'Atamel 500mg x 20 Tab', created_at: AHORA_SEMILLA },
+  { id: 'map-005', cod_sap: 'SKU-OME-20', drogueria: 'NENA', codigo_producto_drogueria: 'NEN-OME-20', nombre_producto_drogueria: 'Omeprazol 20mg x 28 Cap', created_at: AHORA_SEMILLA },
+];
 
-  let coincidencias = 0;
-  for (const tA of tokensA) {
-    if (tokensB.some(tB => tB === tA || (tA.length > 3 && tB.includes(tA)) || (tB.length > 3 && tA.includes(tB)))) {
-      coincidencias++;
-    }
-  }
-
-  const score = Math.round((2 * coincidencias / (tokensA.length + tokensB.length)) * 100);
-  return Math.min(100, Math.max(0, score));
-}
-
-// Detección automática del mes desde el nombre del archivo (ej: ventas_enero, ventas_febrero)
-export function detectarMesDeNombreArchivo(nombre: string): { mesNum: string; mesTexto: string; anio: string; periodo: string } | null {
-  if (!nombre) return null;
-  const nom = nombre.toLowerCase();
-  const meses = [
-    { regex: /enero|ene|january|jan/i, num: '01', texto: 'Enero' },
-    { regex: /febrero|feb|february/i, num: '02', texto: 'Febrero' },
-    { regex: /marzo|mar|march/i, num: '03', texto: 'Marzo' },
-    { regex: /abril|abr|april/i, num: '04', texto: 'Abril' },
-    { regex: /mayo|may/i, num: '05', texto: 'Mayo' },
-    { regex: /junio|jun|june/i, num: '06', texto: 'Junio' },
-    { regex: /julio|jul|july/i, num: '07', texto: 'Julio' },
-    { regex: /agosto|ago|august|aug/i, num: '08', texto: 'Agosto' },
-    { regex: /septiembre|setiembre|sep|sept|september/i, num: '09', texto: 'Septiembre' },
-    { regex: /octubre|oct|october/i, num: '10', texto: 'Octubre' },
-    { regex: /noviembre|nov|november/i, num: '11', texto: 'Noviembre' },
-    { regex: /diciembre|dic|december/i, num: '12', texto: 'Diciembre' },
-  ];
-  const anioMatch = nom.match(/202[4-9]/);
-  const anio = anioMatch ? anioMatch[0] : new Date().getFullYear().toString();
-
-  for (const m of meses) {
-    if (m.regex.test(nom)) {
-      return {
-        mesNum: m.num,
-        mesTexto: m.texto,
-        anio,
-        periodo: `${anio}-${m.num}`
-      };
-    }
-  }
-  return null;
-}
 
 interface DataImportStudioTabProps {
   clientes: Cliente[];
@@ -226,128 +178,28 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
   const [filtroHistorico, setFiltroHistorico] = useState('');
   const [copiadoScript1M, setCopiadoScript1M] = useState(false);
 
-  // Estados para Homologación de Farmacias (Alias Droguería) y Mapeo Cod SAP
-  const [aliasesFarmacias, setAliasesFarmacias] = useState<ClienteDrogueriaAlias[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_CLIENTE_ALIAS');
-    if (guardado) {
-      try { return JSON.parse(guardado); } catch { /* ignore */ }
-    }
-    return [
-      {
-        id: 'alias-001',
-        cliente_ident01: 'CLI-1001',
-        drogueria: 'COBECA',
-        cod_cliente_drogueria: 'COB-1001',
-        nombre_cliente_drogueria: 'FARMATODO LAS MERCEDES CARACAS',
-        verificado: true,
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: 'alias-002',
-        cliente_ident01: 'CLI-1001',
-        drogueria: 'NENA',
-        cod_cliente_drogueria: 'NEN-4410',
-        nombre_cliente_drogueria: 'FTO LAS MERCEDES AV PPAL',
-        verificado: true,
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: 'alias-003',
-        cliente_ident01: 'CLI-1002',
-        drogueria: 'DROBIENCA',
-        cod_cliente_drogueria: 'DROB-882',
-        nombre_cliente_drogueria: 'DROG Y FARM LA PAZ CHACAO',
-        verificado: true,
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: 'alias-004',
-        cliente_ident01: 'CLI-1003',
-        drogueria: 'COBECA',
-        cod_cliente_drogueria: 'COB-2041',
-        nombre_cliente_drogueria: 'FARMACIA SAN RAFAEL BARCELONA',
-        verificado: true,
-        created_at: new Date().toISOString(),
-      },
-    ];
-  });
-
-  const [mapeosProductosDrogueria, setMapeosProductosDrogueria] = useState<ProductoDrogueriaMapeo[]>(() => {
-    const guardado = localStorage.getItem('PHARMA_PRODUCTO_MAPEO');
-    if (guardado) {
-      try { return JSON.parse(guardado); } catch { /* ignore */ }
-    }
-    return [
-      {
-        id: 'map-001',
-        cod_sap: 'SKU-LOS-50',
-        drogueria: 'COBECA',
-        codigo_producto_drogueria: 'COB-LOS-50',
-        nombre_producto_drogueria: 'Losartan Potasico 50mg x 30 Tab',
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: 'map-002',
-        cod_sap: 'SKU-ATO-20',
-        drogueria: 'NENA',
-        codigo_producto_drogueria: 'NEN-ATO-20',
-        nombre_producto_drogueria: 'Atorvastatina 20mg x 30 Tab',
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: 'map-003',
-        cod_sap: 'SKU-AMX-500',
-        drogueria: 'DROBIENCA',
-        codigo_producto_drogueria: 'DRO-AMX-500',
-        nombre_producto_drogueria: 'Clavumox 500/125mg',
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: 'map-004',
-        cod_sap: 'SKU-ATA-500',
-        drogueria: 'COBECA',
-        codigo_producto_drogueria: 'COB-ATA-500',
-        nombre_producto_drogueria: 'Atamel 500mg x 20 Tab',
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: 'map-005',
-        cod_sap: 'SKU-OME-20',
-        drogueria: 'NENA',
-        codigo_producto_drogueria: 'NEN-OME-20',
-        nombre_producto_drogueria: 'Omeprazol 20mg x 28 Cap',
-        created_at: new Date().toISOString(),
-      },
-    ];
-  });
+  // Diccionarios aprendidos (alias de farmacias y Cod SAP por droguería), persistidos con debounce
+  const [aliasesFarmacias, setAliasesFarmacias] = usePersistentState<ClienteDrogueriaAlias[]>(
+    'PHARMA_CLIENTE_ALIAS',
+    () => ALIAS_SEMILLA,
+    leerLista
+  );
+  const [mapeosProductosDrogueria, setMapeosProductosDrogueria] = usePersistentState<ProductoDrogueriaMapeo[]>(
+    'PHARMA_PRODUCTO_MAPEO',
+    () => MAPEO_SEMILLA,
+    leerLista
+  );
 
   const [infoMesDetectado, setInfoMesDetectado] = useState<{ mesNum: string; mesTexto: string; anio: string; periodo: string } | null>(null);
   const [seccionHistoricoActiva, setSeccionHistoricoActiva] = useState<'cargar' | 'homologar' | 'mapeo_sap' | 'acumulado' | 'guia'>('cargar');
-  const [modalHomologarAbierto, setModalHomologarAbierto] = useState(false);
-  const [itemHomologarSeleccionado, setItemHomologarSeleccionado] = useState<{
-    drogueria: string;
-    cod_cliente_drogueria: string;
-    nombre_cliente_drogueria: string;
-    sugerenciaIdent01: string;
-    ident01Elegido: string;
-  } | null>(null);
 
-  const [modalMapeoSapAbierto, setModalMapeoSapAbierto] = useState(false);
-  const [itemMapeoSapSeleccionado, setItemMapeoSapSeleccionado] = useState<{
-    drogueria: string;
-    codigo_producto: string;
-    nombre_producto: string;
-    codSapElegido: string;
-  } | null>(null);
-
-  // Persistir Aliases y Mapeos
-  useEffect(() => {
-    localStorage.setItem('PHARMA_CLIENTE_ALIAS', JSON.stringify(aliasesFarmacias));
-  }, [aliasesFarmacias]);
-
-  useEffect(() => {
-    localStorage.setItem('PHARMA_PRODUCTO_MAPEO', JSON.stringify(mapeosProductosDrogueria));
-  }, [mapeosProductosDrogueria]);
+  // Cambia de sección del histórico y lleva la vista hasta ella (el panel queda debajo de la vista previa del archivo).
+  const irASeccionHistorico = (seccion: typeof seccionHistoricoActiva) => {
+    setSeccionHistoricoActiva(seccion);
+    requestAnimationFrame(() =>
+      document.getElementById('historico-secciones')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    );
+  };
 
   const showNotification = (tipo: 'exito' | 'error', texto: string) => {
     setNotificacion({ tipo, texto });
@@ -473,116 +325,139 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     return filas;
   }, [archivoTexto]);
 
-  // Helper flexible para obtener valores de columnas tolerando acentos y variaciones
-  const getCol = (row: Record<string, string>, targets: string[]): string => {
-    for (const target of targets) {
-      if (row[target] !== undefined) return row[target];
-      const match = Object.keys(row).find(
-        (k) => k.trim().toLowerCase() === target.toLowerCase()
-      );
-      if (match && row[match] !== undefined) return row[match];
-    }
-    return '';
-  };
+  const cacheSimilitud = useRef<{
+    clientes: Cliente[];
+    preparados: { fantasia: NombrePreparado; razon: NombrePreparado }[];
+    mejor: Map<string, { cliente: Cliente | undefined; similitud: number }>;
+  } | null>(null);
 
-  // Diagnóstico en tiempo real del archivo mensual cargado (Cod SAP y Homologación de Farmacias)
+  // Lector de columnas tolerante a variaciones; el índice de encabezados se arma una vez por archivo.
+  const getCol = useMemo(() => crearLectorColumnas(filasParseadas[0]), [filasParseadas]);
+
+  // Diagnóstico en tiempo real del archivo mensual cargado (Cod SAP y Homologación de Farmacias).
+  // Se indexan diccionarios, vademécum y farmacias UNA vez; cada fila cuesta O(1) en lugar de recorrer catálogos completos.
   const diagnosticoVentasMes = useMemo(() => {
-    if (subTab !== 'historico' || filasParseadas.length === 0) {
-      return {
-        productosSinSap: [] as { drogueria: string; codigo_producto: string; nombre_producto: string; totalUnidades: number; count: number }[],
-        farmaciasSinHomologar: [] as { drogueria: string; cod_cliente: string; nombre_cliente: string; totalUnidades: number; count: number; sugerenciaIdent01: string; sugerenciaNombre: string; similitud: number }[],
-        totalFilas: 0,
-        totalUnidades: 0,
-        tieneColumnaSap: false,
+    const vacio = {
+      productosSinSap: [] as ProductoPendiente[],
+      farmaciasSinHomologar: [] as FarmaciaPendiente[],
+      totalFilas: 0,
+      totalUnidades: 0,
+      tieneColumnaSap: false,
+    };
+    if (subTab !== 'historico' || filasParseadas.length === 0) return vacio;
+
+    const mapeoKeys = new Set(mapeosProductosDrogueria.map((m) => `${norm(m.drogueria)}|${norm(m.codigo_producto_drogueria)}`));
+    const codigosProducto = new Set<string>();
+    productos.forEach((p) => {
+      codigosProducto.add(norm(p.sku));
+      if (p.codigo) codigosProducto.add(norm(p.codigo));
+    });
+    const aliasPorCodigo = new Set<string>();
+    const aliasPorNombre = new Set<string>();
+    aliasesFarmacias.forEach((a) => {
+      const d = norm(a.drogueria);
+      if (a.cod_cliente_drogueria) aliasPorCodigo.add(`${d}|${a.cod_cliente_drogueria}`);
+      aliasPorNombre.add(`${d}|${norm(a.nombre_cliente_drogueria)}`);
+    });
+    const clientesConocidos = new Set<string>();
+    clientes.forEach((c) => {
+      [c.ident01, c.codigo_cliente, c.nombre_fantasia, c.razon_social].forEach((v) => v && clientesConocidos.add(norm(v)));
+    });
+
+    // Caché de similitudes: sobrevive a cada "Aceptar" (que recalcula el diagnóstico) mientras no cambie el maestro de farmacias.
+    let cache = cacheSimilitud.current;
+    if (!cache || cache.clientes !== clientes) {
+      cache = {
+        clientes,
+        preparados: clientes.map((c) => ({
+          fantasia: prepararNombre(c.nombre_fantasia),
+          razon: prepararNombre(c.razon_social),
+        })),
+        mejor: new Map(),
       };
+      cacheSimilitud.current = cache;
     }
+    const { preparados: clientesPreparados, mejor: mejorCoincidencia } = cache;
 
-    const tieneColumnaSap = filasParseadas.some(f => Boolean(getCol(f, ['Cod Sap', 'Cod_Sap', 'COD_SAP', 'COD SAP', 'CodSap'])));
+    const tieneColumnaSap = filasParseadas.some((f) => Boolean(getCol(f, ['Cod Sap', 'Cod_Sap', 'COD_SAP', 'COD SAP', 'CodSap'])));
     let totalUds = 0;
-    const mapaProdSinSap = new Map<string, { drogueria: string; codigo_producto: string; nombre_producto: string; totalUnidades: number; count: number }>();
-    const mapaFarmaciasSinHomologar = new Map<string, { drogueria: string; cod_cliente: string; nombre_cliente: string; totalUnidades: number; count: number; sugerenciaIdent01: string; sugerenciaNombre: string; similitud: number }>();
+    const productosSinSap = new Map<string, ProductoPendiente>();
+    const farmaciasSinHomologar = new Map<string, FarmaciaPendiente>();
 
-    filasParseadas.forEach(f => {
+    for (const f of filasParseadas) {
       const drogRaw = getCol(f, ['Drogueria', 'DROGUERIA', 'drogueria', 'Droguería', 'NOMBRE_DROGUERIA', 'Drog']).trim() || 'COBECA';
       const codigoProd = getCol(f, ['Codigo Producto', 'Codigo_Producto', 'CODIGO_PRODUCTO', 'COD PRODUCTO', 'codigo producto', 'CodigoProducto', 'COD_ARTICULO']).trim();
-      const nombreProd = getCol(f, ['Nombre Producto', 'Nombre_Producto', 'NOMBRE_PRODUCTO', 'Nombre Producto', 'nombre producto', 'PRODUCTO', 'Descripcion']).trim();
+      const nombreProd = getCol(f, ['Nombre Producto', 'Nombre_Producto', 'NOMBRE_PRODUCTO', 'nombre producto', 'PRODUCTO', 'Descripcion']).trim();
       const rawSap = getCol(f, ['Cod Sap', 'Cod_Sap', 'COD_SAP', 'COD SAP', 'CodSap', 'CODSAP']).trim();
-      const unidades = parseInt(getCol(f, ['Unidades', 'UNIDADES', 'unidades', 'Cantidad', 'CANTIDAD']).trim()) || 0;
+      const unidades = parseInt(getCol(f, ['Unidades', 'UNIDADES', 'unidades', 'Cantidad', 'CANTIDAD']).trim(), 10) || 0;
       const codCliente = getCol(f, ['Cod Cliente', 'Cod_Cliente', 'COD_CLIENTE', 'COD CLIENTE', 'cod cliente', 'Codigo_Cliente']).trim();
       const nombreCliente = getCol(f, ['Nombre_cliente', 'Nombre_Cliente', 'NOMBRE_CLIENTE', 'Nombre Cliente', 'nombre_cliente', 'Farmacia', 'FARMACIA']).trim();
+      const drogKey = norm(drogRaw);
 
       totalUds += unidades;
 
-      // 1. Revisar si tiene Cod SAP resuelto
-      const tieneSap = rawSap || mapeosProductosDrogueria.some(m => 
-        m.drogueria.toLowerCase() === drogRaw.toLowerCase() && m.codigo_producto_drogueria.toLowerCase() === codigoProd.toLowerCase()
-      ) || productos.some(p => p.sku.toLowerCase() === codigoProd.toLowerCase() || (p.codigo && p.codigo.toLowerCase() === codigoProd.toLowerCase()));
-
-      if (!tieneSap && codigoProd) {
+      // 1. ¿El producto tiene Cod SAP resuelto?
+      if (codigoProd && !rawSap && !mapeoKeys.has(`${drogKey}|${norm(codigoProd)}`) && !codigosProducto.has(norm(codigoProd))) {
         const key = `${drogRaw}__${codigoProd}`;
-        const item = mapaProdSinSap.get(key) || { drogueria: drogRaw, codigo_producto: codigoProd, nombre_producto: nombreProd, totalUnidades: 0, count: 0 };
+        const item = productosSinSap.get(key) ?? { drogueria: drogRaw, codigo_producto: codigoProd, nombre_producto: nombreProd, totalUnidades: 0, count: 0 };
         item.totalUnidades += unidades;
         item.count += 1;
-        mapaProdSinSap.set(key, item);
+        productosSinSap.set(key, item);
       }
 
-      // 2. Revisar si tiene Farmacia Homologada
-      const tieneAlias = aliasesFarmacias.some(a => 
-        a.drogueria.toLowerCase() === drogRaw.toLowerCase() && (
-          (a.cod_cliente_drogueria && a.cod_cliente_drogueria === codCliente) ||
-          a.nombre_cliente_drogueria.toLowerCase() === nombreCliente.toLowerCase()
-        )
-      );
+      // 2. ¿La farmacia está homologada?
+      if (!nombreCliente) continue;
+      const tieneAlias =
+        (codCliente !== '' && aliasPorCodigo.has(`${drogKey}|${codCliente}`)) || aliasPorNombre.has(`${drogKey}|${norm(nombreCliente)}`);
+      if (tieneAlias || clientesConocidos.has(norm(codCliente)) || clientesConocidos.has(norm(nombreCliente))) continue;
 
-      const matchDirecto = clientes.some(c => 
-        c.ident01.toLowerCase() === codCliente.toLowerCase() ||
-        (c.codigo_cliente && c.codigo_cliente.toLowerCase() === codCliente.toLowerCase()) ||
-        c.nombre_fantasia.toLowerCase() === nombreCliente.toLowerCase() ||
-        c.razon_social.toLowerCase() === nombreCliente.toLowerCase()
-      );
+      const key = `${drogRaw}__${nombreCliente}`;
+      const existente = farmaciasSinHomologar.get(key);
+      if (existente) {
+        existente.totalUnidades += unidades;
+        existente.count += 1;
+        continue;
+      }
 
-      if (!tieneAlias && !matchDirecto && nombreCliente) {
-        const key = `${drogRaw}__${nombreCliente}`;
-        if (!mapaFarmaciasSinHomologar.has(key)) {
-          // Encontrar mejor coincidencia en dim_clientes
-          let mejorSim = 0;
-          let mejorCli = clientes[0];
-          clientes.forEach(c => {
-            const sim1 = calcularSimilitudNombres(nombreCliente, c.nombre_fantasia);
-            const sim2 = calcularSimilitudNombres(nombreCliente, c.razon_social);
-            const maxSim = Math.max(sim1, sim2);
-            if (maxSim > mejorSim) {
-              mejorSim = maxSim;
-              mejorCli = c;
-            }
-          });
-
-          mapaFarmaciasSinHomologar.set(key, {
-            drogueria: drogRaw,
-            cod_cliente: codCliente,
-            nombre_cliente: nombreCliente,
-            totalUnidades: unidades,
-            count: 1,
-            sugerenciaIdent01: mejorCli?.ident01 || clientes[0]?.ident01 || 'CLI-1001',
-            sugerenciaNombre: mejorCli?.nombre_fantasia || mejorCli?.razon_social || 'Farmacia',
-            similitud: mejorSim,
-          });
-        } else {
-          const item = mapaFarmaciasSinHomologar.get(key)!;
-          item.totalUnidades += unidades;
-          item.count += 1;
+      // Mejor coincidencia en dim_clientes: una sola vez por nombre distinto (no por fila ni por droguería),
+      // con los nombres de las farmacias normalizados y tokenizados de antemano.
+      const nombreKey = norm(nombreCliente);
+      let mejor = mejorCoincidencia.get(nombreKey);
+      if (!mejor) {
+        const preparado = prepararNombre(nombreCliente);
+        let mejorSim = 0;
+        let mejorCli = clientes[0];
+        for (let i = 0; i < clientes.length; i++) {
+          const maxSim = Math.max(similitudPreparada(preparado, clientesPreparados[i].fantasia), similitudPreparada(preparado, clientesPreparados[i].razon));
+          if (maxSim > mejorSim) {
+            mejorSim = maxSim;
+            mejorCli = clientes[i];
+          }
         }
+        mejor = { cliente: mejorCli, similitud: mejorSim };
+        mejorCoincidencia.set(nombreKey, mejor);
       }
-    });
+      const { cliente: mejorCli, similitud: mejorSim } = mejor;
+      farmaciasSinHomologar.set(key, {
+        drogueria: drogRaw,
+        cod_cliente: codCliente,
+        nombre_cliente: nombreCliente,
+        totalUnidades: unidades,
+        count: 1,
+        sugerenciaIdent01: mejorCli?.ident01 || clientes[0]?.ident01 || 'CLI-1001',
+        sugerenciaNombre: mejorCli?.nombre_fantasia || mejorCli?.razon_social || 'Farmacia',
+        similitud: mejorSim,
+      });
+    }
 
     return {
-      productosSinSap: Array.from(mapaProdSinSap.values()),
-      farmaciasSinHomologar: Array.from(mapaFarmaciasSinHomologar.values()),
+      productosSinSap: Array.from(productosSinSap.values()).sort((a, b) => b.totalUnidades - a.totalUnidades),
+      farmaciasSinHomologar: Array.from(farmaciasSinHomologar.values()).sort((a, b) => b.similitud - a.similitud || b.totalUnidades - a.totalUnidades),
       totalFilas: filasParseadas.length,
       totalUnidades: totalUds,
       tieneColumnaSap,
     };
-  }, [filasParseadas, subTab, mapeosProductosDrogueria, aliasesFarmacias, productos, clientes]);
+  }, [filasParseadas, subTab, mapeosProductosDrogueria, aliasesFarmacias, productos, clientes, getCol]);
 
   const handleProcesarCarga = async () => {
     if (filasParseadas.length === 0) {
@@ -811,6 +686,147 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     } else if (subTab === 'historico') {
       const mesPeriodo = infoMesDetectado?.periodo || new Date().toISOString().slice(0, 7);
       const nuevosMapeosAprendidos: ProductoDrogueriaMapeo[] = [];
+      const mapeosConocidos = new Set(mapeosProductosDrogueria.map((m) => `${norm(m.drogueria)}|${norm(m.codigo_producto_drogueria)}`));
+
+      // Las resoluciones de producto, farmacia y droguería dependen solo de textos que se repiten miles de veces
+      // en un reporte mensual: se calculan una vez por combinación distinta (antes, una vez por fila contra todo el catálogo).
+      const cacheProductos = new Map<string, { codSapResuelto: string; prodMatch: Producto | undefined }>();
+      const cacheClientes = new Map<string, { cliMatch: Cliente | undefined; ident01Homologado: string | undefined }>();
+      const cacheDroguerias = new Map<string, Drogueria | undefined>();
+
+      const resolverProducto = (drogRaw: string, codigoProdDrog: string, nombreProdRaw: string, codSap: string) => {
+        const clave = [drogRaw, codigoProdDrog, nombreProdRaw, codSap].join('\u0001');
+        const enCache = cacheProductos.get(clave);
+        if (enCache) return enCache;
+
+        let codSapResuelto = codSap;
+        // A. Diccionario de mapeos aprendidos
+        if (!codSapResuelto && codigoProdDrog) {
+          const mapMatch = mapeosProductosDrogueria.find(
+            (m) => norm(m.drogueria) === norm(drogRaw) && norm(m.codigo_producto_drogueria) === norm(codigoProdDrog)
+          );
+          if (mapMatch) codSapResuelto = mapMatch.cod_sap;
+        }
+
+        // B. Match de producto en el vademécum por Cod SAP
+        const sapLow = norm(codSapResuelto);
+        let prodMatch = codSapResuelto
+          ? productos.find(
+              (p) =>
+                (p.codigo && norm(p.codigo) === sapLow) ||
+                (p.sku && norm(p.sku) === sapLow) ||
+                (p.product_code && norm(p.product_code) === sapLow) ||
+                norm(p.id) === sapLow
+            )
+          : undefined;
+
+        // C. Por código de producto de la droguería si coincide con SKU o código de barras
+        if (!prodMatch && codigoProdDrog) {
+          const codLow = norm(codigoProdDrog);
+          prodMatch = productos.find((p) => (p.sku && norm(p.sku) === codLow) || (p.pack_code && norm(p.pack_code) === codLow));
+          if (prodMatch) codSapResuelto = prodMatch.sku;
+        }
+
+        // D. Por nombre del medicamento
+        if (!prodMatch && nombreProdRaw) {
+          const nLow = norm(nombreProdRaw);
+          prodMatch = productos.find(
+            (p) =>
+              (p.nombre_comercial && norm(p.nombre_comercial) === nLow) ||
+              (p.product && norm(p.product) === nLow) ||
+              (p.descripcion && norm(p.descripcion) === nLow) ||
+              (p.nombre_comercial && (norm(p.nombre_comercial).includes(nLow) || nLow.includes(norm(p.nombre_comercial))))
+          );
+          if (prodMatch) codSapResuelto = prodMatch.sku;
+        }
+
+        // E. Si el reporte traía Cod SAP manual, se aprende la regla una sola vez para los meses siguientes
+        if (codSap && codigoProdDrog) {
+          const claveMapeo = `${norm(drogRaw)}|${norm(codigoProdDrog)}`;
+          if (!mapeosConocidos.has(claveMapeo)) {
+            mapeosConocidos.add(claveMapeo);
+            nuevosMapeosAprendidos.push({
+              id: `map-${Date.now()}-${nuevosMapeosAprendidos.length}`,
+              cod_sap: codSap,
+              drogueria: drogRaw,
+              codigo_producto_drogueria: codigoProdDrog,
+              nombre_producto_drogueria: nombreProdRaw,
+              created_at: new Date().toISOString(),
+            });
+          }
+        }
+
+        const resultado = { codSapResuelto, prodMatch };
+        cacheProductos.set(clave, resultado);
+        return resultado;
+      };
+
+      const resolverCliente = (drogRaw: string, codClienteDrog: string, nombreCliRaw: string) => {
+        const clave = [drogRaw, codClienteDrog, nombreCliRaw].join('\u0001');
+        const enCache = cacheClientes.get(clave);
+        if (enCache) return enCache;
+
+        let cliMatch: Cliente | undefined;
+        let ident01Homologado: string | undefined;
+
+        // A. Tabla de alias registrados
+        const aliasMatch = aliasesFarmacias.find(
+          (a) =>
+            norm(a.drogueria) === norm(drogRaw) &&
+            ((a.cod_cliente_drogueria && a.cod_cliente_drogueria === codClienteDrog) ||
+              norm(a.nombre_cliente_drogueria) === norm(nombreCliRaw))
+        );
+        if (aliasMatch) {
+          ident01Homologado = aliasMatch.cliente_ident01;
+          cliMatch = clientes.find((c) => c.ident01 === aliasMatch.cliente_ident01);
+        }
+
+        // B. Match directo por ident01, código o RIF
+        if (!cliMatch && codClienteDrog) {
+          const cLow = norm(codClienteDrog);
+          cliMatch = clientes.find(
+            (c) =>
+              (c.ident01 && norm(c.ident01) === cLow) ||
+              (c.codigo_cliente && norm(c.codigo_cliente) === cLow) ||
+              (c.rif && norm(c.rif) === cLow) ||
+              norm(c.id) === cLow
+          );
+          if (cliMatch) ident01Homologado = cliMatch.ident01;
+        }
+
+        // C. Por nombre comercial o razón social
+        if (!cliMatch && nombreCliRaw) {
+          const nLow = norm(nombreCliRaw);
+          cliMatch = clientes.find(
+            (c) =>
+              (c.nombre_fantasia && norm(c.nombre_fantasia) === nLow) ||
+              (c.razon_social && norm(c.razon_social) === nLow) ||
+              (c.nombre_comercial && norm(c.nombre_comercial) === nLow) ||
+              (c.nombre_fantasia && (norm(c.nombre_fantasia).includes(nLow) || nLow.includes(norm(c.nombre_fantasia))))
+          );
+          if (cliMatch) ident01Homologado = cliMatch.ident01;
+        }
+
+        const resultado = { cliMatch, ident01Homologado };
+        cacheClientes.set(clave, resultado);
+        return resultado;
+      };
+
+      const resolverDrogueria = (drogRaw: string) => {
+        if (cacheDroguerias.has(drogRaw)) return cacheDroguerias.get(drogRaw);
+        const dLow = norm(drogRaw);
+        const encontrada = drogRaw
+          ? droguerias.find(
+              (d) =>
+                norm(d.nombre_drogueria) === dLow ||
+                norm(d.nombre_drogueria).includes(dLow) ||
+                norm(d.codigo_drogueria) === dLow ||
+                dLow.includes(norm(d.nombre_drogueria))
+            )
+          : undefined;
+        cacheDroguerias.set(drogRaw, encontrada);
+        return encontrada;
+      };
 
       const nuevoHistorico: HistoricoPedidoPrevio[] = filasParseadas.map((f, i) => {
         // 1. Columnas oficiales del usuario:
@@ -879,70 +895,8 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
         // Deducir el período exacto YYYY-MM a partir de la fecha real de la fila (ej: '2026-06')
         const mesPeriodoFila = (fecha.includes('-') && fecha.length >= 7) ? fecha.slice(0, 7) : mesPeriodo;
 
-        // 3. Resolución de Cod SAP (Crucial: si el usuario no lo anexó en Excel)
-        let codSapResuelto = codSap;
-
-        // A. Buscar en el diccionario de mapeos aprendidos
-        if (!codSapResuelto && codigoProdDrog) {
-          const mapMatch = mapeosProductosDrogueria.find((m) => 
-            m.drogueria.toLowerCase() === drogRaw.toLowerCase() &&
-            m.codigo_producto_drogueria.toLowerCase() === codigoProdDrog.toLowerCase()
-          );
-          if (mapMatch) {
-            codSapResuelto = mapMatch.cod_sap;
-          }
-        }
-
-        // B. Match de Producto en el Vademécum
-        let prodMatch = codSapResuelto ? productos.find((p) => 
-          (p.codigo && p.codigo.toLowerCase() === codSapResuelto.toLowerCase()) ||
-          (p.sku && p.sku.toLowerCase() === codSapResuelto.toLowerCase()) ||
-          (p.product_code && p.product_code.toLowerCase() === codSapResuelto.toLowerCase()) ||
-          p.id.toLowerCase() === codSapResuelto.toLowerCase()
-        ) : undefined;
-
-        // C. Por Código de Producto de Droguería si coincide con SKU
-        if (!prodMatch && codigoProdDrog) {
-          prodMatch = productos.find((p) => 
-            (p.sku && p.sku.toLowerCase() === codigoProdDrog.toLowerCase()) ||
-            (p.pack_code && p.pack_code.toLowerCase() === codigoProdDrog.toLowerCase())
-          );
-          if (prodMatch) {
-            codSapResuelto = prodMatch.sku;
-          }
-        }
-
-        // D. Por Nombre del Medicamento
-        if (!prodMatch && nombreProdRaw) {
-          const nLow = nombreProdRaw.toLowerCase();
-          prodMatch = productos.find((p) => 
-            (p.nombre_comercial && p.nombre_comercial.toLowerCase() === nLow) ||
-            (p.product && p.product.toLowerCase() === nLow) ||
-            (p.descripcion && p.descripcion.toLowerCase() === nLow) ||
-            (p.nombre_comercial && (p.nombre_comercial.toLowerCase().includes(nLow) || nLow.includes(p.nombre_comercial.toLowerCase())))
-          );
-          if (prodMatch) {
-            codSapResuelto = prodMatch.sku;
-          }
-        }
-
-        // E. Si el reporte traía Cod SAP manual, aprender la regla para futuros meses
-        if (codSap && codigoProdDrog) {
-          const existe = mapeosProductosDrogueria.some(m => 
-            m.drogueria.toLowerCase() === drogRaw.toLowerCase() && 
-            m.codigo_producto_drogueria.toLowerCase() === codigoProdDrog.toLowerCase()
-          );
-          if (!existe) {
-            nuevosMapeosAprendidos.push({
-              id: `map-${Date.now()}-${i}`,
-              cod_sap: codSap,
-              drogueria: drogRaw,
-              codigo_producto_drogueria: codigoProdDrog,
-              nombre_producto_drogueria: nombreProdRaw,
-              created_at: new Date().toISOString(),
-            });
-          }
-        }
+        // 3. Resolución de Cod SAP y producto (memoizada por combinación distinta)
+        const { codSapResuelto, prodMatch } = resolverProducto(drogRaw, codigoProdDrog, nombreProdRaw, codSap);
 
         const prodId = prodMatch ? prodMatch.id : (codSapResuelto || codigoProdDrog || productos[0]?.id || `prod-${i}`);
         const prodNombre = prodMatch?.nombre_comercial || prodMatch?.product || nombreProdRaw || 'Medicamento General';
@@ -961,60 +915,14 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
           else equipo = 'La Sante';
         }
 
-        // 5. Match y Homologación de Cliente / Farmacia (Multi-nombre entre droguerías):
-        let cliMatch: Cliente | undefined;
-        let ident01Homologado: string | undefined;
-
-        // A. Buscar en la tabla de alias registrados
-        const aliasMatch = aliasesFarmacias.find(a => 
-          a.drogueria.toLowerCase() === drogRaw.toLowerCase() && (
-            (a.cod_cliente_drogueria && a.cod_cliente_drogueria === codClienteDrog) ||
-            a.nombre_cliente_drogueria.toLowerCase() === nombreCliRaw.toLowerCase()
-          )
-        );
-
-        if (aliasMatch) {
-          ident01Homologado = aliasMatch.cliente_ident01;
-          cliMatch = clientes.find(c => c.ident01 === aliasMatch.cliente_ident01);
-        }
-
-        // B. Si no hay alias, buscar match directo por ident01, codigo o RIF
-        if (!cliMatch && codClienteDrog) {
-          const cLow = codClienteDrog.toLowerCase();
-          cliMatch = clientes.find((c) => 
-            (c.ident01 && c.ident01.toLowerCase() === cLow) ||
-            (c.codigo_cliente && c.codigo_cliente.toLowerCase() === cLow) ||
-            (c.rif && c.rif.toLowerCase() === cLow) ||
-            c.id.toLowerCase() === cLow
-          );
-          if (cliMatch) {
-            ident01Homologado = cliMatch.ident01;
-          }
-        }
-
-        // C. Por Nombre comercial o Razón Social
-        if (!cliMatch && nombreCliRaw) {
-          cliMatch = clientes.find((c) => 
-            (c.nombre_fantasia && c.nombre_fantasia.toLowerCase() === nombreCliRaw.toLowerCase()) ||
-            (c.razon_social && c.razon_social.toLowerCase() === nombreCliRaw.toLowerCase()) ||
-            (c.nombre_comercial && c.nombre_comercial.toLowerCase() === nombreCliRaw.toLowerCase()) ||
-            (c.nombre_fantasia && (c.nombre_fantasia.toLowerCase().includes(nombreCliRaw.toLowerCase()) || nombreCliRaw.toLowerCase().includes(c.nombre_fantasia.toLowerCase())))
-          );
-          if (cliMatch) {
-            ident01Homologado = cliMatch.ident01;
-          }
-        }
+        // 5. Match y homologación de cliente / farmacia (multi-nombre entre droguerías)
+        const { cliMatch, ident01Homologado } = resolverCliente(drogRaw, codClienteDrog, nombreCliRaw);
 
         const cliId = ident01Homologado || (cliMatch ? (cliMatch.ident01 || cliMatch.id) : (codClienteDrog || clientes[0]?.ident01 || `cli-${i}`));
         const cliNombre = cliMatch?.nombre_fantasia || cliMatch?.razon_social || nombreCliRaw || 'Farmacia';
 
-        // 6. Match de Droguería:
-        const drogMatch = drogRaw ? droguerias.find((d) => 
-          d.nombre_drogueria.toLowerCase() === drogRaw.toLowerCase() ||
-          d.nombre_drogueria.toLowerCase().includes(drogRaw.toLowerCase()) ||
-          d.codigo_drogueria.toLowerCase() === drogRaw.toLowerCase() ||
-          drogRaw.toLowerCase().includes(d.nombre_drogueria.toLowerCase())
-        ) : undefined;
+        // 6. Match de droguería
+        const drogMatch = resolverDrogueria(drogRaw);
 
         const drogId = drogMatch ? drogMatch.id : (droguerias[0]?.id || 'drog-001');
         const drogNombre = drogMatch ? drogMatch.nombre_drogueria : (drogRaw || 'Drogueria General');
@@ -1053,29 +961,29 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
       // Guardar nuevos mapeos aprendidos
       if (nuevosMapeosAprendidos.length > 0) {
         setMapeosProductosDrogueria(prev => [...prev, ...nuevosMapeosAprendidos]);
+        void sincronizarMapeos(nuevosMapeosAprendidos);
       }
 
-      // Sincronizar con Supabase si está disponible
+      // Sincronizar con Supabase si está disponible (por lotes de 500 filas)
       if (supabase) {
-        try {
-          await supabase.from('fact_historico_ventas').insert(
-            nuevoHistorico.map((h) => ({
-              fecha: h.fecha_pedido,
-              mes_periodo: h.mes_periodo || mesPeriodo,
-              archivo_origen: h.archivo_origen || nombreArchivo,
-              cod_cliente: h.cod_cliente_drogueria || h.cliente_id,
-              nombre_cliente: h.nombre_cliente || 'Farmacia',
-              drogueria: h.nombre_drogueria || 'Drogueria',
-              codigo_producto: h.codigo_producto_drogueria || h.producto_id,
-              nombre_producto: h.nombre_producto || 'Medicamento',
-              unidades: h.cantidad_facturada,
-              cod_sap: h.cod_sap || null,
-              cliente_ident01: h.cliente_ident01 || null,
-            }))
-          );
-        } catch (err: any) {
-          console.warn('Error al guardar en Supabase fact_historico_ventas:', err.message);
-        }
+        const { error } = await insertarPorLotes(
+          supabase,
+          'fact_historico_ventas',
+          nuevoHistorico.map((h) => ({
+            fecha: h.fecha_pedido,
+            mes_periodo: h.mes_periodo || mesPeriodo,
+            archivo_origen: h.archivo_origen || nombreArchivo,
+            cod_cliente: h.cod_cliente_drogueria || h.cliente_id,
+            nombre_cliente: h.nombre_cliente || 'Farmacia',
+            drogueria: h.nombre_drogueria || 'Drogueria',
+            codigo_producto: h.codigo_producto_drogueria || h.producto_id,
+            nombre_producto: h.nombre_producto || 'Medicamento',
+            unidades: h.cantidad_facturada,
+            cod_sap: h.cod_sap || null,
+            cliente_ident01: h.cliente_ident01 || null,
+          }))
+        );
+        if (error) console.warn('Error al guardar en Supabase fact_historico_ventas:', error);
       }
 
       onImportarHistorico(nuevoHistorico);
@@ -1086,32 +994,90 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     setNombreArchivo('');
   };
 
-  // Funciones de Homologación Rápida y Mapeo Cod SAP
+  // Homologación de farmacias y diccionario Cod SAP: se guardan localmente y, si hay Supabase, se sincronizan.
+  const sincronizarAliases = async (alias: ClienteDrogueriaAlias[]) => {
+    const supabase = getSupabaseClient();
+    if (!supabase || alias.length === 0) return;
+    const { error } = await supabase.from('dim_cliente_drogueria_alias').upsert(
+      alias.map((a) => ({
+        cliente_ident01: a.cliente_ident01,
+        drogueria: a.drogueria,
+        cod_cliente_drogueria: a.cod_cliente_drogueria ?? null,
+        nombre_cliente_drogueria: a.nombre_cliente_drogueria,
+        verificado: a.verificado,
+      })),
+      { onConflict: 'drogueria,nombre_cliente_drogueria,cod_cliente_drogueria' }
+    );
+    if (error) console.warn('No se pudo sincronizar alias con Supabase:', error.message);
+  };
+
+  const sincronizarMapeos = async (mapeos: ProductoDrogueriaMapeo[]) => {
+    const supabase = getSupabaseClient();
+    if (!supabase || mapeos.length === 0) return;
+    const { error } = await supabase.from('dim_producto_drogueria_mapeo').upsert(
+      mapeos.map((m) => ({
+        cod_sap: m.cod_sap,
+        drogueria: m.drogueria,
+        codigo_producto_drogueria: m.codigo_producto_drogueria,
+        nombre_producto_drogueria: m.nombre_producto_drogueria ?? null,
+      })),
+      { onConflict: 'drogueria,codigo_producto_drogueria' }
+    );
+    if (error) console.warn('No se pudo sincronizar el diccionario con Supabase:', error.message);
+  };
+
+  const agregarAliases = (nuevos: ClienteDrogueriaAlias[]) => {
+    const claves = new Set(nuevos.map((a) => `${norm(a.drogueria)}|${norm(a.nombre_cliente_drogueria)}`));
+    setAliasesFarmacias((prev) => [
+      ...prev.filter((a) => !claves.has(`${norm(a.drogueria)}|${norm(a.nombre_cliente_drogueria)}`)),
+      ...nuevos,
+    ]);
+    void sincronizarAliases(nuevos);
+  };
+
+  const crearAlias = (drogueria: string, codCliente: string, nombreCliente: string, ident01: string): ClienteDrogueriaAlias => ({
+    id: `alias-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    cliente_ident01: ident01,
+    drogueria,
+    cod_cliente_drogueria: codCliente,
+    nombre_cliente_drogueria: nombreCliente,
+    verificado: true,
+    created_at: new Date().toISOString(),
+  });
+
   const handleConfirmarHomologacion = (drogueria: string, codClienteDrog: string, nombreClienteDrog: string, ident01: string) => {
-    const nuevoAlias: ClienteDrogueriaAlias = {
-      id: `alias-${Date.now()}`,
-      cliente_ident01: ident01,
-      drogueria,
-      cod_cliente_drogueria: codClienteDrog,
-      nombre_cliente_drogueria: nombreClienteDrog,
-      verificado: true,
-      created_at: new Date().toISOString(),
-    };
-    setAliasesFarmacias(prev => [...prev.filter(a => !(a.drogueria.toLowerCase() === drogueria.toLowerCase() && a.nombre_cliente_drogueria.toLowerCase() === nombreClienteDrog.toLowerCase())), nuevoAlias]);
+    agregarAliases([crearAlias(drogueria, codClienteDrog, nombreClienteDrog, ident01)]);
     showNotification('exito', `Homologación guardada: "${nombreClienteDrog}" (${drogueria}) enlazada a ${ident01}.`);
+  };
+
+  const handleConfirmarHomologacionLote = (items: FarmaciaPendiente[]) => {
+    agregarAliases(items.map((p) => crearAlias(p.drogueria, p.cod_cliente, p.nombre_cliente, p.sugerenciaIdent01)));
+    showNotification('exito', `${items.length} farmacias homologadas con la sugerencia automática.`);
+  };
+
+  const handleEliminarAlias = (id: string) => {
+    setAliasesFarmacias((prev) => prev.filter((a) => a.id !== id));
   };
 
   const handleAsignarMapeoSap = (drogueria: string, codigoProducto: string, nombreProducto: string, codSap: string) => {
     const nuevoMapeo: ProductoDrogueriaMapeo = {
-      id: `map-${Date.now()}`,
+      id: `map-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       cod_sap: codSap,
       drogueria,
       codigo_producto_drogueria: codigoProducto,
       nombre_producto_drogueria: nombreProducto,
       created_at: new Date().toISOString(),
     };
-    setMapeosProductosDrogueria(prev => [...prev.filter(m => !(m.drogueria.toLowerCase() === drogueria.toLowerCase() && m.codigo_producto_drogueria.toLowerCase() === codigoProducto.toLowerCase())), nuevoMapeo]);
+    setMapeosProductosDrogueria((prev) => [
+      ...prev.filter((m) => !(norm(m.drogueria) === norm(drogueria) && norm(m.codigo_producto_drogueria) === norm(codigoProducto))),
+      nuevoMapeo,
+    ]);
+    void sincronizarMapeos([nuevoMapeo]);
     showNotification('exito', `Cod SAP ${codSap} asignado a producto ${codigoProducto} (${drogueria}).`);
+  };
+
+  const handleEliminarMapeo = (id: string) => {
+    setMapeosProductosDrogueria((prev) => prev.filter((m) => m.id !== id));
   };
 
   // Manejo de Modales Droguería
@@ -1358,9 +1324,10 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
 
   // SQL Script Generator para Supabase SQL Editor
   const sqlGenerado = useMemo(() => {
+    if (subTab !== 'sql_generator') return '';
     const lines: string[] = [
       '-- SCRIPT DE CARGA DIRECTA PARA SUPABASE SQL EDITOR',
-      '-- Generado automaticamente desde Nova PharmaTransfer Studio',
+      '-- Generado automaticamente desde NOVA Data Studio',
       'BEGIN;',
       '',
       '-- 1. CARGA DE DROGUERIAS (dim_droguerias con ID numerico Primary Key)',
@@ -1442,7 +1409,7 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
 
     lines.push('', 'COMMIT;');
     return lines.join('\n');
-  }, [droguerias, productos, clientes, historicoPrevio]);
+  }, [subTab, droguerias, productos, clientes, historicoPrevio]);
 
   const handleCopiarSql = () => {
     navigator.clipboard.writeText(sqlGenerado);
@@ -1452,6 +1419,7 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
   };
 
   const script1MContenido = useMemo(() => {
+    if (subTab !== 'historico' || seccionHistoricoActiva !== 'guia') return '';
     if (estrategia1M === 'agregada') {
       if (lenguajeScript1M === 'sql') {
         return `-- ==============================================================================
@@ -1544,7 +1512,7 @@ ORDER BY fecha DESC;`;
 psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgres" \\
   -c "\\COPY fact_historico_ventas(fecha, cod_cliente, nombre_cliente, drogueria, codigo_producto, nombre_producto, unidades, cod_sap) FROM 'historico_1M.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';');"`;
     }
-  }, [estrategia1M, lenguajeScript1M]);
+  }, [subTab, seccionHistoricoActiva, estrategia1M, lenguajeScript1M]);
 
   const handleCopiarScript1M = () => {
     navigator.clipboard.writeText(script1MContenido);
@@ -1553,31 +1521,49 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
     setTimeout(() => setCopiadoScript1M(false), 3000);
   };
 
+  // Solo se calcula mientras se mira la tabla del histórico acumulado; la búsqueda usa un valor diferido
+  // para no bloquear el teclado y los cruces con clientes/productos usan índices (antes, un .find por fila).
+  const viendoAcumulado = subTab === 'historico' && seccionHistoricoActiva === 'acumulado';
+  const filtroHistoricoDiferido = useDeferredValue(filtroHistorico);
+
   const historicoFiltrado = useMemo(() => {
-    if (!filtroHistorico.trim()) return historicoPrevio;
-    const q = filtroHistorico.toLowerCase().trim();
+    if (!viendoAcumulado) return [];
+    if (!filtroHistoricoDiferido.trim()) return historicoPrevio;
+    const q = norm(filtroHistoricoDiferido).trim();
+    const clientesPorId = new Map<string, Cliente>();
+    clientes.forEach((c) => {
+      clientesPorId.set(c.id, c);
+      clientesPorId.set(c.ident01, c);
+    });
+    const productosPorId = new Map<string, Producto>();
+    productos.forEach((p) => {
+      productosPorId.set(p.id, p);
+      productosPorId.set(p.sku, p);
+    });
+    const contiene = (v: string | undefined) => !!v && norm(v).includes(q);
     return historicoPrevio.filter((h) => {
-      const cli = clientes.find((c) => c.id === h.cliente_id || c.ident01 === h.cliente_id);
-      const prod = productos.find((p) => p.id === h.producto_id || p.sku === h.producto_id);
+      const cli = clientesPorId.get(h.cliente_id);
+      const prod = productosPorId.get(h.producto_id);
       return (
-        (h.cliente_id && h.cliente_id.toLowerCase().includes(q)) ||
-        (h.producto_id && h.producto_id.toLowerCase().includes(q)) ||
-        (h.cod_sap && h.cod_sap.toLowerCase().includes(q)) ||
-        (h.codigo_producto_drogueria && h.codigo_producto_drogueria.toLowerCase().includes(q)) ||
-        (h.nombre_producto && h.nombre_producto.toLowerCase().includes(q)) ||
-        (h.cod_cliente_drogueria && h.cod_cliente_drogueria.toLowerCase().includes(q)) ||
-        (h.nombre_cliente && h.nombre_cliente.toLowerCase().includes(q)) ||
-        (h.nombre_drogueria && h.nombre_drogueria.toLowerCase().includes(q)) ||
-        (cli?.nombre_fantasia && cli.nombre_fantasia.toLowerCase().includes(q)) ||
-        (cli?.razon_social && cli.razon_social.toLowerCase().includes(q)) ||
-        (prod?.nombre_comercial && prod.nombre_comercial.toLowerCase().includes(q)) ||
-        (prod?.sku && prod.sku.toLowerCase().includes(q)) ||
-        (h.numero_factura_origen && h.numero_factura_origen.toLowerCase().includes(q))
+        contiene(h.cliente_id) ||
+        contiene(h.producto_id) ||
+        contiene(h.cod_sap) ||
+        contiene(h.codigo_producto_drogueria) ||
+        contiene(h.nombre_producto) ||
+        contiene(h.cod_cliente_drogueria) ||
+        contiene(h.nombre_cliente) ||
+        contiene(h.nombre_drogueria) ||
+        contiene(cli?.nombre_fantasia) ||
+        contiene(cli?.razon_social) ||
+        contiene(prod?.nombre_comercial) ||
+        contiene(prod?.sku) ||
+        contiene(h.numero_factura_origen)
       );
     });
-  }, [historicoPrevio, filtroHistorico, clientes, productos]);
+  }, [viendoAcumulado, historicoPrevio, filtroHistoricoDiferido, clientes, productos]);
 
   const metricasHistorico = useMemo(() => {
+    if (!viendoAcumulado) return { udsTotal: 0, udsA: 0, udsB: 0, udsOTC: 0 };
     let udsTotal = 0;
     let udsA = 0;
     let udsB = 0;
@@ -1591,7 +1577,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
       else if (eq.includes('OTC')) udsOTC += cant;
     });
     return { udsTotal, udsA, udsB, udsOTC };
-  }, [historicoPrevio]);
+  }, [viendoAcumulado, historicoPrevio]);
 
   return (
     <div className="space-y-6">
@@ -1634,7 +1620,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
       </div>
 
       {/* Barra de Sub-Pestañas */}
-      <div className={`flex flex-wrap gap-2 p-1.5 rounded-2xl border ${
+      <div className={`flex flex-nowrap sm:flex-wrap overflow-x-auto scrollbar-none gap-2 p-1.5 rounded-2xl border [&>button]:shrink-0 [&>button]:whitespace-nowrap ${
         esClaro ? 'bg-slate-100/80 border-slate-200' : 'bg-slate-900/80 border-slate-800'
       }`}>
         <button
@@ -1862,21 +1848,10 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
 
                       <button
                         type="button"
-                        onClick={() => {
-                          const primerProd = diagnosticoVentasMes.productosSinSap[0];
-                          if (primerProd) {
-                            setItemMapeoSapSeleccionado({
-                              drogueria: primerProd.drogueria,
-                              codigo_producto: primerProd.codigo_producto,
-                              nombre_producto: primerProd.nombre_producto,
-                              codSapElegido: productos[0]?.sku || 'SKU-LOS-50',
-                            });
-                            setModalMapeoSapAbierto(true);
-                          }
-                        }}
+                        onClick={() => irASeccionHistorico('mapeo_sap')}
                         className="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shrink-0 shadow-sm"
                       >
-                        Asignar Cod SAP Faltantes
+                        Asignar Cod SAP faltantes
                       </button>
                     </div>
                   )}
@@ -1900,22 +1875,10 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
 
                       <button
                         type="button"
-                        onClick={() => {
-                          const primeraFarm = diagnosticoVentasMes.farmaciasSinHomologar[0];
-                          if (primeraFarm) {
-                            setItemHomologarSeleccionado({
-                              drogueria: primeraFarm.drogueria,
-                              cod_cliente_drogueria: primeraFarm.cod_cliente,
-                              nombre_cliente_drogueria: primeraFarm.nombre_cliente,
-                              sugerenciaIdent01: primeraFarm.sugerenciaIdent01,
-                              ident01Elegido: primeraFarm.sugerenciaIdent01,
-                            });
-                            setModalHomologarAbierto(true);
-                          }
-                        }}
+                        onClick={() => irASeccionHistorico('homologar')}
                         className="px-3 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shrink-0 shadow-sm"
                       >
-                        Homologar Nombres de Farmacias
+                        Homologar farmacias
                       </button>
                     </div>
                   )}
@@ -2451,10 +2414,10 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
             <div className="space-y-6">
 
               {/* Subnavegador de Histórico Comercial */}
-              <div className={`p-2 rounded-2xl border flex flex-wrap items-center justify-between gap-2 ${
+              <div id="historico-secciones" className={`scroll-mt-20 p-2 rounded-2xl border flex flex-nowrap md:flex-wrap overflow-x-auto scrollbar-none items-center justify-between gap-2 [&_button]:shrink-0 [&_button]:whitespace-nowrap ${
                 esClaro ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800 shadow-sm'
               }`}>
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-nowrap md:flex-wrap items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => setSeccionHistoricoActiva('cargar')}
@@ -2532,6 +2495,31 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                 </button>
               </div>
 
+              {seccionHistoricoActiva === 'homologar' && (
+                <PanelHomologarFarmacias
+                  pendientes={diagnosticoVentasMes.farmaciasSinHomologar}
+                  hayArchivo={filasParseadas.length > 0}
+                  aliases={aliasesFarmacias}
+                  clientes={clientes}
+                  onConfirmar={handleConfirmarHomologacion}
+                  onConfirmarLote={handleConfirmarHomologacionLote}
+                  onEliminarAlias={handleEliminarAlias}
+                />
+              )}
+
+              {seccionHistoricoActiva === 'mapeo_sap' && (
+                <PanelMapeoSap
+                  pendientes={diagnosticoVentasMes.productosSinSap}
+                  hayArchivo={filasParseadas.length > 0}
+                  mapeos={mapeosProductosDrogueria}
+                  productos={productos}
+                  onAsignar={handleAsignarMapeoSap}
+                  onEliminar={handleEliminarMapeo}
+                />
+              )}
+
+              {seccionHistoricoActiva === 'cargar' && (
+<>
               {/* 1. BANNER: ¿QUÉ SIGUE DESPUÉS DE CARGAR PRODUCTOS, DROGUERÍAS Y CLIENTES? */}
               <div className={`p-5 rounded-2xl border ${
                 esClaro ? 'bg-gradient-to-r from-teal-50 via-indigo-50/40 to-slate-50 border-teal-200 shadow-sm' : 'bg-gradient-to-r from-teal-950/40 via-indigo-950/20 to-slate-900 border-teal-800/60 shadow-lg'
@@ -2643,6 +2631,11 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                 </div>
               </div>
 
+</>
+              )}
+
+              {seccionHistoricoActiva === 'guia' && (
+<>
               {/* 2. SOLUCIÓN TÉCNICA: ¿CÓMO CARGAR +1.000.000 DE FILAS EN SUPABASE GRATUITO? */}
               <div className={`p-5 rounded-2xl border space-y-4 ${
                 esClaro ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800 shadow-lg'
@@ -2869,6 +2862,11 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                 </div>
               </div>
 
+</>
+              )}
+
+              {seccionHistoricoActiva === 'acumulado' && (
+<>
               {/* 4. MÉTRICAS Y TABLA DE HISTÓRICO CARGADO (8 COLUMNAS EXACTAS) */}
               <div className={`p-5 rounded-2xl border space-y-4 ${
                 esClaro ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800'
@@ -3038,6 +3036,8 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                   </div>
                 )}
               </div>
+</>
+              )}
 
             </div>
           )}

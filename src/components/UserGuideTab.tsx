@@ -5,20 +5,10 @@ import {
   Barcode, 
   Sparkles, 
   Layers, 
-  CheckCircle2, 
-  FileSpreadsheet, 
   Clock, 
   ShieldCheck, 
   User, 
-  ChevronRight,
-  ArrowRight,
-  HelpCircle,
-  Lightbulb,
-  Building2,
   Database,
-  UploadCloud,
-  FileCheck2,
-  Users
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 

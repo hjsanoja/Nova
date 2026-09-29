@@ -1,31 +1,25 @@
-import React, { useState, useMemo } from 'react';
-import { 
-  PedidoCabecera, 
-  PedidoDetalle, 
-  Cliente, 
-  Drogueria, 
-  Producto, 
-  MotivoAjuste, 
-  EstadoPedido 
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  PedidoCabecera,
+  PedidoDetalle,
+  Cliente,
+  Drogueria,
+  Producto,
+  MotivoAjuste,
+  EstadoPedido,
 } from '../types/pharmacy';
 import { generarCsvDrogueria, descargarArchivoCsv } from '../services/csvExportEngine';
-import { 
-  CheckCircle2, 
-  Download, 
+import {
+  CheckCircle2,
+  Download,
   Search,
-  RefreshCw,
   Send,
   FileCheck2,
-  AlertTriangle,
-  Building,
-  User,
-  Calendar,
-  FileSpreadsheet,
   Check,
   PackageCheck,
-  ChevronRight
+  ChevronLeft,
+  ListChecks,
 } from 'lucide-react';
-import { useTheme } from '../context/ThemeContext';
 
 interface TeletransferQueueTabProps {
   pedidosCabecera: PedidoCabecera[];
@@ -34,8 +28,45 @@ interface TeletransferQueueTabProps {
   droguerias: Drogueria[];
   productos: Producto[];
   onActualizarDetalle: (detalleId: string, cantidadConfirmada: number, motivoAjuste: MotivoAjuste, observaciones?: string) => void;
-  onCambiarEstadoPedido: (pedidoId: string, nuevoEstado: EstadoPedido) => void;
+  onCambiarEstadoPedido: (pedidoId: string, nuevoEstado: EstadoPedido, numeroFactura?: string) => void;
 }
+
+const ESTADOS_BADGE: Record<string, { texto: string; clases: string }> = {
+  facturado: { texto: 'Facturado', clases: 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800' },
+  en_proceso: { texto: 'En Droguería', clases: 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800' },
+  enviado_teletransferencia: { texto: 'Por Procesar', clases: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800' },
+  procesado_total: { texto: 'Despachado Total', clases: 'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950 dark:text-teal-300 dark:border-teal-800' },
+  procesado_parcial: { texto: 'Despacho Parcial', clases: 'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800' },
+};
+
+const EstadoBadge: React.FC<{ estado: EstadoPedido }> = ({ estado }) => {
+  const badge = ESTADOS_BADGE[estado] ?? {
+    texto: estado,
+    clases: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
+  };
+  return (
+    <span className={`shrink-0 px-2 py-0.5 rounded-full text-[11px] font-bold border ${badge.clases}`}>
+      {badge.texto}
+    </span>
+  );
+};
+
+const FILTROS_ESTADO: { valor: string; etiqueta: string }[] = [
+  { valor: 'enviado_teletransferencia', etiqueta: 'Por procesar' },
+  { valor: 'en_proceso', etiqueta: 'En droguería' },
+  { valor: 'facturado', etiqueta: 'Facturados' },
+  { valor: 'todos', etiqueta: 'Todos' },
+];
+
+const nombreCliente = (c?: Cliente) =>
+  c?.nombre_fantasia || c?.nombre_comercial || c?.razon_social || 'Farmacia desconocida';
+
+// Columnas de la conciliación: SKU y Precio se agregan solo en pantallas muy anchas (PC del transferencista).
+const GRID_LINEA =
+  'md:grid md:items-center md:gap-3 md:grid-cols-[minmax(0,1fr)_4.5rem_6rem_5.5rem_8.5rem] 2xl:grid-cols-[6rem_minmax(0,1fr)_4.5rem_6rem_5rem_5.5rem_8.5rem]';
+
+const campoBase =
+  'rounded-lg border focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white text-slate-900 dark:bg-slate-800 dark:text-white';
 
 export const TeletransferQueueTab: React.FC<TeletransferQueueTabProps> = ({
   pedidosCabecera,
@@ -46,260 +77,274 @@ export const TeletransferQueueTab: React.FC<TeletransferQueueTabProps> = ({
   onActualizarDetalle,
   onCambiarEstadoPedido,
 }) => {
-  const { esClaro } = useTheme();
-  const [pedidoSeleccionadoId, setPedidoSeleccionadoId] = useState<string>(pedidosCabecera[0]?.id || '');
+  const [pedidoSeleccionadoId, setPedidoSeleccionadoId] = useState<string>('');
+  const [vistaDetalle, setVistaDetalle] = useState(false); // solo aplica bajo lg: lista <-> detalle
   const [filtroDrogueria, setFiltroDrogueria] = useState<string>('all');
-  const [filtroEstado, setFiltroEstado] = useState<string>('todos');
+  const [filtroEstado, setFiltroEstado] = useState<string>('enviado_teletransferencia');
   const [busqueda, setBusqueda] = useState<string>('');
+  const [numeroFactura, setNumeroFactura] = useState('');
   const [mensajeToast, setMensajeToast] = useState<string | null>(null);
+  const temporizadorToast = useRef<number | undefined>(undefined);
+  const conciliacionRef = useRef<HTMLDivElement>(null);
 
-  // Modal / Sección para Conciliación de Facturación
-  const [modalFacturacionAbierto, setModalFacturacionAbierto] = useState(false);
-  const [numeroFacturaDrogueria, setNumeroFacturaDrogueria] = useState('');
+  useEffect(() => () => window.clearTimeout(temporizadorToast.current), []);
 
-  const productosMap = useMemo(() => {
-    const map = new Map<string, Producto>();
-    productos.forEach((p) => map.set(p.id, p));
-    return map;
-  }, [productos]);
+  const mostrarToast = useCallback((texto: string) => {
+    setMensajeToast(texto);
+    window.clearTimeout(temporizadorToast.current);
+    temporizadorToast.current = window.setTimeout(() => setMensajeToast(null), 3500);
+  }, []);
 
-  const pedidosFiltrados = useMemo(() => {
+  // Índices por id: evitan un .find() sobre todos los clientes/droguerías por cada pedido dibujado.
+  const productosMap = useMemo(() => new Map(productos.map((p) => [p.id, p])), [productos]);
+  const clientesMap = useMemo(() => {
+    const mapa = new Map<string, Cliente>();
+    clientes.forEach((c) => {
+      mapa.set(c.id, c);
+      if (c.ident01) mapa.set(c.ident01, c);
+    });
+    return mapa;
+  }, [clientes]);
+  const drogueriasMap = useMemo(() => new Map(droguerias.map((d) => [d.id, d])), [droguerias]);
+
+  const pedidosBase = useMemo(() => {
+    const q = busqueda.toLowerCase().trim();
     return pedidosCabecera.filter((ped) => {
       if (filtroDrogueria !== 'all' && ped.drogueria_id !== filtroDrogueria) return false;
-      if (filtroEstado !== 'todos' && ped.estado !== filtroEstado) return false;
-      if (!busqueda) return true;
-      const q = busqueda.toLowerCase().trim();
-      const cli = clientes.find((c) => c.id === ped.cliente_id || c.ident01 === ped.cliente_id);
-      const nombreCli = (cli?.nombre_fantasia || cli?.nombre_comercial || cli?.razon_social || '').toLowerCase();
-      const rifCli = (cli?.rif || '').toLowerCase();
-      const numPed = (ped.numero_pedido || '').toLowerCase();
+      if (!q) return true;
+      const cli = clientesMap.get(ped.cliente_id);
       return (
-        numPed.includes(q) ||
-        nombreCli.includes(q) ||
-        rifCli.includes(q)
+        (ped.numero_pedido || '').toLowerCase().includes(q) ||
+        nombreCliente(cli).toLowerCase().includes(q) ||
+        (cli?.rif || '').toLowerCase().includes(q)
       );
     });
-  }, [pedidosCabecera, filtroDrogueria, filtroEstado, busqueda, clientes]);
+  }, [pedidosCabecera, filtroDrogueria, busqueda, clientesMap]);
 
-  const pedidoActual = useMemo(() => {
-    return pedidosFiltrados.find((p) => p.id === pedidoSeleccionadoId) || pedidosFiltrados[0] || pedidosCabecera[0];
-  }, [pedidosFiltrados, pedidoSeleccionadoId, pedidosCabecera]);
-
-  const clienteActual = useMemo(() => {
-    if (!pedidoActual) return clientes[0];
-    return clientes.find((c) => c.id === pedidoActual.cliente_id || c.ident01 === pedidoActual.cliente_id) || clientes[0];
-  }, [clientes, pedidoActual]);
-
-  const drogueriaActual = useMemo(() => {
-    if (!pedidoActual) return droguerias[0];
-    return droguerias.find((d) => d.id === pedidoActual.drogueria_id) || droguerias[0];
-  }, [droguerias, pedidoActual]);
-
-  const detallesActuales = useMemo(() => {
-    if (!pedidoActual) return [];
-    return pedidosDetalle.filter((d) => d.pedido_id === pedidoActual.id);
-  }, [pedidosDetalle, pedidoActual]);
-
-  const { unidadesSolicitadas, unidadesConfirmadas, montoTotalSolicitado, montoTotalConfirmado, fillRateCalculado } = useMemo(() => {
-    let sol = 0;
-    let conf = 0;
-    let totalSolMonto = 0;
-    let totalConfMonto = 0;
-    detallesActuales.forEach((d) => {
-      sol += d.cantidad_solicitada;
-      conf += d.cantidad_confirmada;
-      const prod = productosMap.get(d.producto_id);
-      const precio = d.precio_unitario || prod?.precio_lista || 1;
-      const descFactor = 1 - (d.descuento_porcentaje || 0) / 100;
-      totalSolMonto += d.cantidad_solicitada * precio * descFactor;
-      totalConfMonto += conf * precio * descFactor;
+  const conteos = useMemo(() => {
+    const c: Record<string, number> = { todos: pedidosBase.length };
+    pedidosBase.forEach((p) => {
+      c[p.estado] = (c[p.estado] ?? 0) + 1;
     });
-    const fill = sol > 0 ? Number(((conf / sol) * 100).toFixed(1)) : 100;
+    return c;
+  }, [pedidosBase]);
+
+  const pedidosFiltrados = useMemo(
+    () => (filtroEstado === 'todos' ? pedidosBase : pedidosBase.filter((p) => p.estado === filtroEstado)),
+    [pedidosBase, filtroEstado]
+  );
+
+  // El detalle siempre corresponde a un pedido visible en la lista (antes caía en un pedido oculto por los filtros).
+  const pedidoActual = useMemo(
+    () => pedidosFiltrados.find((p) => p.id === pedidoSeleccionadoId) ?? pedidosFiltrados[0],
+    [pedidosFiltrados, pedidoSeleccionadoId]
+  );
+  const clienteActual = pedidoActual ? clientesMap.get(pedidoActual.cliente_id) : undefined;
+  const drogueriaActual = pedidoActual ? drogueriasMap.get(pedidoActual.drogueria_id) : undefined;
+
+  const detallesActuales = useMemo(
+    () => (pedidoActual ? pedidosDetalle.filter((d) => d.pedido_id === pedidoActual.id) : []),
+    [pedidosDetalle, pedidoActual]
+  );
+
+  useEffect(() => {
+    setNumeroFactura(pedidoActual?.numero_factura ?? '');
+  }, [pedidoActual?.id, pedidoActual?.numero_factura]);
+
+  const totales = useMemo(() => {
+    let solicitadas = 0;
+    let confirmadas = 0;
+    let monto = 0;
+    detallesActuales.forEach((d) => {
+      solicitadas += d.cantidad_solicitada;
+      confirmadas += d.cantidad_confirmada;
+      const precio = d.precio_unitario || productosMap.get(d.producto_id)?.precio_lista || 1;
+      monto += d.cantidad_confirmada * precio * (1 - (d.descuento_porcentaje || 0) / 100);
+    });
     return {
-      unidadesSolicitadas: sol,
-      unidadesConfirmadas: conf,
-      montoTotalSolicitado: totalSolMonto,
-      montoTotalConfirmado: totalConfMonto,
-      fillRateCalculado: fill,
+      solicitadas,
+      confirmadas,
+      monto,
+      fillRate: solicitadas > 0 ? Number(((confirmadas / solicitadas) * 100).toFixed(1)) : 100,
     };
   }, [detallesActuales, productosMap]);
 
+  const seleccionarPedido = (id: string) => {
+    setPedidoSeleccionadoId(id);
+    setVistaDetalle(true);
+    window.scrollTo({ top: 0 });
+  };
+
   const handleDescargarCsv = () => {
     if (!pedidoActual || !drogueriaActual || !clienteActual) return;
-    const csvResult = generarCsvDrogueria(pedidoActual, detallesActuales, clienteActual, drogueriaActual, productosMap);
-    descargarArchivoCsv(csvResult);
-    setMensajeToast(`Descargado CSV con layout para ${drogueriaActual.nombre_drogueria}`);
-    setTimeout(() => setMensajeToast(null), 3000);
+    descargarArchivoCsv(generarCsvDrogueria(pedidoActual, detallesActuales, clienteActual, drogueriaActual, productosMap));
+    mostrarToast(`CSV descargado con el layout de ${drogueriaActual.nombre_drogueria}`);
   };
 
-  const handleMarcarProcesado = () => {
-    if (!pedidoActual || !drogueriaActual || !clienteActual) return;
-    onCambiarEstadoPedido(pedidoActual.id, 'en_proceso');
-    setMensajeToast(`Pedido ${pedidoActual.numero_pedido} marcado como Enviado a Droguería.`);
-    setTimeout(() => setMensajeToast(null), 3500);
-  };
-
-  const handleConfirmarFacturacionCompleta = () => {
+  const handleMarcarEnviado = () => {
     if (!pedidoActual) return;
-    onCambiarEstadoPedido(pedidoActual.id, 'facturado');
-    setModalFacturacionAbierto(false);
-    setMensajeToast(`¡Pedido ${pedidoActual.numero_pedido} confirmado como FACTURADO con éxito!`);
-    setTimeout(() => setMensajeToast(null), 4000);
+    onCambiarEstadoPedido(pedidoActual.id, 'en_proceso');
+    mostrarToast(`Pedido ${pedidoActual.numero_pedido} marcado como enviado a droguería.`);
   };
 
-  const getEstadoBadge = (estado: EstadoPedido) => {
-    switch (estado) {
-      case 'facturado':
-        return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-300">Facturado</span>;
-      case 'en_proceso':
-        return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-300">En Droguería</span>;
-      case 'enviado_teletransferencia':
-        return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-300">Por Procesar</span>;
-      case 'procesado_total':
-        return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300 border border-teal-300">Despachado Total</span>;
-      case 'procesado_parcial':
-        return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-300 border border-orange-300">Despacho Parcial</span>;
-      default:
-        return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300">{estado}</span>;
+  const handleFacturarCompleto = () => {
+    detallesActuales.forEach((d) => {
+      if (d.cantidad_confirmada !== d.cantidad_solicitada) {
+        onActualizarDetalle(d.id, d.cantidad_solicitada, 'sin_quiebre', d.observaciones_linea);
+      }
+    });
+    mostrarToast('Todas las líneas quedaron facturadas completas.');
+  };
+
+  const handleConfirmarFacturacion = () => {
+    if (!pedidoActual) return;
+    onCambiarEstadoPedido(pedidoActual.id, 'facturado', numeroFactura.trim() || undefined);
+    mostrarToast(`Pedido ${pedidoActual.numero_pedido} confirmado como FACTURADO.`);
+  };
+
+  const handleCambiarCantidad = (det: PedidoDetalle, valorCrudo: string) => {
+    const tope = det.cantidad_solicitada * 2;
+    const cantidad = Math.min(Math.max(parseInt(valorCrudo, 10) || 0, 0), tope);
+    const motivo: MotivoAjuste =
+      cantidad >= det.cantidad_solicitada
+        ? 'sin_quiebre'
+        : det.motivo_ajuste === 'sin_quiebre'
+        ? 'quiebre_stock_drogueria'
+        : det.motivo_ajuste;
+    onActualizarDetalle(det.id, cantidad, motivo, det.observaciones_linea);
+  };
+
+  // Teclado (PC): Enter / ↓ pasa a la siguiente cantidad, ↑ a la anterior, para conciliar sin usar el mouse.
+  const moverFoco = (e: React.KeyboardEvent<HTMLInputElement>, paso: 1 | -1) => {
+    const campos = Array.from(
+      conciliacionRef.current?.querySelectorAll<HTMLInputElement>('input[data-cantidad]') ?? []
+    );
+    const destino = campos[campos.indexOf(e.currentTarget) + paso];
+    if (destino) {
+      e.preventDefault();
+      destino.focus();
     }
   };
 
   return (
-    <div className="flex flex-col gap-5 w-full">
-
-      {/* Toast Notification */}
+    <div className="flex flex-col gap-4 w-full">
       {mensajeToast && (
-        <div className="fixed top-16 left-4 right-4 md:left-auto md:right-8 bg-slate-900 text-white py-3 px-5 rounded-xl shadow-xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-top">
+        <div
+          role="status"
+          aria-live="polite"
+          className="animate-in fixed top-16 left-3 right-3 md:left-auto md:right-8 md:max-w-md bg-slate-900 text-white py-3 px-4 rounded-xl shadow-xl flex items-center gap-3 z-50"
+        >
           <CheckCircle2 className="w-5 h-5 text-teal-400 shrink-0" />
           <span className="text-sm font-medium">{mensajeToast}</span>
         </div>
       )}
 
-      {/* Cabecera Principal y Filtros Simplificados */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      {/* Título y filtros */}
+      <div className="flex flex-col gap-3">
         <div>
-          <h1 className={`font-display text-2xl md:text-3xl font-bold tracking-tight ${
-            esClaro ? 'text-slate-900' : 'text-white'
-          }`}>
-            Teletransferencias & Procesamiento
+          <h1 className="font-display text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Teletransferencias
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
-            Gestión, descarga de CSV por droguería y confirmación de unidades facturadas.
+            Descarga el CSV por droguería y concilia las unidades facturadas.
           </p>
         </div>
 
-        {/* Barra de Filtros */}
-        <div className={`flex flex-wrap items-center gap-2 p-1.5 rounded-xl border shadow-xs ${
-          esClaro ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'
-        }`}>
-          {/* Buscador */}
-          <div className="relative flex items-center">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 pointer-events-none" />
+        <div className="flex flex-col md:flex-row md:items-center gap-2">
+          <div className="relative flex-1 md:max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
-              type="text"
+              type="search"
               value={busqueda}
               onChange={(e) => setBusqueda(e.target.value)}
-              placeholder="Buscar por N° pedido o farmacia..."
-              className={`pl-8 pr-3 py-1.5 rounded-lg text-xs w-48 sm:w-56 focus:outline-none focus:ring-1 focus:ring-teal-500 border ${
-                esClaro ? 'bg-slate-50 border-slate-200 text-slate-900' : 'bg-slate-800 border-slate-700 text-white'
-              }`}
+              placeholder="Buscar por N° de pedido, farmacia o RIF"
+              aria-label="Buscar pedidos"
+              className={`${campoBase} w-full min-h-11 pl-9 pr-3 text-sm border-slate-200 dark:border-slate-700`}
             />
           </div>
-
-          {/* Filtro Droguería */}
           <select
             value={filtroDrogueria}
             onChange={(e) => setFiltroDrogueria(e.target.value)}
-            className={`text-xs font-semibold py-1.5 px-2.5 rounded-lg border focus:outline-none ${
-              esClaro ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-slate-800 border-slate-700 text-slate-200'
-            }`}
+            aria-label="Filtrar por droguería"
+            className={`${campoBase} min-h-11 px-3 text-sm font-semibold border-slate-200 dark:border-slate-700`}
           >
-            <option value="all">Todas las Droguerías</option>
+            <option value="all">Todas las droguerías</option>
             {droguerias.map((d) => (
               <option key={d.id} value={d.id}>{d.nombre_drogueria}</option>
             ))}
           </select>
+        </div>
 
-          {/* Filtro Estado */}
-          <select
-            value={filtroEstado}
-            onChange={(e) => setFiltroEstado(e.target.value)}
-            className={`text-xs font-semibold py-1.5 px-2.5 rounded-lg border focus:outline-none ${
-              esClaro ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-slate-800 border-slate-700 text-slate-200'
-            }`}
-          >
-            <option value="todos">Todos los Estados</option>
-            <option value="enviado_teletransferencia">Pendientes por Procesar</option>
-            <option value="en_proceso">En Droguería</option>
-            <option value="facturado">Facturados</option>
-          </select>
+        <div role="tablist" aria-label="Estado del pedido" className="flex gap-1.5 overflow-x-auto scrollbar-none -mx-3.5 px-3.5 sm:mx-0 sm:px-0">
+          {FILTROS_ESTADO.map((f) => {
+            const activo = filtroEstado === f.valor;
+            return (
+              <button
+                key={f.valor}
+                type="button"
+                role="tab"
+                aria-selected={activo}
+                onClick={() => setFiltroEstado(f.valor)}
+                className={`shrink-0 min-h-10 px-3.5 rounded-full text-xs font-bold border transition-colors ${
+                  activo
+                    ? 'bg-teal-600 border-teal-600 text-white'
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100 dark:bg-slate-900 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                }`}
+              >
+                {f.etiqueta}
+                <span className={`ml-1.5 font-mono ${activo ? 'text-teal-100' : 'text-slate-400'}`}>
+                  {conteos[f.valor] ?? 0}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Grid de 2 Columnas: Lista de Pedidos (Izquierda) + Detalle & Facturación (Derecha) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-        
-        {/* Panel Izquierdo: Lista de Pedidos (4 cols en LG) */}
-        <div className="lg:col-span-4 flex flex-col gap-2.5">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Pedidos Recibidos ({pedidosFiltrados.length})
-            </span>
-            <span className="text-[11px] text-slate-500 font-mono">
-              Actualizado
-            </span>
-          </div>
-
-          <div className="space-y-2 max-h-[75vh] overflow-y-auto pr-1">
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)] gap-4 lg:gap-5 items-start">
+        {/* Lista de pedidos */}
+        <section
+          aria-label="Pedidos recibidos"
+          className={`${vistaDetalle ? 'hidden lg:flex' : 'flex'} flex-col gap-2 lg:sticky lg:top-[4.5rem] lg:max-h-[calc(100dvh-6rem)]`}
+        >
+          <span className="px-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+            Pedidos ({pedidosFiltrados.length})
+          </span>
+          <div className="flex flex-col gap-2 lg:overflow-y-auto lg:pr-1">
             {pedidosFiltrados.length === 0 ? (
-              <div className={`p-8 text-center rounded-2xl border text-slate-400 text-xs ${
-                esClaro ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'
-              }`}>
-                No se encontraron pedidos con los filtros aplicados.
+              <div className="p-8 text-center rounded-2xl border border-slate-200 bg-white text-slate-400 text-sm dark:bg-slate-900 dark:border-slate-800">
+                No hay pedidos con los filtros aplicados.
               </div>
             ) : (
               pedidosFiltrados.map((ped) => {
-                const cli = clientes.find((c) => c.id === ped.cliente_id);
-                const drog = droguerias.find((d) => d.id === ped.drogueria_id);
-                const isSelected = ped.id === pedidoActual?.id;
-
+                const seleccionado = ped.id === pedidoActual?.id;
                 return (
                   <button
                     key={ped.id}
-                    onClick={() => {
-                      setPedidoSeleccionadoId(ped.id);
-                      setModalFacturacionAbierto(false);
-                    }}
-                    className={`w-full text-left p-3.5 rounded-xl border transition-all relative ${
-                      isSelected
-                        ? 'border-teal-600 bg-teal-500/5 shadow-xs ring-1 ring-teal-500'
-                        : esClaro
-                        ? 'bg-white border-slate-200 hover:border-slate-300'
-                        : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                    type="button"
+                    onClick={() => seleccionarPedido(ped.id)}
+                    aria-current={seleccionado ? 'true' : undefined}
+                    className={`cv-auto w-full text-left p-3.5 rounded-xl border transition-colors ${
+                      seleccionado
+                        ? 'border-teal-600 bg-teal-50 ring-1 ring-teal-500 dark:bg-teal-950/30'
+                        : 'bg-white border-slate-200 hover:border-slate-300 dark:bg-slate-900 dark:border-slate-800 dark:hover:border-slate-700'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2 mb-1.5">
-                      <span className="font-mono text-xs font-bold text-teal-600 dark:text-teal-400">
-                        {ped.numero_pedido}
-                      </span>
-                      {getEstadoBadge(ped.estado)}
+                      <span className="font-mono text-xs font-bold text-teal-700 dark:text-teal-400">{ped.numero_pedido}</span>
+                      <EstadoBadge estado={ped.estado} />
                     </div>
-
-                    <p className={`font-semibold text-xs leading-snug truncate ${
-                      esClaro ? 'text-slate-900' : 'text-white'
-                    }`}>
-                      {cli?.nombre_fantasia || cli?.nombre_comercial || cli?.razon_social || 'Farmacia Desconocida'}
+                    <p className="font-semibold text-sm leading-snug truncate text-slate-900 dark:text-white">
+                      {nombreCliente(clientesMap.get(ped.cliente_id))}
                     </p>
-
-                    <div className="flex items-center justify-between text-[11px] text-slate-500 mt-2">
-                      <span className="truncate max-w-[130px]">{drog?.nombre_drogueria}</span>
+                    <div className="flex items-center justify-between gap-2 text-xs text-slate-500 mt-1.5">
+                      <span className="truncate">{drogueriasMap.get(ped.drogueria_id)?.nombre_drogueria}</span>
                       <span className="font-mono font-bold text-slate-700 dark:text-slate-300">
                         ${ped.total_solicitado.toFixed(2)}
                       </span>
                     </div>
-
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
-                      <span>Eq: {ped.equipo_origen}</span>
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 mt-0.5">
+                      <span>Eq. {ped.equipo_origen}</span>
                       <span>{new Date(ped.fecha_pedido).toLocaleDateString()}</span>
                     </div>
                   </button>
@@ -307,259 +352,241 @@ export const TeletransferQueueTab: React.FC<TeletransferQueueTabProps> = ({
               })
             )}
           </div>
-        </div>
+        </section>
 
-        {/* Panel Derecho: Detalle del Pedido, Descarga CSV y Confirmación de Facturación (8 cols) */}
+        {/* Detalle del pedido */}
         {pedidoActual ? (
-          <div className="lg:col-span-8 flex flex-col gap-4">
-            
-            {/* Tarjeta de Resumen y Acciones Rápidas */}
-            <div className={`p-5 rounded-2xl border shadow-xs space-y-4 ${
-              esClaro ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'
-            }`}>
-              {/* Encabezado del Pedido Seleccionado */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-mono text-sm font-bold text-teal-600 dark:text-teal-400">
-                      {pedidoActual.numero_pedido}
-                    </span>
-                    {getEstadoBadge(pedidoActual.estado)}
+          <section aria-label="Detalle del pedido" className={`${vistaDetalle ? 'flex' : 'hidden lg:flex'} flex-col gap-4 min-w-0`}>
+            <button
+              type="button"
+              onClick={() => setVistaDetalle(false)}
+              className="lg:hidden self-start min-h-11 -mb-1 inline-flex items-center gap-1 pr-3 text-sm font-semibold text-teal-700 dark:text-teal-400"
+            >
+              <ChevronLeft className="w-5 h-5" />
+              Volver a pedidos
+            </button>
+
+            <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-800 space-y-4">
+              <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className="font-mono text-sm font-bold text-teal-700 dark:text-teal-400">{pedidoActual.numero_pedido}</span>
+                    <EstadoBadge estado={pedidoActual.estado} />
                   </div>
-                  <h3 className={`text-base font-bold ${esClaro ? 'text-slate-900' : 'text-white'}`}>
-                    {clienteActual?.nombre_fantasia || clienteActual?.nombre_comercial || clienteActual?.razon_social || 'Farmacia'} ({clienteActual?.rif || 'Sin RIF'})
-                  </h3>
+                  <h2 className="text-base font-bold text-slate-900 dark:text-white break-words">
+                    {nombreCliente(clienteActual)}
+                    <span className="font-mono text-xs font-medium text-slate-500"> · {clienteActual?.rif || 'Sin RIF'}</span>
+                  </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Droguería Destino: <strong className="text-slate-700 dark:text-slate-200">{drogueriaActual?.nombre_drogueria}</strong> · Equipo Origen: {pedidoActual.equipo_origen}
+                    Droguería: <strong className="text-slate-700 dark:text-slate-200">{drogueriaActual?.nombre_drogueria}</strong> · Equipo {pedidoActual.equipo_origen}
                   </p>
                 </div>
 
-                {/* Botones de Acción de Teletransferencia */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Descargar CSV en formato Droguería */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:flex xl:flex-wrap gap-2">
                   <button
+                    type="button"
                     onClick={handleDescargarCsv}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors shadow-xs"
-                    title={`Descargar archivo formateado para ${drogueriaActual?.nombre_drogueria}`}
+                    className="min-h-11 inline-flex items-center justify-center gap-2 px-4 rounded-xl text-sm font-bold bg-teal-600 hover:bg-teal-500 text-white shadow-sm"
+                    title={`Descargar archivo con el layout de ${drogueriaActual?.nombre_drogueria}`}
                   >
-                    <Download className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Descargar CSV Droguería</span>
+                    <Download className="w-4 h-4" />
+                    Descargar CSV
                   </button>
-
-                  {/* Marcar como Enviado a Droguería si está pendiente */}
                   {pedidoActual.estado === 'enviado_teletransferencia' && (
                     <button
-                      onClick={handleMarcarProcesado}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white transition-colors shadow-xs"
+                      type="button"
+                      onClick={handleMarcarEnviado}
+                      className="min-h-11 inline-flex items-center justify-center gap-2 px-4 rounded-xl text-sm font-bold bg-blue-600 hover:bg-blue-500 text-white"
                     >
-                      <Send className="w-3.5 h-3.5" />
-                      <span>Confirmar Envío a Droguería</span>
+                      <Send className="w-4 h-4" />
+                      Marcar enviado
                     </button>
                   )}
+                </div>
+              </div>
 
-                  {/* Botón Principal: Confirmar Facturación & Unidades Reales */}
+              <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                {[
+                  { t: 'Solicitadas', v: `${totales.solicitadas} uds`, c: 'text-slate-800 dark:text-slate-100' },
+                  { t: 'Facturadas', v: `${totales.confirmadas} uds`, c: 'text-teal-700 dark:text-teal-400' },
+                  { t: 'Monto liquidado', v: `$${totales.monto.toFixed(2)}`, c: 'text-slate-800 dark:text-slate-100' },
+                  {
+                    t: 'Fill-rate',
+                    v: `${totales.fillRate}%`,
+                    c: totales.fillRate >= 90 ? 'text-emerald-600' : totales.fillRate >= 70 ? 'text-amber-500' : 'text-rose-500',
+                  },
+                ].map((m) => (
+                  <div key={m.t} className="p-3 rounded-xl border border-slate-100 bg-slate-50 dark:bg-slate-800/40 dark:border-slate-800">
+                    <dt className="text-slate-500 text-[10px] uppercase font-bold">{m.t}</dt>
+                    <dd className={`text-base font-bold font-mono ${m.c}`}>{m.v}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+
+            {/* Conciliación renglón por renglón */}
+            <div
+              ref={conciliacionRef}
+              className="rounded-2xl border border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-800"
+            >
+              <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold flex items-center gap-2 text-slate-900 dark:text-white">
+                    <PackageCheck className="w-4 h-4 text-teal-600" />
+                    Conciliación de unidades facturadas
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Ingresa lo que facturó la droguería.
+                    <span className="hidden md:inline"> Enter o ↓ avanza a la siguiente línea.</span>
+                  </p>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={numeroFactura}
+                    onChange={(e) => setNumeroFactura(e.target.value)}
+                    placeholder="N° de factura (ej. FAC-89302)"
+                    aria-label="Número de factura de la droguería"
+                    className={`${campoBase} min-h-11 px-3 text-sm font-mono border-slate-300 dark:border-slate-700 sm:w-56`}
+                  />
                   <button
-                    onClick={() => setModalFacturacionAbierto(true)}
-                    className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm ${
-                      pedidoActual.estado === 'facturado'
-                        ? 'bg-emerald-600 text-white hover:bg-emerald-500'
-                        : 'bg-teal-600 text-white hover:bg-teal-500 ring-2 ring-teal-500/30'
-                    }`}
+                    type="button"
+                    onClick={handleFacturarCompleto}
+                    className="min-h-11 inline-flex items-center justify-center gap-2 px-4 rounded-xl text-sm font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100"
                   >
-                    <PackageCheck className="w-4 h-4" />
-                    <span>{pedidoActual.estado === 'facturado' ? 'Ver / Reconciliar Facturación' : 'Confirmar Facturado Droguería'}</span>
+                    <ListChecks className="w-4 h-4 text-teal-600" />
+                    Facturar todo completo
                   </button>
                 </div>
               </div>
 
-              {/* Métricas Clave de la Orden */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className={`p-3 rounded-xl border ${esClaro ? 'bg-slate-50 border-slate-100' : 'bg-slate-800/40 border-slate-800'}`}>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Unidades Solicitadas</span>
-                  <span className="text-base font-bold font-mono text-slate-800 dark:text-slate-100">
-                    {unidadesSolicitadas} uds
-                  </span>
-                </div>
-                <div className={`p-3 rounded-xl border ${esClaro ? 'bg-slate-50 border-slate-100' : 'bg-slate-800/40 border-slate-800'}`}>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Unidades Facturadas</span>
-                  <span className="text-base font-bold font-mono text-teal-600 dark:text-teal-400">
-                    {unidadesConfirmadas} uds
-                  </span>
-                </div>
-                <div className={`p-3 rounded-xl border ${esClaro ? 'bg-slate-50 border-slate-100' : 'bg-slate-800/40 border-slate-800'}`}>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Monto Liquidado</span>
-                  <span className="text-base font-bold font-mono text-slate-800 dark:text-slate-100">
-                    ${montoTotalConfirmado.toFixed(2)}
-                  </span>
-                </div>
-                <div className={`p-3 rounded-xl border ${esClaro ? 'bg-slate-50 border-slate-100' : 'bg-slate-800/40 border-slate-800'}`}>
-                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Fill-Rate</span>
-                  <span className={`text-base font-bold font-mono ${
-                    fillRateCalculado >= 90 ? 'text-emerald-600' : fillRateCalculado >= 70 ? 'text-amber-500' : 'text-rose-500'
-                  }`}>
-                    {fillRateCalculado}%
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* SECCIÓN / MODAL DE CONCILIACIÓN DE FACTURACIÓN: Renglón por Renglón */}
-            <div className={`rounded-2xl border shadow-xs overflow-hidden ${
-              esClaro ? 'bg-white border-slate-200' : 'bg-slate-900 border-slate-800'
-            }`}>
-              <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-800/30">
-                <div>
-                  <h4 className={`text-sm font-bold flex items-center gap-2 ${esClaro ? 'text-slate-900' : 'text-white'}`}>
-                    <PackageCheck className="w-4 h-4 text-teal-600" />
-                    Conciliación de Unidades Facturadas por Producto
-                  </h4>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Indica cuántas unidades aprobó y facturó la droguería para cada renglón.
-                  </p>
+              <div role="table" aria-label="Líneas del pedido">
+                <div
+                  role="row"
+                  className={`${GRID_LINEA} hidden px-4 py-2.5 text-[11px] uppercase tracking-wider font-semibold bg-slate-50 text-slate-500 border-b border-slate-200 dark:bg-slate-800/60 dark:text-slate-400 dark:border-slate-800`}
+                >
+                  <span role="columnheader" className="hidden 2xl:block">SKU</span>
+                  <span role="columnheader">Medicamento</span>
+                  <span role="columnheader" className="text-right">Solic.</span>
+                  <span role="columnheader" className="text-center">Facturado</span>
+                  <span role="columnheader" className="hidden 2xl:block text-right">Precio</span>
+                  <span role="columnheader" className="text-right">Subtotal</span>
+                  <span role="columnheader">Estado</span>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-500 font-semibold">N° Factura:</span>
-                  <input
-                    type="text"
-                    value={numeroFacturaDrogueria}
-                    onChange={(e) => setNumeroFacturaDrogueria(e.target.value)}
-                    placeholder="Ej. FAC-89302"
-                    className={`px-2.5 py-1 text-xs rounded-lg border font-mono font-semibold focus:outline-none focus:ring-1 focus:ring-teal-500 ${
-                      esClaro ? 'bg-white border-slate-200 text-slate-900' : 'bg-slate-800 border-slate-700 text-white'
-                    }`}
-                  />
-                </div>
-              </div>
+                <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {detallesActuales.map((det) => {
+                    const prod = productosMap.get(det.producto_id);
+                    const hayDiferencia = det.cantidad_confirmada < det.cantidad_solicitada;
+                    return (
+                      <div
+                        key={det.id}
+                        role="row"
+                        className={`${GRID_LINEA} cv-auto p-4 md:px-4 md:py-3 flex flex-col gap-3 ${
+                          hayDiferencia ? 'bg-amber-50/60 dark:bg-amber-950/20' : ''
+                        }`}
+                      >
+                        <span role="cell" className="hidden 2xl:block font-mono text-xs text-slate-500">{prod?.sku}</span>
 
-              {/* Tabla de Renglones */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className={`border-b text-[11px] uppercase tracking-wider font-semibold ${
-                      esClaro ? 'bg-slate-50 text-slate-500 border-slate-200' : 'bg-slate-800/60 text-slate-400 border-slate-800'
-                    }`}>
-                      <th className="py-3 px-4">SKU</th>
-                      <th className="py-3 px-4">Medicamento / Presentación</th>
-                      <th className="py-3 px-3 text-right">Solicitado</th>
-                      <th className="py-3 px-3 text-center">Facturado (Uds)</th>
-                      <th className="py-3 px-3 text-right">Precio</th>
-                      <th className="py-3 px-3 text-right">Subtotal</th>
-                      <th className="py-3 px-4">Motivo si hay quiebre</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {detallesActuales.map((det) => {
-                      const prod = productosMap.get(det.producto_id);
-                      const hayDiferencia = det.cantidad_confirmada < det.cantidad_solicitada;
+                        <div role="cell" className="min-w-0">
+                          <p className="font-bold text-sm text-slate-900 dark:text-white">{prod?.nombre_comercial || 'Producto'}</p>
+                          <span className="text-xs text-slate-500">
+                            <span className="2xl:hidden font-mono">{prod?.sku} · </span>
+                            {prod?.presentacion} · {prod?.laboratorio}
+                          </span>
+                        </div>
 
-                      return (
-                        <tr 
-                          key={det.id}
-                          className={`transition-colors ${
-                            hayDiferencia 
-                              ? esClaro ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'bg-amber-950/20 hover:bg-amber-950/30'
-                              : esClaro ? 'hover:bg-slate-50/60' : 'hover:bg-slate-800/40'
-                          }`}
-                        >
-                          <td className="py-3 px-4 font-mono text-slate-500 font-medium">
-                            {prod?.sku || 'SKU'}
-                          </td>
-                          <td className="py-3 px-4">
-                            <p className={`font-bold ${esClaro ? 'text-slate-900' : 'text-white'}`}>
-                              {prod?.nombre_comercial || 'Producto'}
-                            </p>
-                            <span className="text-[11px] text-slate-400">
-                              {prod?.presentacion} · {prod?.laboratorio}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-right font-mono font-semibold text-slate-700 dark:text-slate-300">
+                        <div role="cell" className="flex items-center justify-between md:block">
+                          <span className="md:hidden text-xs text-slate-500 font-semibold">Solicitado</span>
+                          <span className="md:block md:text-right font-mono font-semibold text-sm text-slate-700 dark:text-slate-300">
                             {det.cantidad_solicitada}
-                          </td>
+                          </span>
+                        </div>
 
-                          {/* Campo de Entrada de Unidades Facturadas por el Teletransferencista */}
-                          <td className="py-3 px-3 text-center">
-                            <div className="inline-flex items-center gap-1">
-                              <input
-                                type="number"
-                                min={0}
-                                max={det.cantidad_solicitada * 2}
-                                value={det.cantidad_confirmada}
-                                onChange={(e) => {
-                                  const val = parseInt(e.target.value) || 0;
-                                  const motivo: MotivoAjuste = val < det.cantidad_solicitada ? 'quiebre_stock_drogueria' : 'sin_quiebre';
-                                  onActualizarDetalle(det.id, val, motivo, det.observaciones_linea);
-                                }}
-                                className={`w-16 py-1 px-1.5 text-center font-mono font-bold text-xs rounded-lg border focus:outline-none focus:ring-1 focus:ring-teal-500 ${
-                                  hayDiferencia
-                                    ? 'border-amber-400 bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300'
-                                    : 'border-slate-300 dark:border-slate-700 text-teal-600 dark:text-teal-400'
-                                }`}
-                              />
-                            </div>
-                          </td>
+                        <div role="cell" className="flex items-center justify-between md:justify-center">
+                          <label htmlFor={`cant-${det.id}`} className="md:hidden text-xs text-slate-500 font-semibold">Facturado</label>
+                          <input
+                            id={`cant-${det.id}`}
+                            data-cantidad
+                            type="number"
+                            inputMode="numeric"
+                            min={0}
+                            max={det.cantidad_solicitada * 2}
+                            value={det.cantidad_confirmada}
+                            onFocus={(e) => e.currentTarget.select()}
+                            onChange={(e) => handleCambiarCantidad(det, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === 'ArrowDown') moverFoco(e, 1);
+                              else if (e.key === 'ArrowUp') moverFoco(e, -1);
+                            }}
+                            className={`${campoBase} w-24 md:w-full min-h-11 md:min-h-9 px-2 text-center font-mono font-bold text-base md:text-sm ${
+                              hayDiferencia
+                                ? 'border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
+                                : 'border-slate-300 dark:border-slate-700 text-teal-700 dark:text-teal-400'
+                            }`}
+                          />
+                        </div>
 
-                          <td className="py-3 px-3 text-right font-mono text-slate-600 dark:text-slate-400">
-                            ${det.precio_unitario.toFixed(2)}
-                          </td>
+                        <span role="cell" className="hidden 2xl:block text-right font-mono text-sm text-slate-600 dark:text-slate-400">
+                          ${det.precio_unitario.toFixed(2)}
+                        </span>
 
-                          <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
+                        <div role="cell" className="flex items-center justify-between md:block">
+                          <span className="md:hidden text-xs text-slate-500 font-semibold">Subtotal</span>
+                          <span className="md:block md:text-right font-mono font-bold text-sm text-slate-900 dark:text-white">
                             ${det.subtotal_confirmado.toFixed(2)}
-                          </td>
+                          </span>
+                        </div>
 
-                          <td className="py-3 px-4">
-                            {hayDiferencia ? (
-                              <select
-                                value={det.motivo_ajuste}
-                                onChange={(e) => {
-                                  onActualizarDetalle(det.id, det.cantidad_confirmada, e.target.value as MotivoAjuste, det.observaciones_linea);
-                                }}
-                                className={`text-[11px] py-1 px-2 rounded-lg border focus:outline-none ${
-                                  esClaro ? 'bg-white border-amber-300 text-amber-900' : 'bg-slate-800 border-amber-700 text-amber-200'
-                                }`}
-                              >
-                                <option value="quiebre_stock_drogueria">Quiebre Almacén</option>
-                                <option value="limite_credito">Límite Crédito</option>
-                                <option value="producto_descontinuado">Descontinuado</option>
-                                <option value="ajuste_comercial">Ajuste Comercial</option>
-                                <option value="otro">Otro</option>
-                              </select>
-                            ) : (
-                              <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1">
-                                <Check className="w-3.5 h-3.5" /> Completo
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                        <div role="cell">
+                          {hayDiferencia ? (
+                            <select
+                              value={det.motivo_ajuste}
+                              aria-label="Motivo del quiebre"
+                              onChange={(e) =>
+                                onActualizarDetalle(det.id, det.cantidad_confirmada, e.target.value as MotivoAjuste, det.observaciones_linea)
+                              }
+                              className={`${campoBase} w-full min-h-11 md:min-h-9 px-2 text-sm border-amber-300 dark:border-amber-700`}
+                            >
+                              <option value="quiebre_stock_drogueria">Quiebre almacén</option>
+                              <option value="limite_credito">Límite crédito</option>
+                              <option value="producto_descontinuado">Descontinuado</option>
+                              <option value="ajuste_comercial">Ajuste comercial</option>
+                              <option value="otro">Otro</option>
+                            </select>
+                          ) : (
+                            <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
+                              <Check className="w-3.5 h-3.5" /> Completo
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
-              {/* Botón de Confirmación y Cierre de Pedido Facturado */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <div className="text-xs text-slate-500">
-                  Total facturado: <strong className="font-bold text-slate-800 dark:text-white font-mono">{unidadesConfirmadas} unidades</strong> por un monto de <strong className="font-bold text-teal-600 font-mono">${montoTotalConfirmado.toFixed(2)}</strong>
+              {/* Barra de cierre siempre visible al hacer scroll (por encima de la barra inferior en móvil) */}
+              <div className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] md:bottom-0 z-10 p-3 sm:p-4 rounded-b-2xl bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-500 leading-snug">
+                  <span className="block">
+                    Facturado: <strong className="font-mono text-slate-800 dark:text-white">{totales.confirmadas} uds</strong>
+                  </span>
+                  <strong className="font-mono text-sm text-teal-700 dark:text-teal-400">${totales.monto.toFixed(2)}</strong>
                 </div>
-
                 <button
                   type="button"
-                  onClick={handleConfirmarFacturacionCompleta}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold shadow-sm transition-all"
+                  onClick={handleConfirmarFacturacion}
+                  className="min-h-11 inline-flex items-center justify-center gap-2 px-4 sm:px-5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-sm font-bold shadow-sm"
                 >
                   <FileCheck2 className="w-4 h-4" />
-                  <span>Marcar como Facturado y Guardar Unidades Reales</span>
+                  {pedidoActual.estado === 'facturado' ? 'Actualizar facturación' : 'Marcar como facturado'}
                 </button>
               </div>
-
             </div>
-
-          </div>
+          </section>
         ) : null}
-
       </div>
-
     </div>
   );
 };

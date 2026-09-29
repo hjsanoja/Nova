@@ -1,17 +1,17 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Producto } from '../types/pharmacy';
 import { 
   Pill, 
   Search, 
   Plus, 
   Minus,
-  Barcode, 
   Pencil,
   Trash2,
-  X,
-  Check
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+
+const PAGINA_CATALOGO = 60;
 
 interface InventoryCatalogTabProps {
   productos: Producto[];
@@ -33,7 +33,9 @@ export const InventoryCatalogTab: React.FC<InventoryCatalogTabProps> = ({
   const [filtroUnidadNegocio, setFiltroUnidadNegocio] = useState<string>('todos');
   const [soloPrioritarios, setSoloPrioritarios] = useState(false);
   const [soloBajoStock, setSoloBajoStock] = useState(false);
-  
+  const [limite, setLimite] = useState(PAGINA_CATALOGO);
+  const esEscritorio = useMediaQuery('(min-width: 768px)');
+
   // Modales
   const [modalAbierto, setModalAbierto] = useState(false);
   const [modalEditarAbierto, setModalEditarAbierto] = useState(false);
@@ -94,6 +96,14 @@ export const InventoryCatalogTab: React.FC<InventoryCatalogTabProps> = ({
       );
     });
   }, [productos, busqueda, filtroUnidadNegocio, soloPrioritarios, soloBajoStock]);
+
+  // Solo se dibujan las primeras filas; con catálogos de miles de productos evita miles de nodos y re-renders por cada cambio de stock.
+  const productosVisibles = useMemo(() => productosFiltrados.slice(0, limite), [productosFiltrados, limite]);
+
+  // Al cambiar filtros se vuelve a la primera página.
+  useEffect(() => {
+    setLimite(PAGINA_CATALOGO);
+  }, [busqueda, filtroUnidadNegocio, soloPrioritarios, soloBajoStock]);
 
   const handleSubmitNuevo = (e: React.FormEvent) => {
     e.preventDefault();
@@ -270,9 +280,10 @@ export const InventoryCatalogTab: React.FC<InventoryCatalogTabProps> = ({
       }`}>
 
         {/* VISTA MOVIL: Cards */}
-        <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-800">
-          {productosFiltrados.map((prod) => (
-            <div key={prod.id} className="p-4 space-y-3">
+        {!esEscritorio && (
+        <div className="divide-y divide-slate-100 dark:divide-slate-800">
+          {productosVisibles.map((prod) => (
+            <div key={prod.id} className="cv-auto p-4 space-y-3">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
@@ -350,9 +361,11 @@ export const InventoryCatalogTab: React.FC<InventoryCatalogTabProps> = ({
             </div>
           ))}
         </div>
+        )}
 
         {/* VISTA ESCRITORIO: Tabla Completa */}
-        <div className="hidden md:block overflow-x-auto">
+        {esEscritorio && (
+        <div className="overflow-x-auto">
           <table className="w-full text-left text-xs font-sans">
             <thead className={`border-b text-[11px] uppercase tracking-wider font-semibold ${
               esClaro ? 'bg-slate-50 text-slate-500 border-slate-200' : 'bg-slate-950 text-slate-400 border-slate-800'
@@ -373,7 +386,7 @@ export const InventoryCatalogTab: React.FC<InventoryCatalogTabProps> = ({
             <tbody className={`divide-y font-normal ${
               esClaro ? 'divide-slate-200 text-slate-700' : 'divide-slate-800 text-slate-300'
             }`}>
-              {productosFiltrados.map((prod) => (
+              {productosVisibles.map((prod) => (
                 <tr key={prod.id} className={esClaro ? 'hover:bg-slate-50' : 'hover:bg-slate-800/40'}>
                   
                   <td className="py-3 px-4 font-mono font-bold text-teal-700 dark:text-teal-400">
@@ -487,6 +500,20 @@ export const InventoryCatalogTab: React.FC<InventoryCatalogTabProps> = ({
             </tbody>
           </table>
         </div>
+        )}
+
+        {productosFiltrados.length > productosVisibles.length && (
+          <div className="p-3 border-t border-slate-100 dark:border-slate-800 text-center">
+            <button
+              type="button"
+              onClick={() => setLimite((l) => l + PAGINA_CATALOGO)}
+              className="min-h-11 px-5 rounded-xl text-sm font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-100"
+            >
+              Mostrar {Math.min(PAGINA_CATALOGO, productosFiltrados.length - productosVisibles.length)} más ·{' '}
+              {productosVisibles.length} de {productosFiltrados.length}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Modal: Registro de Nuevo Medicamento (12 Campos sin acentos) */}
