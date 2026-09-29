@@ -33,6 +33,7 @@ import { AlertTriangle, X } from 'lucide-react';
 
 // Cada pestaña y cada modal pesado se descarga solo cuando se usa (el bundle inicial se reduce a la shell).
 const RepDashboardTab = lazy(() => import('./components/RepDashboardTab').then((m) => ({ default: m.RepDashboardTab })));
+const PedidoCapturaScreen = lazy(() => import('./components/capture/PedidoCapturaScreen').then((m) => ({ default: m.PedidoCapturaScreen })));
 const OrderTakingTab = lazy(() => import('./components/OrderTakingTab').then((m) => ({ default: m.OrderTakingTab })));
 const SuggestedOrderTab = lazy(() => import('./components/SuggestedOrderTab').then((m) => ({ default: m.SuggestedOrderTab })));
 const MyOrdersTab = lazy(() => import('./components/MyOrdersTab').then((m) => ({ default: m.MyOrdersTab })));
@@ -133,6 +134,32 @@ function AppContent() {
     window.addEventListener(EVENTO_ERROR_ALMACENAMIENTO, alFallar);
     return () => window.removeEventListener(EVENTO_ERROR_ALMACENAMIENTO, alFallar);
   }, []);
+
+  // Modo offline-first: base local (IndexedDB), motor de sincronización y, si hay servidor, descarga incremental.
+  // Se importa después del primer render: Dexie y el motor no forman parte del bundle inicial.
+  useEffect(() => {
+    let detener: (() => void) | null = null;
+    let cancelado = false;
+    void import('./offline/arranque').then(async ({ iniciarOffline }) => {
+      const crearRemoto = isSupabaseConectado
+        ? async () => {
+            const [{ getSupabaseClient }, { crearRemotoSupabase }] = await Promise.all([
+              import('./services/supabaseClient'),
+              import('./offline/supabaseRemoto'),
+            ]);
+            const cliente = getSupabaseClient();
+            return cliente ? crearRemotoSupabase(cliente) : null;
+          }
+        : null;
+      const parar = await iniciarOffline(crearRemoto);
+      if (cancelado) parar();
+      else detener = parar;
+    });
+    return () => {
+      cancelado = true;
+      detener?.();
+    };
+  }, [isSupabaseConectado]);
 
   const handleCrearUsuario = (nuevo: Omit<Usuario, 'id' | 'created_at'> & { password?: string }) => {
     const userCreado: Usuario = {
@@ -425,6 +452,10 @@ function AppContent() {
                     detalles={pedidosDetalle}
                     vendedorId={rolActual === 'vendedor' ? usuarioActual?.id : undefined}
                   />
+                )}
+
+                {tabActiva === 'captura' && usuarioActual && (
+                  <PedidoCapturaScreen vendedorId={usuarioActual.id} equipoId={null} />
                 )}
 
                 {tabActiva === 'nuevo_pedido' && (

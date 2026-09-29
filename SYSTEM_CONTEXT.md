@@ -176,6 +176,19 @@ El script SQL maestro se encuentra en: `/src/sql/supabase_schema_fase1.sql`.
 
 ---
 
+## 4.1. Arquitectura offline-first v3 (captura en campo)
+
+La captura de pedidos v3 (`src/components/capture/`) trabaja sobre **IndexedDB (Dexie)** y una cola de sincronización, no sobre `localStorage`.
+Esquema de producción: `src/sql/nova_produccion_v3.sql` (PostGIS, RLS, RPC idempotentes). Documentación completa en
+`docs/ARQUITECTURA_OFFLINE_FIRST.md`. Reglas que no deben romperse:
+
+1. Toda escritura del vendedor pasa por `src/offline/pedidos.ts`: cambio local **+** item de Outbox en una sola transacción, con UUID generado en el cliente.
+2. El servidor es la única fuente de los correlativos (`PED-1045`, `PED-1045-R1`); el dispositivo solo muestra un folio local provisional.
+3. Las RPC de sincronización son idempotentes: reintentar nunca duplica. No agregar mutaciones que no lo sean.
+4. Las políticas comerciales existen en dos lugares (`src/offline/politicas.ts` y `app.evaluar_reglas_pedido`); cualquier cambio debe reflejarse en ambos y en sus pruebas.
+5. Fase 1 opera solo con unidades; los campos de precio (`precios_drogueria_producto`, `precio_unitario`, `subtotal`) permanecen nulos.
+6. Un prospecto (`prospecto_pendiente`) no puede transferirse a droguería hasta validar RIF y homologarlo (`aprobar_prospecto`).
+
 ## 5. Algoritmos y Reglas de Negocio Implementadas
 
 ### 5.1. Normalización de Fechas Diarias e Intuición de Mes
