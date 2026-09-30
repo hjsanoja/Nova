@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bonificaciones, condicionDelPedido, condicionesDisponibles, describirFaltantes, describirRequisitos, evaluarPedido, reglaAplica, topeDescuentoLinea } from './politicas';
+import { bonificaciones, descuentosPorProducto, ofertaDeProducto, condicionDelPedido, condicionesDisponibles, describirFaltantes, describirRequisitos, evaluarPedido, reglaAplica, topeDescuentoLinea } from './politicas';
 import type { ContextoPedido } from './politicas';
 import { REGLA_BASE, REGLA_MIX } from './testing/utiles';
 
@@ -93,5 +93,25 @@ describe('condición del pedido (descuento automático)', () => {
     expect(describirRequisitos({ min_skus_distintos: 3, min_unidades_totales: null })).toBe('Desde 3 productos distintos');
     expect(describirRequisitos({ min_skus_distintos: 5, min_unidades_totales: 200 })).toBe('Desde 5 productos distintos y 200 unidades');
     expect(describirRequisitos({ min_skus_distintos: null, min_unidades_totales: null })).toBe('Sin mínimo');
+  });
+});
+
+describe('descuentos por producto', () => {
+  const regla = (id: string, pct: number, productos: string[], extra = {}) =>
+    ({ id, nombre: id, alcance: 'linea' as const, descuento_max_pct: pct, productos, vigente_desde: '2026-01-01', prioridad: 100, activo: true, ...extra });
+  const R = [regla('los', 10, ['1']), regla('los-vol', 15, ['1'], { min_unidades_producto: 20 }), regla('ome', 8, ['3'], { vigente_hasta: '2026-09-01' })];
+
+  it('se aplica el mayor que alcanza al producto y a sus unidades', () => {
+    expect([...descuentosPorProducto(R, ctx([linea('1', 5), linea('2', 50)])).entries()].map(([k, v]) => [k, v.pct])).toEqual([['1', 10]]);
+    expect(descuentosPorProducto(R, ctx([linea('1', 20)])).get('1')?.pct).toBe(15);
+    expect(descuentosPorProducto(R, ctx([linea('3', 99)])).size).toBe(0); // vencido
+  });
+
+  it('la oferta del catálogo y el tope que valida el servidor son coherentes', () => {
+    expect(ofertaDeProducto(R, '1', { hoy: '2026-09-30' })).toEqual({ pct: 15, desde: 20 });
+    expect(ofertaDeProducto(R, '2', { hoy: '2026-09-30' })).toBeNull();
+    const c = ctx([linea('1', 20, 15), linea('2', 5, 15)]);
+    const e = evaluarPedido(R, c);
+    expect(e.violaciones.map((v) => ('producto_id' in v ? v.producto_id : ''))).toEqual(['2']); // el 15% solo vale para el producto 1
   });
 });

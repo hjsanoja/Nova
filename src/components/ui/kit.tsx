@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Check, Minus, Plus, X } from 'lucide-react';
+import { Check, ChevronRight, Minus, Plus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 /**
@@ -203,19 +203,26 @@ export function Variacion({ pct, periodo, subirEsBueno = true }: { pct: number |
   return <span><span className={`font-medium ${color}`}>{pct > 0 ? '↑' : pct < 0 ? '↓' : '='} {Math.abs(pct)}%</span> <span className="text-slate-500">vs {periodo}</span></span>;
 }
 
-/** Indicador: rótulo, cifra y (opcional) variación o nota. */
-export function Dato({ rotulo, valor, tono, nota, icono: Icono }: { rotulo: string; valor: React.ReactNode; tono?: Tono; nota?: React.ReactNode; icono?: LucideIcon }) {
+/** Indicador: rótulo, cifra y (opcional) variación o nota. Con `onClick` se puede tocar para ver el detalle. */
+export function Dato({ rotulo, valor, tono, nota, icono: Icono, onClick }: { rotulo: string; valor: React.ReactNode; tono?: Tono; nota?: React.ReactNode; icono?: LucideIcon; onClick?: () => void }) {
   const t = tono ? (ALIAS_TONO as Record<string, string>)[tono] ?? tono : undefined;
   const color = t === 'peligro' ? 'text-rose-700 dark:text-rose-400' : t === 'aviso' ? 'text-amber-700 dark:text-amber-400' : t === 'exito' ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-900 dark:text-white';
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+  const contenido = (
+    <>
       <p className="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
         {Icono && <Icono className="h-3.5 w-3.5" aria-hidden />}
-        {rotulo}
+        <span className="flex-1">{rotulo}</span>
+        {onClick && <ChevronRight className="h-3.5 w-3.5 opacity-60" aria-hidden />}
       </p>
       <p className={`mt-1 text-2xl font-semibold leading-tight ${color}`}>{valor}</p>
       {nota && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{nota}</p>}
-    </div>
+    </>
+  );
+  const base = 'rounded-xl border border-slate-200 bg-white p-4 text-left dark:border-slate-800 dark:bg-slate-900';
+  return onClick ? (
+    <button type="button" onClick={onClick} aria-label={`${rotulo}: ver detalle`} className={`${base} transition-colors hover:border-marca-600 dark:hover:border-marca-500`}>{contenido}</button>
+  ) : (
+    <div className={base}>{contenido}</div>
   );
 }
 

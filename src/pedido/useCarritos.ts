@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import type { NovaDB } from '../offline/db';
 import { crearPedidoLocal } from '../offline/pedidos';
 import type { Sesion } from '../offline/pedidos';
-import { condicionDelPedido } from '../offline/politicas';
+import { condicionDelPedido, descuentosPorProducto } from '../offline/politicas';
 import type { ContextoPedido, ReglaComercial } from '../offline/politicas';
 import type { LocalCliente, LocalProducto } from '../offline/types';
 import { SIN_CARRITOS, reductorCarritos } from './carritos';
@@ -80,13 +80,15 @@ export async function enviarCarritos(
       if (!c.drogueria_id) throw new Error('Falta la droguería');
       // Sin el código de la farmacia en la droguería el pedido no puede transferirse: no se envía.
       if (datos.codigoDe && !datos.codigoDe(c.cliente_id, c.drogueria_id)) throw new Error('falta el código de la farmacia en la droguería');
-      const { aplicada } = condicionDelPedido(datos.reglas, contextoCarrito(c, datos.productos, datos.clientes.get(c.cliente_id)));
+      const contexto = contextoCarrito(c, datos.productos, datos.clientes.get(c.cliente_id));
+      const { aplicada } = condicionDelPedido(datos.reglas, contexto);
+      const porProducto = descuentosPorProducto(datos.reglas, contexto);
       const pedido = await crearPedidoLocal(
         db,
         {
           cliente_id: c.cliente_id,
           drogueria_id: c.drogueria_id,
-          lineas: c.lineas.map((l) => ({ producto_id: l.producto_id, unidades: l.unidades })),
+          lineas: c.lineas.map((l) => ({ producto_id: l.producto_id, unidades: l.unidades, descuento_pct: porProducto.get(l.producto_id)?.pct ?? null })),
           observaciones: c.observaciones.trim() || null,
           condicion_comercial_id: aplicada?.regla.id ?? null,
           descuento_pedido_pct: aplicada?.pct ?? null,

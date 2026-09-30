@@ -2669,16 +2669,19 @@ CREATE TABLE IF NOT EXISTS comunicados (
 CREATE INDEX IF NOT EXISTS idx_comunicados_updated ON comunicados (updated_at);
 
 -- ¿Este comunicado es para quien consulta? (se evalúa en la política y como columna calculada `para_mi`).
-CREATE OR REPLACE FUNCTION app.comunicado_visible(p_roles text[], p_equipos uuid[], p_estados text[], p_ciudades text[], p_regiones text[])
+-- Visibilidad para una persona cualquiera (la usan la política, `para_mi` y el envío de avisos al teléfono).
+CREATE OR REPLACE FUNCTION app.comunicado_visible_para(p_usuario uuid, p_roles text[], p_equipos uuid[], p_estados text[], p_ciudades text[], p_regiones text[])
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   WITH u AS (
     SELECT rol::text AS rol, equipo_id, app.norm_texto(estado_geografico) AS estado, app.norm_texto(ciudad) AS ciudad,
            app.norm_texto(region) AS region
-      FROM dim_usuarios WHERE id = auth.uid() AND activo AND deleted_at IS NULL
+      FROM dim_usuarios WHERE id = p_usuario AND activo AND deleted_at IS NULL
   ),
   f AS (SELECT DISTINCT app.norm_texto(c.estado_geografico) AS estado, app.norm_texto(c.municipio) AS ciudad
-          FROM dim_clientes c WHERE c.id IN (SELECT app.mis_clientes()))
+          FROM dim_clientes c
+         WHERE c.id IN (SELECT r.cliente_id FROM rel_cliente_vendedor r WHERE r.vendedor_id = p_usuario AND r.activo AND r.deleted_at IS NULL
+                        UNION SELECT x.id FROM dim_clientes x WHERE x.creado_por = p_usuario))
   SELECT EXISTS (
     SELECT 1 FROM u
      WHERE (cardinality(p_roles) = 0 OR u.rol = ANY (p_roles))
@@ -2691,6 +2694,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
             OR u.ciudad IN (SELECT app.norm_texto(x) FROM unnest(p_ciudades) x)
             OR EXISTS (SELECT 1 FROM f WHERE f.ciudad IN (SELECT app.norm_texto(x) FROM unnest(p_ciudades) x)))
   )
+$$;
+
+CREATE OR REPLACE FUNCTION app.comunicado_visible(p_roles text[], p_equipos uuid[], p_estados text[], p_ciudades text[], p_regiones text[])
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT app.comunicado_visible_para(auth.uid(), p_roles, p_equipos, p_estados, p_ciudades, p_regiones)
 $$;
 
 -- Columna calculada para la API: GET /comunicados?select=*,para_mi
@@ -2806,6 +2815,201 @@ LANGUAGE sql STABLE SET search_path = public AS $$
 $$;
 REVOKE ALL ON FUNCTION resumen_pedidos_mensual(integer, uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION resumen_pedidos_mensual(integer, uuid) TO authenticated;
+
+-- 16.5b Descuentos por producto: una regla de línea con lista de productos (y, si se quiere, un mínimo de unidades de
+-- ese producto) se aplica sola en el carrito; aquí se valida con el mismo criterio.
+ALTER TABLE config_reglas_comerciales ADD COLUMN IF NOT EXISTS productos uuid[] NOT NULL DEFAULT '{}';
+ALTER TABLE config_reglas_comerciales ADD COLUMN IF NOT EXISTS min_unidades_producto integer;
+DO $$ BEGIN
+  ALTER TABLE config_reglas_comerciales ADD CONSTRAINT ck_regla_min_producto CHECK (min_unidades_producto IS NULL OR min_unidades_producto > 0);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE OR REPLACE FUNCTION app.evaluar_reglas_pedido(p_pedido uuid) RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_p fact_pedidos; v_base numeric; v_cap numeric; v_viol jsonb := '[]'::jsonb; l record;
+BEGIN
+  SELECT * INTO v_p FROM fact_pedidos WHERE id = p_pedido;
+  v_base := app.cfg_num('descuento_max_sin_regla', 0);
+
+  FOR l IN
+    SELECT d.id, d.producto_id, d.unidades_solicitadas, d.descuento_pct, pr.categoria, pr.sku
+    FROM fact_pedido_detalles d JOIN dim_productos pr ON pr.id = d.producto_id
+    WHERE d.pedido_id = p_pedido AND d.deleted_at IS NULL AND coalesce(d.descuento_pct, 0) > 0
+  LOOP
+    SELECT coalesce(max(cr.descuento_max_pct), v_base) INTO v_cap
+      FROM config_reglas_comerciales cr
+      WHERE cr.alcance = 'linea'
+        AND (cr.categoria_objetivo IS NULL OR cr.categoria_objetivo = l.categoria)
+        AND (cardinality(cr.productos) = 0 OR l.producto_id = ANY (cr.productos))
+        AND (cr.min_unidades_producto IS NULL OR l.unidades_solicitadas >= cr.min_unidades_producto)
+        AND app.regla_aplica(cr, p_pedido);
+    IF l.descuento_pct > v_cap THEN
+      v_viol := v_viol || jsonb_build_object('tipo','descuento_linea_excedido','detalle_id',l.id,
+                                            'sku',l.sku,'descuento',l.descuento_pct,'maximo',v_cap);
+    END IF;
+  END LOOP;
+
+  IF coalesce(v_p.descuento_pedido_pct, 0) > 0 THEN
+    SELECT coalesce(max(cr.descuento_max_pct), v_base) INTO v_cap
+      FROM config_reglas_comerciales cr WHERE cr.alcance = 'pedido' AND app.regla_aplica(cr, p_pedido);
+    IF v_p.descuento_pedido_pct > v_cap THEN
+      v_viol := v_viol || jsonb_build_object('tipo','descuento_pedido_excedido',
+                                            'descuento',v_p.descuento_pedido_pct,'maximo',v_cap);
+    END IF;
+  END IF;
+  RETURN v_viol;
+END $$;
+
+-- 16.5c Avisos al teléfono (Web Push). El teléfono guarda su suscripción; al crearse una notificación, un comunicado o un
+-- pedido para la mesa, la base llama a la Edge Function "enviar-push" (pg_net), que entrega el aviso aunque la app esté
+-- cerrada. Sin pg_net o sin configurar, no se envía nada y nada falla (la app igual avisa mientras está abierta).
+DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS pg_net; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'pg_net no disponible: los avisos con la app cerrada quedan desactivados'; END $$;
+
+CREATE TABLE IF NOT EXISTS push_suscripciones (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  usuario_id  uuid NOT NULL DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE CASCADE,
+  endpoint    text NOT NULL UNIQUE,
+  p256dh      text NOT NULL,
+  auth        text NOT NULL,
+  dispositivo text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_push_usuario ON push_suscripciones (usuario_id);
+-- Dirección de la Edge Function y su clave: solo las leen funciones del servidor (sin políticas = sin acceso por la API).
+CREATE TABLE IF NOT EXISTS config_avisos (
+  clave      text PRIMARY KEY,
+  valor      text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE push_suscripciones ENABLE ROW LEVEL SECURITY;
+ALTER TABLE config_avisos ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON push_suscripciones, config_avisos FROM anon;
+REVOKE ALL ON config_avisos FROM authenticated;
+DROP POLICY IF EXISTS push_propias ON push_suscripciones;
+CREATE POLICY push_propias ON push_suscripciones FOR ALL TO authenticated
+  USING (usuario_id = (SELECT auth.uid())) WITH CHECK (usuario_id = (SELECT auth.uid()));
+
+-- El teléfono registra (o renueva) su suscripción. Un mismo endpoint pasa a quien inició sesión en ese teléfono.
+CREATE OR REPLACE FUNCTION guardar_suscripcion_push(p jsonb) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NULL OR NOT EXISTS (SELECT 1 FROM dim_usuarios WHERE id = auth.uid()) THEN RAISE EXCEPTION 'Sesión no válida' USING ERRCODE = '42501'; END IF;
+  IF coalesce(p->>'endpoint', '') = '' OR coalesce(p->>'p256dh', '') = '' OR coalesce(p->>'auth', '') = '' THEN
+    RAISE EXCEPTION 'Suscripción incompleta' USING ERRCODE = '22023';
+  END IF;
+  INSERT INTO push_suscripciones (usuario_id, endpoint, p256dh, auth, dispositivo)
+  VALUES (auth.uid(), p->>'endpoint', p->>'p256dh', p->>'auth', left(p->>'dispositivo', 200))
+  ON CONFLICT (endpoint) DO UPDATE SET usuario_id = excluded.usuario_id, p256dh = excluded.p256dh, auth = excluded.auth,
+    dispositivo = excluded.dispositivo, updated_at = now();
+END $$;
+
+CREATE OR REPLACE FUNCTION quitar_suscripcion_push(p_endpoint text) RETURNS void
+LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  DELETE FROM push_suscripciones WHERE endpoint = p_endpoint AND usuario_id = auth.uid()
+$$;
+
+-- Solo el administrador: dónde está la Edge Function, con qué clave se llama y la clave pública VAPID (la usan los teléfonos).
+CREATE OR REPLACE FUNCTION configurar_avisos(p_url text, p_secreto text, p_vapid_publica text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo el administrador configura los avisos' USING ERRCODE = '42501'; END IF;
+  IF coalesce(p_url, '') !~ '^https://' OR length(coalesce(p_secreto, '')) < 24 OR length(coalesce(p_vapid_publica, '')) < 80 THEN
+    RAISE EXCEPTION 'Datos de configuración incompletos' USING ERRCODE = '22023';
+  END IF;
+  INSERT INTO config_avisos (clave, valor) VALUES ('url', p_url), ('secreto', p_secreto)
+  ON CONFLICT (clave) DO UPDATE SET valor = excluded.valor, updated_at = now();
+  INSERT INTO config_sistema (clave, valor) VALUES ('push_vapid_publica', to_jsonb(p_vapid_publica))
+  ON CONFLICT (clave) DO UPDATE SET valor = excluded.valor;
+END $$;
+
+CREATE OR REPLACE FUNCTION estado_avisos() RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN app.es_admin() THEN jsonb_build_object(
+    'configurado', EXISTS (SELECT 1 FROM config_avisos WHERE clave = 'url') AND EXISTS (SELECT 1 FROM config_sistema WHERE clave = 'push_vapid_publica'),
+    'url', (SELECT valor FROM config_avisos WHERE clave = 'url'),
+    'pg_net', to_regproc('net.http_post') IS NOT NULL,
+    'suscripciones', (SELECT count(*) FROM push_suscripciones),
+    'personas', (SELECT count(DISTINCT usuario_id) FROM push_suscripciones))
+  ELSE jsonb_build_object('configurado', EXISTS (SELECT 1 FROM config_sistema WHERE clave = 'push_vapid_publica')) END
+$$;
+
+-- Envía un aviso a estas personas (si hay configuración, pg_net y alguna suscripción). Nunca hace fallar la operación.
+CREATE OR REPLACE FUNCTION app.enviar_push(p_usuarios uuid[], p_titulo text, p_cuerpo text, p_url text, p_tag text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_url text; v_secreto text;
+BEGIN
+  IF p_usuarios IS NULL OR cardinality(p_usuarios) = 0 OR to_regproc('net.http_post') IS NULL THEN RETURN; END IF;
+  SELECT valor INTO v_url FROM config_avisos WHERE clave = 'url';
+  SELECT valor INTO v_secreto FROM config_avisos WHERE clave = 'secreto';
+  IF v_url IS NULL OR v_secreto IS NULL THEN RETURN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM push_suscripciones WHERE usuario_id = ANY (p_usuarios)) THEN RETURN; END IF;
+  EXECUTE 'SELECT net.http_post(url := $1, body := $2, headers := $3)'
+    USING v_url,
+          jsonb_build_object('usuarios', to_jsonb(p_usuarios), 'titulo', p_titulo, 'cuerpo', coalesce(p_cuerpo, ''), 'url', coalesce(p_url, './'), 'tag', p_tag),
+          jsonb_build_object('Content-Type', 'application/json', 'Authorization', 'Bearer ' || v_secreto);
+EXCEPTION WHEN OTHERS THEN
+  RAISE WARNING 'No se pudo enviar el aviso: %', SQLERRM;
+END $$;
+
+-- Notificaciones del vendedor (pedido parcial, procesado, rechazado…): también al teléfono.
+CREATE OR REPLACE FUNCTION app.push_notificacion() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  PERFORM app.enviar_push(ARRAY[NEW.usuario_id], NEW.titulo, NEW.cuerpo, './#/pedidos', 'notif-' || NEW.id);
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS trg_push_notificacion ON notificaciones;
+CREATE TRIGGER trg_push_notificacion AFTER INSERT ON notificaciones FOR EACH ROW EXECUTE FUNCTION app.push_notificacion();
+
+-- Pedido procesado o rechazado por la mesa: el vendedor recibe una notificación (la de "parcial" ya existía).
+CREATE OR REPLACE FUNCTION app.notificar_resultado_pedido() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_farmacia text;
+BEGIN
+  IF NEW.estado IS NOT DISTINCT FROM OLD.estado OR NEW.estado NOT IN ('procesado_total', 'rechazado') THEN RETURN NULL; END IF;
+  SELECT nombre_comercial INTO v_farmacia FROM dim_clientes WHERE id = NEW.cliente_id;
+  INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, pedido_id)
+  VALUES (NEW.vendedor_id, 'pedido_' || NEW.estado,
+          'Pedido ' || NEW.correlativo || CASE NEW.estado WHEN 'procesado_total' THEN ' despachado completo' ELSE ' rechazado por la droguería' END,
+          coalesce(v_farmacia, 'Farmacia'), NEW.id);
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS trg_notificar_resultado ON fact_pedidos;
+CREATE TRIGGER trg_notificar_resultado AFTER UPDATE OF estado ON fact_pedidos FOR EACH ROW EXECUTE FUNCTION app.notificar_resultado_pedido();
+
+-- Pedido nuevo para la mesa: aviso a los transferencistas activos.
+CREATE OR REPLACE FUNCTION app.push_pedido_mesa() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_mesa uuid[]; v_farmacia text;
+BEGIN
+  IF NEW.estado NOT IN ('enviado_teletransferencia', 'en_revision') OR (TG_OP = 'UPDATE' AND OLD.estado IS NOT DISTINCT FROM NEW.estado) THEN RETURN NULL; END IF;
+  SELECT array_agg(id) INTO v_mesa FROM dim_usuarios WHERE rol = 'transferencista' AND activo AND deleted_at IS NULL;
+  SELECT nombre_comercial INTO v_farmacia FROM dim_clientes WHERE id = NEW.cliente_id;
+  PERFORM app.enviar_push(v_mesa, CASE NEW.estado WHEN 'en_revision' THEN 'Pedido en revisión ' ELSE 'Pedido nuevo ' END || NEW.correlativo,
+                          coalesce(v_farmacia, 'Farmacia'), './#/por_procesar', 'pedido-' || NEW.id);
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS trg_push_pedido_mesa ON fact_pedidos;
+CREATE TRIGGER trg_push_pedido_mesa AFTER INSERT OR UPDATE OF estado ON fact_pedidos FOR EACH ROW EXECUTE FUNCTION app.push_pedido_mesa();
+
+-- Comunicado publicado (ya vigente): aviso a cada persona a la que va dirigido.
+CREATE OR REPLACE FUNCTION app.push_comunicado() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_destino uuid[];
+BEGIN
+  IF NEW.deleted_at IS NOT NULL OR NEW.vigente_desde > now() OR (NEW.vigente_hasta IS NOT NULL AND NEW.vigente_hasta < now()) THEN RETURN NULL; END IF;
+  SELECT array_agg(u.id) INTO v_destino FROM dim_usuarios u
+   WHERE u.activo AND u.deleted_at IS NULL AND u.id IS DISTINCT FROM NEW.creado_por
+     AND app.comunicado_visible_para(u.id, NEW.roles, NEW.equipos, NEW.estados, NEW.ciudades, NEW.regiones);
+  PERFORM app.enviar_push(v_destino, NEW.titulo, left(NEW.mensaje, 180), './#/inicio', 'comunicado-' || NEW.id);
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS trg_push_comunicado ON comunicados;
+CREATE TRIGGER trg_push_comunicado AFTER INSERT ON comunicados FOR EACH ROW EXECUTE FUNCTION app.push_comunicado();
+
+REVOKE ALL ON FUNCTION guardar_suscripcion_push(jsonb), quitar_suscripcion_push(text), configurar_avisos(text, text, text), estado_avisos() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION guardar_suscripcion_push(jsonb), quitar_suscripcion_push(text), configurar_avisos(text, text, text), estado_avisos() TO authenticated;
 
 -- 16.6 Marcas de tiempo, seguridad por filas y tiempo real de las tablas nuevas.
 DO $$

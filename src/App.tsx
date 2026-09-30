@@ -24,7 +24,10 @@ const ReportesVista = lazy(() => import('./vistas/ReportesVista').then((m) => ({
 const DatosVista = lazy(() => import('./vistas/DatosVista').then((m) => ({ default: m.DatosVista })));
 const CondicionesVista = lazy(() => import('./vistas/CondicionesVista').then((m) => ({ default: m.CondicionesVista })));
 const ComunicadosVista = lazy(() => import('./comunicados/ComunicadosVista').then((m) => ({ default: m.ComunicadosVista })));
+const RutaVista = lazy(() => import('./ruta/RutaVista').then((m) => ({ default: m.RutaVista })));
 const MetasVista = lazy(() => import('./metas/MetasVista').then((m) => ({ default: m.MetasVista })));
+const AvisoPendientes = lazy(() => import('./components/AvisoPendientes').then((m) => ({ default: m.AvisoPendientes })));
+const AvisosLocales = lazy(() => import('./avisos/AvisosLocales').then((m) => ({ default: m.AvisosLocales })));
 const BannerComunicados = lazy(() => import('./comunicados/BannerComunicados').then((m) => ({ default: m.BannerComunicados })));
 const ConfigVista = lazy(() => import('./vistas/config/ConfigVista').then((m) => ({ default: m.ConfigVista })));
 
@@ -147,6 +150,8 @@ function AppContent() {
         <main className="mx-auto w-full min-w-0 max-w-[1500px] flex-1 px-3 py-3 pb-24 sm:px-5 sm:py-4 md:pb-6 lg:px-6">
           <ErrorBoundary compacto>
             <Suspense fallback={null}>
+              {!esDemo && <AvisoPendientes />}
+              <AvisosLocales usuarioId={usuarioActual.id} rol={rolActual} />
               <BannerComunicados />
             </Suspense>
           </ErrorBoundary>
@@ -161,6 +166,7 @@ function AppContent() {
               {tabActiva === 'reportes' && <ReportesVista usuario={usuarioActual} />}
               {tabActiva === 'condiciones' && <CondicionesVista usuario={usuarioActual} />}
               {tabActiva === 'metas' && <MetasVista />}
+              {tabActiva === 'ruta' && <RutaVista usuario={usuarioActual} irATab={irATab} />}
               {tabActiva === 'comunicados' && <ComunicadosVista />}
               {tabActiva === 'datos' && <DatosVista usuario={usuarioActual} esDemo={esDemo} />}
               {tabActiva === 'config' && (

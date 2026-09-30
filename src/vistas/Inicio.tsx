@@ -8,13 +8,15 @@ import { useEstadoSync } from '../offline/syncStore';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { Boton, Dato, Etiqueta, PageHeader, Segmentado, Subtitulo, Tarjeta, Vacio, Variacion } from '../components/ui/kit';
 import { BarrasRanking, Columnas, Medidor } from '../components/graficos/Graficos';
-import type { LocalMeta, LocalNotificacion } from '../offline/types';
-import { avanceMeta, describirMeta, indicador, periodoDe } from '../metas/logica';
+import type { LocalCompraMensual, LocalMeta, LocalNotificacion } from '../offline/types';
+import { avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe } from '../metas/logica';
+import { DetallePedidos } from './DetallePedidos';
+import type { SolicitudDetalle } from './DetallePedidos';
 import { actividadDeClientes, clientesPorAtender, ESTADOS_ETIQUETA, perteneceAGrupo, unidadesDePedido, detallesPorPedido } from './logica';
 import { irASeccion, prepararPedidoPara } from './navegacion';
 import { cuenta, rankingMes, resumenMeses, serieDiaria, serieMensual, topProductosMes, unidadesPorPedido, variacion } from './indicadores';
 import type { PuntoMes } from './indicadores';
-import { ultimaCompraPorCliente, ultimoPedidoPorCliente, useClientes, useCompras, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
+import { ultimaCompraPorCliente, ultimoPedidoPorCliente, useClientes, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
 
 const saludo = () => {
   const h = new Date().getHours();
@@ -89,7 +91,8 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const droguerias = useDroguerias();
   const todos = usePedidos();
   const detalles = useDetalles();
-  const compras = useCompras();
+  // El consolidado de compras (grande para la gerencia) solo hace falta para "clientes por atender" del vendedor.
+  const compras = useLive(() => (esVendedor ? db.comprasMensual.toArray() : []), [esVendedor], [] as LocalCompraMensual[]);
   const { usuarios } = useUsuariosNube();
   const avisos = useLive(() => db.notificaciones.filter((n) => !n.leida).toArray(), [], [] as LocalNotificacion[]);
   const metas = useLive(() => db.metas.where('periodo').equals(periodoDe(new Date())).toArray(), [], [] as LocalMeta[]);
@@ -146,6 +149,20 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
     [metas, todos, unidades, nombres]
   );
 
+  // ---- Detalle auditable: cada cifra se abre con los pedidos que la forman y cómo se calculó.
+  const [detalle, setDetalle] = useState<SolicitudDetalle | null>(null);
+  const nombreProducto = useMemo(() => new Map(productos.map((p) => [p.id, p.nombre_comercial])), [productos]);
+  const nombresDetalle = useMemo(() => ({ ...nombres, producto: (id: string) => nombreProducto.get(id) ?? 'Producto' }), [nombres, nombreProducto]);
+  const hoyClave = diaDe(new Date().toISOString());
+  const mesClave = hoyClave.slice(0, 7);
+  const delMes = useMemo(() => pedidos.filter((p) => cuenta(p) && diaDe(p.created_at).startsWith(mesClave)), [pedidos, mesClave]);
+  const deHoy = useMemo(() => delMes.filter((p) => diaDe(p.created_at) === hoyClave), [delMes, hoyClave]);
+  const nombreMes = new Date().toLocaleDateString('es', { month: 'long' });
+  const QUE_CUENTA = 'Solo pedidos enviados (no cuenta borradores, cancelados ni rechazados)';
+  const NOTA_LOCAL = 'El detalle usa los pedidos guardados en este dispositivo (últimos 90 días).';
+  const abrir = (titulo: string, calculo: string, lista: typeof pedidos, extra: Partial<SolicitudDetalle> = {}) => setDetalle({ titulo, calculo, pedidos: lista, ...extra });
+  const unidadesDeProducto = (productoId: string) => (p: (typeof pedidos)[number]) => (porPedido.get(p.id) ?? []).filter((d) => d.producto_id === productoId).reduce((a, d) => a + d.unidades_solicitadas, 0);
+
   const mesAnterior = 'el mes pasado';
   const tomarPedido = (usuario.rol === 'vendedor' || esAdmin) && (
     <Boton variante="primario" icono={ClipboardPlus} onClick={() => irATab('captura')}>
@@ -163,7 +180,12 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
       {total30 > 0 ? (
         <>
           {selectorMetrica}
-          <Columnas puntos={serie} unidad={metrica} titulo={`${TITULO_METRICA[metrica]} por día · últimos 30 días`} />
+          <Columnas
+            puntos={serie}
+            unidad={metrica}
+            titulo={`${TITULO_METRICA[metrica]} por día · últimos 30 días`}
+            onSeleccionar={(pt) => abrir(`${TITULO_METRICA[metrica]} · ${pt.etiqueta}`, `${QUE_CUENTA} creados el ${pt.etiqueta}. ${metrica === 'farmacias' ? 'Se cuentan farmacias distintas.' : metrica === 'unidades' ? 'Suma de las unidades pedidas.' : 'Número de pedidos.'} Total del día: ${formato(pt.valor)}.`, pedidos.filter((p) => cuenta(p) && diaDe(p.created_at) === pt.clave))}
+          />
         </>
       ) : (
         <>
@@ -176,7 +198,12 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
 
   const graficoMeses = (
     <Tarjeta className="lg:col-span-2">
-      <Columnas puntos={serieMes} unidad={metrica} titulo={`${TITULO_METRICA[metrica]} por mes${mensualNube ? '' : ' · con los datos del dispositivo'}`} />
+      <Columnas
+        puntos={serieMes}
+        unidad={metrica}
+        titulo={`${TITULO_METRICA[metrica]} por mes${mensualNube ? '' : ' · con los datos del dispositivo'}`}
+        onSeleccionar={(pt) => abrir(`${TITULO_METRICA[metrica]} · ${pt.etiqueta}`, `${QUE_CUENTA} del mes. Total del mes${mensualNube ? ' según el servidor (todo el historial)' : ''}: ${formato(pt.valor)}.`, pedidos.filter((p) => cuenta(p) && diaDe(p.created_at).startsWith(pt.clave)), { nota: `${NOTA_LOCAL} Si el mes es más antiguo, la lista puede estar incompleta aunque el total del gráfico sea correcto.` })}
+      />
     </Tarjeta>
   );
 
@@ -196,6 +223,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
                   total={a.objetivo}
                   rotulo={`${esVendedor && m.vendedor_id === usuario.id && !m.cliente_id && !m.drogueria_id ? ind.texto : `${texto} · ${ind.texto.toLowerCase()}`}`}
                   nota={a.valor >= a.objetivo ? '¡Meta cumplida!' : `Faltan ${formato(a.objetivo - a.valor)} · ${formato(a.porDia)} ${ind.unidad} por día${a.proyeccion !== null ? ` · proyección ${formato(a.proyeccion)}` : ''}`}
+                  onClick={() => abrir(`Meta: ${texto}`, `${QUE_CUENTA} de ${nombreMes}${m.vendedor_id ? ` del representante ${nombres.vendedor(m.vendedor_id)}` : ''}${m.cliente_id ? ` para ${nombres.cliente(m.cliente_id)}` : ''}${m.drogueria_id ? ` por ${nombres.drogueria(m.drogueria_id)}` : ''}. Mide ${ind.texto.toLowerCase()}: ${formato(a.valor)} de ${formato(a.objetivo)} (${a.pct}%). Faltan ${a.diasRestantes} días.`, pedidosDeMeta(m, todos))}
                 />
               </li>
             );
@@ -229,7 +257,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const masPedidos = (
     <Tarjeta>
       <Subtitulo>Productos más pedidos del mes</Subtitulo>
-      <BarrasRanking filas={topProductos} unidad="unidades" vacio="Aún no hay pedidos este mes." />
+      <BarrasRanking filas={topProductos} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombreProducto.get(id) ?? 'Producto'} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} que incluyen este producto. Las unidades son solo las de este producto.`, delMes.filter((p) => (porPedido.get(p.id) ?? []).some((d) => d.producto_id === id)), { unidadesDe: unidadesDeProducto(id) })} />
     </Tarjeta>
   );
 
@@ -241,6 +269,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         total={clientes.length}
         rotulo="Farmacias con pedido"
         nota={clientes.length === 0 ? 'Agrega farmacias a tu fichero desde "Mis clientes".' : `${formato(Math.max(0, clientes.length - resumen.actual.clientes))} farmacias sin pedido este mes.`}
+        onClick={() => abrir('Farmacias con pedido este mes', `Farmacias distintas de tu fichero (${formato(clientes.length)}) con al menos un pedido en ${nombreMes}: ${formato(resumen.actual.clientes)}. ${QUE_CUENTA}.`, delMes)}
       />
       <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 dark:border-slate-800">
         <Mini rotulo="Unidades por pedido" valor={resumen.actual.pedidos ? formato(Math.round(resumen.actual.unidades / resumen.actual.pedidos)) : '—'} />
@@ -270,19 +299,19 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Dato icono={ShoppingBag} rotulo="Pedidos del mes" valor={formato(resumen.actual.pedidos)} nota={<Variacion pct={variacion(resumen.actual.pedidos, resumen.anterior.pedidos)} periodo={mesAnterior} />} />
-        <Dato icono={Package} rotulo="Unidades del mes" valor={formato(resumen.actual.unidades)} nota={<Variacion pct={variacion(resumen.actual.unidades, resumen.anterior.unidades)} periodo={mesAnterior} />} />
-        <Dato icono={Activity} rotulo="Promedio por día" valor={`${formato(promDiaUnidades)} uds`} nota={`${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día`} />
-        <Dato icono={Store} rotulo="Farmacias con pedido hoy" valor={formato(resumen.hoy.clientes)} nota={`${formato(resumen.actual.clientes)} en el mes · ${formato(resumen.hoy.pedidos)} pedido${resumen.hoy.pedidos === 1 ? '' : 's'} hoy`} />
-        <Dato icono={CalendarRange} rotulo="Promedio por mes" valor={promedioMensual === null ? '—' : `${formato(promedioMensual)} uds`} nota={cerrados.length ? `Últimos ${cerrados.length} mes${cerrados.length === 1 ? '' : 'es'} cerrados` : 'Aún sin meses cerrados'} />
+        <Dato icono={ShoppingBag} rotulo="Pedidos del mes" valor={formato(resumen.actual.pedidos)} nota={<Variacion pct={variacion(resumen.actual.pedidos, resumen.anterior.pedidos)} periodo={mesAnterior} />} onClick={() => abrir(`Pedidos de ${nombreMes}`, `${QUE_CUENTA} creados desde el 1 de ${nombreMes}: ${formato(resumen.actual.pedidos)}. El mes pasado: ${formato(resumen.anterior.pedidos)}.`, delMes)} />
+        <Dato icono={Package} rotulo="Unidades del mes" valor={formato(resumen.actual.unidades)} nota={<Variacion pct={variacion(resumen.actual.unidades, resumen.anterior.unidades)} periodo={mesAnterior} />} onClick={() => abrir(`Unidades de ${nombreMes}`, `Suma de las unidades pedidas en cada pedido de ${nombreMes}: ${formato(resumen.actual.unidades)}. El mes pasado: ${formato(resumen.anterior.unidades)}. ${QUE_CUENTA}.`, delMes)} />
+        <Dato icono={Activity} rotulo="Promedio por día" valor={`${formato(promDiaUnidades)} uds`} nota={`${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día`} onClick={() => abrir('Promedio por día', `${formato(resumen.actual.unidades)} unidades ÷ ${diasDelMes} días transcurridos de ${nombreMes} = ${formato(promDiaUnidades)} unidades por día. ${formato(resumen.actual.pedidos)} pedidos ÷ ${diasDelMes} días = ${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día.`, delMes)} />
+        <Dato icono={Store} rotulo="Farmacias con pedido hoy" valor={formato(resumen.hoy.clientes)} nota={`${formato(resumen.actual.clientes)} en el mes · ${formato(resumen.hoy.pedidos)} pedido${resumen.hoy.pedidos === 1 ? '' : 's'} hoy`} onClick={() => abrir('Pedidos de hoy', `Farmacias distintas con al menos un pedido hoy: ${formato(resumen.hoy.clientes)} (${formato(resumen.hoy.pedidos)} pedidos). En el mes: ${formato(resumen.actual.clientes)} farmacias. ${QUE_CUENTA}.`, deHoy)} />
+        <Dato icono={CalendarRange} rotulo="Promedio por mes" valor={promedioMensual === null ? '—' : `${formato(promedioMensual)} uds`} nota={cerrados.length ? `Últimos ${cerrados.length} mes${cerrados.length === 1 ? '' : 'es'} cerrados` : 'Aún sin meses cerrados'} onClick={() => abrir('Promedio por mes', cerrados.length ? `Promedio de unidades de los meses cerrados con pedidos: ${cerrados.map((m) => `${etiquetaMes(m.mes)} ${formato(m.unidades)}`).join(' + ')} = ${formato(cerrados.reduce((a, m) => a + m.unidades, 0))} ÷ ${cerrados.length} = ${formato(promedioMensual ?? 0)}. No incluye el mes en curso.` : 'Todavía no hay meses cerrados con pedidos.', pedidos.filter((p) => cuenta(p) && cerrados.some((m) => diaDe(p.created_at).startsWith(m.mes))), { nota: NOTA_LOCAL })} />
         {esVendedor ? (
           pendientes > 0 ? (
             <Dato icono={Clock} rotulo="Por enviar" valor={pendientes} tono={errores > 0 ? 'peligro' : 'aviso'} nota={errores > 0 ? 'Hay pedidos con error' : 'Se envían al tener señal'} />
           ) : (
-            <Dato icono={Users} rotulo="Clientes por atender" valor={atender.length} tono={atender.length > 0 ? 'aviso' : undefined} nota="Atrasados en su compra" />
+            <Dato icono={Users} rotulo="Clientes por atender" valor={atender.length} tono={atender.length > 0 ? 'aviso' : undefined} nota="Atrasados en su compra" onClick={() => irATab('clientes')} />
           )
         ) : (
-          <Dato icono={Clock} rotulo="Por procesar" valor={porProcesar} tono={porProcesar > 0 ? 'aviso' : undefined} nota={`${enRevision} en revisión${parciales ? ` · ${parciales} parciales` : ''}`} />
+          <Dato icono={Clock} rotulo="Por procesar" valor={porProcesar} tono={porProcesar > 0 ? 'aviso' : undefined} nota={`${enRevision} en revisión${parciales ? ` · ${parciales} parciales` : ''}`} onClick={() => abrir('Por procesar', `Pedidos esperando a la mesa de transferencias (enviados o en proceso): ${porProcesar}. En revisión especial: ${enRevision}.`, pedidos.filter((p) => perteneceAGrupo(p.estado, 'por_procesar') || p.estado === 'en_revision'))} />
         )}
       </div>
 
@@ -368,19 +397,26 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
           <Fila>
             <Tarjeta>
               <Subtitulo>Unidades por representante · este mes</Subtitulo>
-              <BarrasRanking filas={porVendedor} unidad="unidades" vacio="Aún no hay pedidos este mes." />
+              <BarrasRanking filas={porVendedor} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.vendedor(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} tomados por este representante. Suma de unidades pedidas.`, delMes.filter((p) => p.vendedor_id === id))} />
             </Tarjeta>
             {masPedidos}
             <Tarjeta>
               <Subtitulo>Unidades por droguería · este mes</Subtitulo>
-              <BarrasRanking filas={porDrogueria} unidad="unidades" vacio="Aún no hay pedidos este mes." />
+              <BarrasRanking filas={porDrogueria} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} enviados a esta droguería. Suma de unidades pedidas.`, delMes.filter((p) => p.drogueria_id === id))} />
             </Tarjeta>
           </Fila>
           {ultimos}
         </>
       )}
+      <DetallePedidos solicitud={detalle} porPedido={porPedido} nombres={nombresDetalle} onCerrar={() => setDetalle(null)} />
     </div>
   );
+}
+
+/** Día local (YYYY-MM-DD) de una fecha ISO: el mismo criterio que los gráficos. */
+function diaDe(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 const Fila = ({ children }: { children: ReactNode }) => <div className="grid gap-4 lg:grid-cols-3">{children}</div>;

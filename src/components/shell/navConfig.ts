@@ -1,4 +1,4 @@
-import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, Megaphone, Pill, Settings, ShoppingBag, ShoppingCart, Target, Users } from 'lucide-react';
+import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, Map as IconoMapa, Megaphone, Pill, Settings, ShoppingBag, ShoppingCart, Target, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { RolUsuario } from '../../types/pharmacy';
 
@@ -23,13 +23,14 @@ export interface TabDef {
  */
 const T = {
   inicio: (label = 'Resumen'): TabDef => ({ id: 'inicio', label, corto: 'Inicio', icon: LayoutDashboard, grupo: 'Ventas' }),
+  ruta: { id: 'ruta', label: 'Mi ruta', corto: 'Ruta', icon: IconoMapa, grupo: 'Ventas' } as TabDef,
   pedir: { id: 'captura', label: 'Nuevo pedido', corto: 'Pedir', icon: ShoppingCart, grupo: 'Ventas' } as TabDef,
   pedidos: (label = 'Pedidos'): TabDef => ({ id: 'pedidos', label, corto: 'Pedidos', icon: ShoppingBag, grupo: 'Ventas' }),
   porProcesar: { id: 'por_procesar', label: 'Por procesar', corto: 'Procesar', icon: CheckCircle2, grupo: 'Ventas' } as TabDef,
   clientes: (label = 'Clientes'): TabDef => ({ id: 'clientes', label, corto: 'Clientes', icon: Users, grupo: 'Clientes y productos' }),
   catalogo: { id: 'catalogo', label: 'Catálogo', corto: 'Catálogo', icon: Pill, grupo: 'Clientes y productos' } as TabDef,
   reportes: { id: 'reportes', label: 'Reportes', corto: 'Reportes', icon: BarChart3, grupo: 'Gestión' } as TabDef,
-  condiciones: { id: 'condiciones', label: 'Condiciones comerciales', corto: 'Condiciones', icon: BadgePercent, grupo: 'Gestión' } as TabDef,
+  condiciones: { id: 'condiciones', label: 'Descuentos', corto: 'Descuentos', icon: BadgePercent, grupo: 'Gestión' } as TabDef,
   metas: { id: 'metas', label: 'Metas', corto: 'Metas', icon: Target, grupo: 'Gestión' } as TabDef,
   comunicados: { id: 'comunicados', label: 'Comunicados', corto: 'Avisos', icon: Megaphone, grupo: 'Gestión' } as TabDef,
   datos: { id: 'datos', label: 'Datos maestros', corto: 'Datos', icon: Database, grupo: 'Gestión' } as TabDef,
@@ -41,7 +42,7 @@ const principales = (tabs: TabDef[], ids: string[]) => tabs.map((t) => ({ ...t, 
 /** Módulos permitidos por rol. La seguridad real está en la base de datos (RLS); esto solo ordena lo que cada persona ve. */
 export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
   // El vendedor pide desde el catálogo de "Nuevo pedido": no necesita un catálogo aparte.
-  vendedor: principales([T.inicio('Inicio'), T.pedir, T.pedidos('Mis pedidos'), T.clientes('Mis clientes'), T.config], ['inicio', 'captura', 'pedidos', 'clientes']),
+  vendedor: principales([T.inicio('Inicio'), T.ruta, T.pedir, T.pedidos('Mis pedidos'), T.clientes('Mis clientes'), T.config], ['inicio', 'ruta', 'captura', 'pedidos']),
   teletransferencista: principales([T.porProcesar, T.pedidos(), T.clientes(), T.catalogo, T.config], ['por_procesar', 'pedidos', 'clientes', 'catalogo']),
   gerente: principales([T.inicio(), T.pedidos(), T.clientes(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.config], ['inicio', 'reportes', 'pedidos', 'metas']),
   admin: principales(

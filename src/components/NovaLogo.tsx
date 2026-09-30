@@ -17,7 +17,7 @@ export function NovaLogo({ size = 'md', showTagline = true, className = '' }: { 
       <NovaSimbolo tamano={tamano} />
       <div className="flex min-w-0 flex-col">
         <span className={`font-bold leading-none tracking-tight text-slate-900 dark:text-white ${size === 'sm' ? 'text-lg' : size === 'lg' ? 'text-2xl' : 'text-xl'}`}>NOVA</span>
-        {showTagline && <span className="truncate text-xs font-medium text-slate-500 dark:text-slate-400">Comercial & Teletransferencia</span>}
+        {showTagline && <span className={`truncate text-xs font-medium text-slate-500 dark:text-slate-400 ${size === 'sm' ? 'hidden sm:block' : ''}`}>Comercial & Teletransferencia</span>}
       </div>
     </div>
   );

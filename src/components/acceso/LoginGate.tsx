@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { LogIn, Settings2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Eye, EyeOff, LogIn, Settings2 } from 'lucide-react';
 import type { Usuario } from '../../types/pharmacy';
 import { getStoredSupabaseConfig } from '../../services/supabaseConfig';
 import { iniciarSesionNube, recuperarPasswordNube, USUARIO_DEMO } from '../../services/sesion';
@@ -14,6 +14,20 @@ interface Props {
   onConexionCambiada: () => void;
 }
 
+/**
+ * Pide al navegador guardar la contraseña (Chrome y Android la ofrecen la próxima vez). La contraseña nunca se guarda en la
+ * app: la guarda el administrador de contraseñas del navegador o del teléfono.
+ */
+function guardarEnNavegador(email: string, password: string, nombre: string) {
+  try {
+    const W = window as unknown as { PasswordCredential?: new (d: { id: string; password: string; name?: string }) => unknown };
+    const cred = (navigator as Navigator & { credentials?: { store?: (c: unknown) => Promise<unknown> } }).credentials;
+    if (W.PasswordCredential && cred?.store) void cred.store(new W.PasswordCredential({ id: email.trim(), password, name: nombre })).catch(() => undefined);
+  } catch {
+    /* el navegador no lo permite: se ignora */
+  }
+}
+
 /** Pantalla de acceso: nadie ve datos sin iniciar sesión. Sin Supabase configurado ofrece conectar o probar en modo demostración. */
 export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => {
   const { esClaro } = useTheme();
@@ -24,6 +38,27 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [verPassword, setVerPassword] = useState(false);
+
+  // Si el navegador guardó la contraseña (Chrome/Android), se ofrece para rellenar los campos sin tener que escribirla.
+  useEffect(() => {
+    const cred = (navigator as Navigator & { credentials?: { get?: (o: object) => Promise<unknown> } }).credentials;
+    if (!cred?.get || !('PasswordCredential' in window)) return;
+    let vivo = true;
+    cred.get({ password: true, mediation: 'optional' }).then(
+      (c) => {
+        const p = c as { id?: string; password?: string } | null;
+        if (vivo && p?.id && p.password) {
+          setEmail(p.id);
+          setPassword(p.password);
+        }
+      },
+      () => undefined
+    );
+    return () => {
+      vivo = false;
+    };
+  }, []);
 
   const entrar = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,7 +66,9 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
     setError('');
     setInfo('');
     try {
-      onEntrar(await iniciarSesionNube(email, password));
+      const usuario = await iniciarSesionNube(email, password);
+      guardarEnNavegador(email, password, usuario.nombre_completo);
+      onEntrar(usuario);
     } catch (err) {
       setError(explicar(err));
     } finally {
@@ -92,16 +129,27 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
               )}
             </>
           ) : (
-            <form onSubmit={entrar} className="space-y-3">
+            <form onSubmit={entrar} method="post" action="#" autoComplete="on" className="space-y-3">
               <h1 className="text-base font-bold text-slate-900 dark:text-white">Iniciar sesión</h1>
               <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
                 Correo
-                <input type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} className={`${estiloInput} mt-1`} />
+                <input id="email" name="email" type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} className={`${estiloInput} mt-1`} />
               </label>
-              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
-                Contraseña
-                <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={`${estiloInput} mt-1`} />
-              </label>
+              <div>
+                <label htmlFor="password" className="block text-xs font-semibold text-slate-600 dark:text-slate-300">Contraseña</label>
+                <div className="relative mt-1">
+                  <input id="password" name="password" type={verPassword ? 'text' : 'password'} required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={`${estiloInput} pr-11`} />
+                  <button
+                    type="button"
+                    onClick={() => setVerPassword((v) => !v)}
+                    aria-label={verPassword ? 'Ocultar la contraseña' : 'Mostrar la contraseña'}
+                    aria-pressed={verPassword}
+                    className="absolute inset-y-0 right-0 inline-flex w-11 items-center justify-center rounded-r-lg text-slate-500 hover:text-slate-800 dark:hover:text-white"
+                  >
+                    {verPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
               {error && <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-900 dark:bg-rose-950/40 dark:text-rose-200">{error}</p>}
               {info && <p role="status" className="rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">{info}</p>}
               <Boton type="submit" variante="primario" icono={LogIn} disabled={cargando} className="w-full">

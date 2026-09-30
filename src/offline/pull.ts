@@ -13,6 +13,7 @@ import type {
   LocalMeta,
   LocalNotificacion,
   LocalPlantilla,
+  LocalVisita,
   LocalPedido,
   LocalProducto,
 } from './types';
@@ -210,6 +211,8 @@ export const TABLAS_PULL: TablaPull[] = [
           min_unidades_totales: numN(f.min_unidades_totales),
           min_unidades_categoria: numN(f.min_unidades_categoria),
           categoria_objetivo: strN(f.categoria_objetivo),
+          productos: Array.isArray(f.productos) ? (f.productos as string[]) : [],
+          min_unidades_producto: numN(f.min_unidades_producto),
           bonificacion: (f.bonificacion as ReglaComercial['bonificacion']) ?? null,
           equipo_id: strN(f.equipo_id),
           drogueria_id: strN(f.drogueria_id),
@@ -376,6 +379,36 @@ export const TABLAS_PULL: TablaPull[] = [
           objetivo: Number(f.objetivo),
           updated_at: str(f.updated_at),
         }))
+      );
+    },
+  },
+  {
+    // Visitas de los últimos días (las propias; la gerencia, todas): la ruta del día sabe qué farmacias ya se visitaron,
+    // aunque la visita se haya registrado en otro teléfono.
+    remota: 'crm_visitas',
+    acotarHistorial: true,
+    seleccion: 'id,cliente_id,vendedor_id,checkin_en,checkout_en,precision_gps_m,distancia_metros,dentro_de_radio,resultado,pedido_id,notas,updated_at,deleted_at',
+    aplicar: async (db, filas) => {
+      const locales = new Map((await db.visitas.bulkGet(filas.map((f) => str(f.id)))).filter((v): v is LocalVisita => !!v).map((v) => [v.id, v]));
+      const sucio = (id: string) => (locales.get(id)?.sync_estado ?? 'sincronizado') !== 'sincronizado';
+      await db.visitas.bulkDelete(borrados(filas).filter((id) => !sucio(id)));
+      await db.visitas.bulkPut(
+        vigentes(filas)
+          .filter((f) => !sucio(str(f.id)))
+          .map<LocalVisita>((f) => ({
+            id: str(f.id),
+            cliente_id: str(f.cliente_id),
+            vendedor_id: str(f.vendedor_id),
+            checkin_en: str(f.checkin_en),
+            checkout_en: strN(f.checkout_en),
+            precision_gps_m: numN(f.precision_gps_m),
+            distancia_metros: numN(f.distancia_metros),
+            dentro_de_radio: f.dentro_de_radio === true,
+            resultado: (f.resultado as LocalVisita['resultado']) ?? null,
+            pedido_id: strN(f.pedido_id),
+            notas: strN(f.notas),
+            sync_estado: 'sincronizado',
+          }))
       );
     },
   },

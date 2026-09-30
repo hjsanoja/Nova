@@ -40,7 +40,7 @@ export const Sheet: React.FC<SheetProps> = ({ abierto, titulo, onCerrar, childre
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="overflow-y-auto p-4 pb-safe">{children}</div>
+        <div className="min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain p-4 pb-safe">{children}</div>
       </div>
     </div>
   );

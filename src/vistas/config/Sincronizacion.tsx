@@ -9,6 +9,7 @@ import { useEstadoSync } from '../../offline/syncStore';
 import { borrarClavesLocales } from '../../hooks/usePersistentState';
 import { ConexionForm } from '../../components/acceso/ConexionForm';
 import { Boton, Tarjeta, useAviso } from '../../components/ui/kit';
+import { ListaPendientes, usePendientes } from '../../components/AvisoPendientes';
 
 const hora = (t: number | null) => (t ? new Date(t).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }) : 'todavía no');
 
@@ -29,6 +30,7 @@ export function Sincronizacion({ esDemo, esAdmin, onCerrarSesion, onConexionCamb
   const [ocupado, setOcupado] = useState(false);
   const [cambiando, setCambiando] = useState(false);
   const { mostrar, nodo } = useAviso();
+  const pendientes = usePendientes();
 
   const correr = async (accion: () => Promise<void>, ok: string) => {
     setOcupado(true);
@@ -81,11 +83,21 @@ export function Sincronizacion({ esDemo, esAdmin, onCerrarSesion, onConexionCamb
         {esDemo && <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-500"><CheckCircle2 className="h-4 w-4" />En demostración todo se guarda solo en este navegador.</p>}
       </Tarjeta>
 
-      <Tarjeta>
-        <p className="mb-1 text-sm font-bold">Datos de este dispositivo</p>
-        <p className="mb-2 text-xs text-slate-500">Si algo no coincide con lo que ves en otro equipo, borra lo guardado aquí: se vuelve a descargar todo lo que te corresponde.</p>
-        <Boton variante="peligro" icono={Trash2} onClick={() => void borrarDispositivo()}>Borrar datos de este dispositivo</Boton>
-      </Tarjeta>
+      {pendientes.length > 0 && (
+        <Tarjeta>
+          <p className="mb-1 text-sm font-bold">Guardado solo en este dispositivo</p>
+          <ListaPendientes lista={pendientes} />
+        </Tarjeta>
+      )}
+
+      {/* Solo el administrador: borra la copia local (no la nube) y descarga todo de nuevo; lo no enviado se perdería. */}
+      {esAdmin && (
+        <Tarjeta>
+          <p className="mb-1 text-sm font-bold">Datos de este dispositivo</p>
+          <p className="mb-2 text-xs text-slate-500">Borra la copia guardada en este equipo (no toca la nube) y la vuelve a descargar. Úsalo solo si algo no coincide con lo que se ve en otro equipo.</p>
+          <Boton variante="peligro" icono={Trash2} onClick={() => void borrarDispositivo()}>Borrar datos de este dispositivo</Boton>
+        </Tarjeta>
+      )}
 
       {esAdmin && !esDemo && (
         <Tarjeta>

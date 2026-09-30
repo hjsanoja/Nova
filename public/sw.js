@@ -5,7 +5,7 @@
  *   Safari/iOS no lo soporta: allí el envío lo dispara el evento "online" y la visibilidad de la pestaña.
  * Los datos (pedidos, catálogo) NO pasan por aquí: viven en IndexedDB y se sincronizan con Supabase.
  */
-const VERSION = 'nova-v3-2';
+const VERSION = 'nova-v3-3';
 const ACTUAL = `${VERSION}-app`;
 const RAIZ = new URL('./', self.location).href;
 
@@ -78,4 +78,44 @@ self.addEventListener('sync', (evento) => {
 
 self.addEventListener('message', (evento) => {
   if (evento.data === 'saltar-espera') self.skipWaiting();
+});
+
+// ---- Avisos al teléfono (Web Push): llegan aunque la app esté cerrada.
+self.addEventListener('push', (evento) => {
+  let datos = {};
+  try {
+    datos = evento.data ? evento.data.json() : {};
+  } catch {
+    datos = { titulo: 'NOVA', cuerpo: evento.data ? evento.data.text() : '' };
+  }
+  const titulo = datos.titulo || 'NOVA';
+  evento.waitUntil(
+    self.registration.showNotification(titulo, {
+      body: datos.cuerpo || '',
+      tag: datos.tag || undefined,
+      renotify: !!datos.tag,
+      icon: new URL('icons/icon-192.png', RAIZ).href,
+      badge: new URL('icons/icon-192.png', RAIZ).href,
+      data: { url: datos.url || './' },
+    })
+  );
+});
+
+// Tocar el aviso abre la app (o la trae al frente) en la pantalla correspondiente.
+self.addEventListener('notificationclick', (evento) => {
+  evento.notification.close();
+  const destino = new URL((evento.notification.data && evento.notification.data.url) || './', RAIZ).href;
+  evento.waitUntil(
+    (async () => {
+      const ventanas = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const v of ventanas) {
+        if (v.url.startsWith(RAIZ)) {
+          await v.focus();
+          if ('navigate' in v) await v.navigate(destino).catch(() => undefined);
+          return;
+        }
+      }
+      await self.clients.openWindow(destino);
+    })()
+  );
 });

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Mic, MicOff, RotateCcw, ShoppingCart, Wand2 } from 'lucide-react';
 import { Sheet } from '../components/capture/Sheet';
 import { Avatar, Boton, Campo, Casilla, Etiqueta, PasoUnidades, estiloInput } from '../components/ui/kit';
@@ -44,7 +44,9 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
   onCerrar: () => void;
   onConfirmar: (cliente: LocalCliente, lineas: { producto_id: string; unidades: number }[], extra: ExtraDictado) => void;
 }) {
-  const voz = useDictado();
+  // Al detectar la pausa final se pasa solo a la vista previa (no hace falta tocar "Ver pedido").
+  const alTerminar = useRef<(t: string) => void>(() => undefined);
+  const voz = useDictado((t) => alTerminar.current(t));
   const [vista, setVista] = useState<{
     cliente: LocalCliente | null;
     alternativas: LocalCliente[];
@@ -58,9 +60,9 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
   const [buscandoCliente, setBuscandoCliente] = useState(false);
   const porId = useMemo(() => new Map(productos.map((p) => [p.id, p])), [productos]);
 
-  const interpretar = () => {
+  const interpretar = (textoDictado: string = voz.texto) => {
     if (voz.escuchando) voz.detener();
-    const r: PedidoDictado<LocalCliente, LocalProducto, LocalDrogueria> = interpretarDictado(voz.texto, clientes, productos, droguerias);
+    const r: PedidoDictado<LocalCliente, LocalProducto, LocalDrogueria> = interpretarDictado(textoDictado, clientes, productos, droguerias);
     const cliente = r.cliente ?? clienteActual ?? null;
     // "Farmacia La Paz, plantilla semanal" sin productos: se carga esa plantilla guardada.
     const guardada = r.plantilla && r.lineas.length === 0 && cliente ? plantillaDicha(plantillasDe(cliente.id), r.plantilla.nombre) : null;
@@ -88,6 +90,8 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
     });
   };
 
+  alTerminar.current = (t) => interpretar(t);
+
   const cerrar = () => {
     voz.detener();
     voz.setTexto('');
@@ -105,11 +109,16 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
       {!vista ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-slate-600 dark:text-slate-300">
-            Di la farmacia, la droguería y cada producto con sus unidades. Por ejemplo: <i>“Farmacia La Paz por Cobeca, diez losartán cincuenta y cinco atorvastatina”</i>.
+            Di la farmacia, la droguería y cada producto con sus unidades. Al hacer una pausa, verás el pedido para confirmarlo.
           </p>
-          <p className="-mt-2 text-sm text-slate-600 dark:text-slate-300">
-            Termina con <i>“guárdalo como plantilla semanal”</i> para guardarlo, y la próxima vez di solo <i>“Farmacia La Paz, plantilla semanal”</i>.
-          </p>
+          <details className="-mt-2 text-sm text-slate-600 dark:text-slate-300">
+            <summary className="cursor-pointer font-medium text-marca-700 dark:text-marca-300">Ver ejemplos</summary>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              <li><i>“Farmacia La Paz por Cobeca, diez losartán cincuenta y cinco atorvastatina”</i></li>
+              <li>Para guardarlo: termina con <i>“guárdalo como plantilla semanal”</i>.</li>
+              <li>Para repetirlo: <i>“Farmacia La Paz, plantilla semanal”</i>.</li>
+            </ul>
+          </details>
           {voz.disponible && (
             <div className="flex flex-col items-center gap-2">
               <button
@@ -117,20 +126,20 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
                 onClick={voz.escuchando ? voz.detener : voz.iniciar}
                 aria-pressed={voz.escuchando}
                 aria-label={voz.escuchando ? 'Detener el dictado' : 'Empezar a dictar'}
-                className={`inline-flex h-20 w-20 items-center justify-center rounded-full text-white transition-colors ${voz.escuchando ? 'animate-pulse bg-rose-700' : 'bg-marca-700 hover:bg-marca-800'}`}
+                className={`inline-flex h-16 w-16 items-center justify-center rounded-full text-white transition-colors sm:h-20 sm:w-20 ${voz.escuchando ? 'animate-pulse bg-rose-700' : 'bg-marca-700 hover:bg-marca-800'}`}
               >
-                {voz.escuchando ? <MicOff className="h-8 w-8" /> : <Mic className="h-8 w-8" />}
+                {voz.escuchando ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
               </button>
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{voz.escuchando ? 'Escuchando… toca para terminar' : 'Toca para hablar'}</p>
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{voz.escuchando ? 'Escuchando… haz una pausa al terminar' : 'Toca para hablar'}</p>
             </div>
           )}
           {voz.error && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{voz.error}</p>}
           <Campo rotulo={voz.disponible ? 'Lo que escuché (puedes corregirlo)' : 'Escribe el pedido'}>
-            <textarea rows={4} value={voz.texto + (voz.parcial ? ` ${voz.parcial}` : '')} onChange={(e) => voz.setTexto(e.target.value)} className={`${estiloInput} py-2`} placeholder="Farmacia La Paz, 10 losartán 50, 5 atorvastatina" />
+            <textarea rows={3} value={voz.texto + (voz.parcial ? ` ${voz.parcial}` : '')} onChange={(e) => voz.setTexto(e.target.value)} className={`${estiloInput} py-2`} placeholder="Farmacia La Paz, 10 losartán 50, 5 atorvastatina" />
           </Campo>
           <div className="flex justify-end gap-2">
             <Boton onClick={cerrar}>Cancelar</Boton>
-            <Boton variante="primario" icono={Wand2} disabled={!voz.texto.trim()} onClick={interpretar}>Ver pedido</Boton>
+            <Boton variante="primario" icono={Wand2} disabled={!voz.texto.trim()} onClick={() => interpretar()}>Ver pedido</Boton>
           </div>
         </div>
       ) : (
@@ -142,7 +151,7 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
               <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{vista.cliente?.nombre_comercial ?? 'No la reconocí: elígela'}</p>
             </div>
             {vista.alternativas.length > 0 && (
-              <select aria-label="Otras farmacias parecidas" value="" onChange={(e) => { const c = vista.alternativas.find((x) => x.id === e.target.value); if (c) setVista({ ...vista, cliente: c }); }} className={`${estiloInput} w-auto`}>
+              <select aria-label="Otras farmacias parecidas" value="" onChange={(e) => { const c = vista.alternativas.find((x) => x.id === e.target.value); if (c) setVista({ ...vista, cliente: c }); }} className={`${estiloInput} w-full sm:w-auto`}>
                 <option value="">¿Era otra?</option>
                 {vista.alternativas.map((c) => <option key={c.id} value={c.id}>{c.nombre_comercial}</option>)}
               </select>
@@ -162,25 +171,25 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
             {vista.lineas.length === 0 && <li className="p-3 text-sm text-slate-500">No encontré productos en lo que dijiste. Vuelve a dictar.</li>}
             {vista.lineas.map((l, i) => (
-              <li key={i} className={`flex flex-wrap items-center gap-2 px-1 py-2 ${l.incluir ? '' : 'opacity-60'}`}>
+              <li key={i} className={`grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1 gap-y-1 py-2 pr-2 ${l.incluir ? '' : 'opacity-60'}`}>
                 <Casilla etiqueta={`Incluir ${l.texto}`} marcada={l.incluir} onChange={(v) => cambiarLinea(i, { incluir: v })} />
-                <div className="min-w-0 flex-1">
-                  <select
-                    aria-label={`Producto para "${l.texto}"`}
-                    value={l.producto_id}
-                    onChange={(e) => cambiarLinea(i, { producto_id: e.target.value, incluir: !!e.target.value })}
-                    className={`${estiloInput} min-h-9`}
-                  >
-                    <option value="">— Elegir producto —</option>
-                    {l.opciones.map((p) => <option key={p.id} value={p.id}>{p.nombre_comercial}{p.presentacion ? ` · ${p.presentacion}` : ''}</option>)}
-                  </select>
-                  <p className="mt-1 flex items-center gap-1 text-xs text-slate-500">
-                    Escuché: “{l.texto}”
+                <select
+                  aria-label={`Producto para "${l.texto}"`}
+                  value={l.producto_id}
+                  onChange={(e) => cambiarLinea(i, { producto_id: e.target.value, incluir: !!e.target.value })}
+                  className={`${estiloInput} min-h-9 min-w-0`}
+                >
+                  <option value="">— Elegir producto —</option>
+                  {l.opciones.map((p) => <option key={p.id} value={p.id}>{p.nombre_comercial}{p.presentacion ? ` · ${p.presentacion}` : ''}</option>)}
+                </select>
+                <div className="col-start-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-slate-500">
+                    <span className="truncate">Escuché: “{l.texto}”</span>
                     {l.producto_id && l.confianza < 0.8 && <Etiqueta tono="aviso">Revisar</Etiqueta>}
                     {!l.opciones.length && <Etiqueta tono="peligro">Sin coincidencias</Etiqueta>}
                   </p>
+                  <PasoUnidades valor={l.unidades} onChange={(n) => cambiarLinea(i, { unidades: n })} paso={Math.max(1, porId.get(l.producto_id)?.empaque_minimo ?? 1)} min={1} compacto />
                 </div>
-                <PasoUnidades valor={l.unidades} onChange={(n) => cambiarLinea(i, { unidades: n })} paso={Math.max(1, porId.get(l.producto_id)?.empaque_minimo ?? 1)} min={1} compacto />
               </li>
             ))}
           </ul>

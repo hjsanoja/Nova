@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
 import { BadgePercent, BookmarkPlus, Plus, Send, ShoppingCart, Trash2, X } from 'lucide-react';
 import { CodigoFarmacia } from './CodigoFarmacia';
-import { Avatar, Boton, BotonIcono, Campo, PasoUnidades, Vacio, estiloInput } from '../components/ui/kit';
-import { condicionDelPedido } from '../offline/politicas';
+import { Avatar, Boton, BotonIcono, Campo, Etiqueta, PasoUnidades, Vacio, estiloInput } from '../components/ui/kit';
+import { condicionDelPedido, descuentosPorProducto } from '../offline/politicas';
 import type { ReglaComercial } from '../offline/politicas';
 import type { LocalCliente, LocalDrogueria, LocalProducto } from '../offline/types';
 import { faltaParaEnviar, totales } from './carritos';
@@ -106,7 +106,9 @@ function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, 
   const t = totales(c);
   const faltas = faltaParaEnviar(c, !!codigo);
   const drogueria = droguerias.find((d) => d.id === c.drogueria_id);
-  const condicion = useMemo(() => condicionDelPedido(reglas, contextoCarrito(c, productos, cliente)), [reglas, c, productos, cliente]);
+  const contexto = useMemo(() => contextoCarrito(c, productos, cliente), [c, productos, cliente]);
+  const condicion = useMemo(() => condicionDelPedido(reglas, contexto), [reglas, contexto]);
+  const porProducto = useMemo(() => descuentosPorProducto(reglas, contexto), [reglas, contexto]);
 
   return (
     <section aria-label={`Carrito de ${cliente?.nombre_comercial ?? 'la farmacia'}`} className="flex flex-col gap-3">
@@ -142,7 +144,10 @@ function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, 
               <li key={l.producto_id} className="flex items-center gap-2 px-3 py-2">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{p?.nombre_comercial ?? 'Producto'}</p>
-                  <p className="truncate text-xs text-slate-500">{p?.presentacion ?? p?.sku}</p>
+                  <p className="flex items-center gap-1.5 truncate text-xs text-slate-500">
+                    {porProducto.get(l.producto_id) && <Etiqueta tono="exito">−{porProducto.get(l.producto_id)!.pct}%</Etiqueta>}
+                    <span className="truncate">{p?.presentacion ?? p?.sku}</span>
+                  </p>
                 </div>
                 <PasoUnidades valor={l.unidades} onChange={(n) => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: n })} paso={paso} min={0} compacto etiqueta={`Unidades de ${p?.nombre_comercial ?? 'producto'}`} />
                 <BotonIcono icono={X} etiqueta={`Quitar ${p?.nombre_comercial ?? 'producto'}`} onClick={() => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: 0 })} className="!h-8 !w-8" />
