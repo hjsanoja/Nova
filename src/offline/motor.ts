@@ -8,7 +8,8 @@ import { actualizarEstadoSync } from './syncStore';
 
 /**
  * Motor de sincronización bidireccional. Es "invisible": se dispara solo al recuperar la red,
- * al volver a la pestaña, cada cierto tiempo y tras cada cambio local; el usuario solo ve el indicador.
+ * al volver a la pestaña, tras cada cambio local y, EN VIVO, cuando el servidor avisa que algo cambió (Supabase Realtime).
+ * Si el canal en vivo no está disponible, consulta cada INTERVALO_SIN_VIVO_MS; con él, cada INTERVALO_CON_VIVO_MS por seguridad.
  *
  *  1) envía la Outbox (mutaciones locales, idempotentes y en orden)
  *  2) baja los cambios del servidor por cursor
@@ -24,17 +25,29 @@ export interface MotorSync {
   sincronizarAhora(opciones?: { soloEnviar?: boolean }): Promise<ResultadoFlush | null>;
 }
 
-const INTERVALO_PULL_MS = 120_000;
+const INTERVALO_SIN_VIVO_MS = 15_000;
+const INTERVALO_CON_VIVO_MS = 60_000;
 const INTERVALO_OUTBOX_MS = 30_000;
+const ESPERA_AVISO_MS = 800; // agrupa ráfagas de avisos (p. ej. un pedido con 20 líneas) en una sola descarga
+
+/** Tablas que avisan en vivo. Las masivas (farmacias, productos, ventas) se revisan con la consulta periódica. */
+export const TABLAS_EN_VIVO = [
+  'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'comunicados', 'metas', 'plantillas_pedido',
+  'config_reglas_comerciales', 'map_cliente_drogueria', 'map_producto_drogueria', 'dim_droguerias', 'rel_cliente_vendedor',
+];
 
 export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync {
   let enCurso: Promise<ResultadoFlush | null> | null = null;
   let debounce: ReturnType<typeof setTimeout> | undefined;
+  let esperaAviso: ReturnType<typeof setTimeout> | undefined;
+  let enVivo = false;
   let temporizadores: ReturnType<typeof setInterval>[] = [];
   let ultimoPull = 0;
+  let ultimoIntento = 0; // para la consulta periódica: si el servidor falla, no se reintenta en bucle cada 5 s
   const limpiezas: (() => void)[] = [];
 
   async function ciclo(soloEnviar: boolean): Promise<ResultadoFlush | null> {
+    if (!soloEnviar) ultimoIntento = Date.now();
     if (!remoto || (typeof navigator !== 'undefined' && navigator.onLine === false)) return null;
     actualizarEstadoSync({ sincronizando: true });
     try {
@@ -86,6 +99,12 @@ export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync
     debounce = setTimeout(() => void sincronizarAhora({ soloEnviar: Date.now() - ultimoPull < 15_000 }), 300);
   }
 
+  /** El servidor avisó de un cambio: se descarga (envío + descarga) tras agrupar la ráfaga. */
+  function alAvisoDelServidor() {
+    clearTimeout(esperaAviso);
+    esperaAviso = setTimeout(() => void sincronizarAhora(), ESPERA_AVISO_MS);
+  }
+
   function iniciar() {
     actualizarEstadoSync({ remotoConfigurado: !!remoto, online: typeof navigator === 'undefined' ? true : navigator.onLine !== false });
     if (typeof window === 'undefined') return;
@@ -114,15 +133,31 @@ export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync
       () => navigator.serviceWorker?.removeEventListener('message', alMensajeSw)
     );
 
+    if (remoto?.escucharCambios) {
+      limpiezas.push(
+        remoto.escucharCambios(TABLAS_EN_VIVO, alAvisoDelServidor, (conectado) => {
+          // Al (re)conectar el canal se descarga por si algo cambió mientras estaba caído.
+          if (conectado && !enVivo) alAvisoDelServidor();
+          enVivo = conectado;
+          actualizarEstadoSync({ enVivo: conectado });
+        })
+      );
+    }
+
     temporizadores = [
       setInterval(() => void db.outbox.count().then((n) => n > 0 && void sincronizarAhora({ soloEnviar: true })), INTERVALO_OUTBOX_MS),
-      setInterval(() => void sincronizarAhora(), INTERVALO_PULL_MS),
+      // Consulta periódica: solo con la pestaña visible (ahorra batería y datos); al volver a ella se sincroniza de inmediato.
+      setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        if (Date.now() - Math.max(ultimoPull, ultimoIntento) >= (enVivo ? INTERVALO_CON_VIVO_MS : INTERVALO_SIN_VIVO_MS)) void sincronizarAhora();
+      }, 5_000),
     ];
     void sincronizarAhora();
   }
 
   function detener() {
     clearTimeout(debounce);
+    clearTimeout(esperaAviso);
     temporizadores.forEach(clearInterval);
     temporizadores = [];
     limpiezas.splice(0).forEach((l) => l());

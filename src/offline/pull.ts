@@ -9,9 +9,11 @@ import type {
   LocalDrogueria,
   LocalMapCliente,
   LocalMapProducto,
+  LocalComunicado,
+  LocalMeta,
   LocalNotificacion,
-  LocalPedido,
   LocalPlantilla,
+  LocalPedido,
   LocalProducto,
 } from './types';
 
@@ -75,6 +77,7 @@ export const TABLAS_PULL: TablaPull[] = [
             empaque_minimo: Number(f.empaque_minimo ?? 1),
             es_prioritario: f.es_prioritario === true,
             activo: f.activo !== false,
+            foto_url: strN(f.foto_url),
             updated_at: str(f.updated_at),
             tokens: tokensProducto(base),
           };
@@ -303,24 +306,75 @@ export const TABLAS_PULL: TablaPull[] = [
     },
   },
   {
-    remota: 'plantillas_reposicion',
-    seleccion: '*, plantilla_items(producto_id, unidades)',
+    remota: 'plantillas_pedido',
     aplicar: async (db, filas) => {
       const locales = new Map((await db.plantillas.bulkGet(filas.map((f) => str(f.id)))).filter((p): p is LocalPlantilla => !!p).map((p) => [p.id, p]));
-      const limpias = filas.filter((f) => (locales.get(str(f.id))?.sync_estado ?? 'sincronizado') === 'sincronizado');
-      await db.plantillas.bulkDelete(borrados(limpias));
+      const sucio = (id: string) => (locales.get(id)?.sync_estado ?? 'sincronizado') !== 'sincronizado';
+      await db.plantillas.bulkDelete(borrados(filas).filter((id) => !sucio(id)));
       await db.plantillas.bulkPut(
-        vigentes(limpias).map<LocalPlantilla>((f) => ({
+        vigentes(filas)
+          .filter((f) => !sucio(str(f.id)))
+          .map<LocalPlantilla>((f) => ({
+            id: str(f.id),
+            vendedor_id: str(f.vendedor_id),
+            cliente_id: str(f.cliente_id),
+            drogueria_id: strN(f.drogueria_id),
+            nombre: str(f.nombre),
+            lineas: Array.isArray(f.lineas) ? (f.lineas as LocalPlantilla['lineas']) : [],
+            updated_at: str(f.updated_at),
+            sync_estado: 'sincronizado',
+          }))
+      );
+    },
+  },
+  {
+    remota: 'comunicados',
+    podarNoVistos: async (db, vistos) => {
+      const sobran = (await db.comunicados.toCollection().primaryKeys()).filter((id) => !vistos.has(id));
+      if (sobran.length) await db.comunicados.bulkDelete(sobran);
+    },
+    seleccion: '*,para_mi',
+    aplicar: async (db, filas) => {
+      await db.comunicados.bulkDelete(borrados(filas));
+      await db.comunicados.bulkPut(
+        vigentes(filas).map<LocalComunicado>((f) => ({
           id: str(f.id),
-          vendedor_id: str(f.vendedor_id),
+          titulo: str(f.titulo),
+          mensaje: str(f.mensaje),
+          tipo: (f.tipo as LocalComunicado['tipo']) ?? 'anuncio',
+          roles: (f.roles as string[] | null) ?? [],
+          equipos: (f.equipos as string[] | null) ?? [],
+          estados: (f.estados as string[] | null) ?? [],
+          ciudades: (f.ciudades as string[] | null) ?? [],
+          regiones: (f.regiones as string[] | null) ?? [],
+          vigente_desde: str(f.vigente_desde),
+          vigente_hasta: strN(f.vigente_hasta),
+          para_mi: f.para_mi !== false,
+          creado_por: strN(f.creado_por),
+          created_at: str(f.created_at),
+          updated_at: str(f.updated_at),
+        }))
+      );
+    },
+  },
+  {
+    remota: 'metas',
+    podarNoVistos: async (db, vistos) => {
+      const sobran = (await db.metas.toCollection().primaryKeys()).filter((id) => !vistos.has(id));
+      if (sobran.length) await db.metas.bulkDelete(sobran);
+    },
+    aplicar: async (db, filas) => {
+      await db.metas.bulkDelete(borrados(filas));
+      await db.metas.bulkPut(
+        vigentes(filas).map<LocalMeta>((f) => ({
+          id: str(f.id),
+          periodo: str(f.periodo),
+          vendedor_id: strN(f.vendedor_id),
           cliente_id: strN(f.cliente_id),
           drogueria_id: strN(f.drogueria_id),
-          nombre: str(f.nombre),
-          items: ((f.plantilla_items as { producto_id: string; unidades: number }[] | null) ?? []).map((i) => ({
-            producto_id: i.producto_id,
-            unidades: i.unidades,
-          })),
-          sync_estado: 'sincronizado',
+          indicador: (f.indicador as LocalMeta['indicador']) ?? 'unidades',
+          objetivo: Number(f.objetivo),
+          updated_at: str(f.updated_at),
         }))
       );
     },

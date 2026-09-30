@@ -27,6 +27,7 @@ const RPC: Record<Exclude<TipoOutbox, 'pedido.rerutear'>, string> = {
   'pedido.crear': 'sync_crear_pedido',
   'pedido.modificar': 'sync_modificar_pedido',
   'visita.registrar': 'sync_registrar_visita',
+  'farmacia.codigo': 'sync_registrar_codigo_farmacia',
   'plantilla.guardar': 'sync_guardar_plantilla',
 };
 
@@ -62,6 +63,19 @@ export function crearRemotoSupabase(client: SupabaseClient): SyncRemote {
     async haySesion() {
       const { data } = await client.auth.getSession();
       return !!data.session;
+    },
+
+    escucharCambios(tablas, alCambiar, alEstado) {
+      // Un solo canal para todas las tablas. El servidor aplica la seguridad por filas: cada quien solo recibe lo que puede ver.
+      let canal = client.channel(`nova-cambios-${crypto.randomUUID()}`);
+      for (const tabla of tablas) {
+        canal = canal.on('postgres_changes', { event: '*', schema: 'public', table: tabla }, () => alCambiar(tabla));
+      }
+      canal.subscribe((estado) => alEstado(estado === 'SUBSCRIBED'));
+      return () => {
+        alEstado(false);
+        void client.removeChannel(canal);
+      };
     },
   };
 }

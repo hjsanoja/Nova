@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bonificaciones, condicionesDisponibles, describirFaltantes, evaluarPedido, reglaAplica, topeDescuentoLinea } from './politicas';
+import { bonificaciones, condicionDelPedido, condicionesDisponibles, describirFaltantes, describirRequisitos, evaluarPedido, reglaAplica, topeDescuentoLinea } from './politicas';
 import type { ContextoPedido } from './politicas';
 import { REGLA_BASE, REGLA_MIX } from './testing/utiles';
 
@@ -63,5 +63,35 @@ describe('políticas comerciales (mismas reglas que el servidor)', () => {
   it('calcula bonificaciones (1 gratis por cada 10)', () => {
     const r = { ...REGLA_BASE, id: 'bono', bonificacion: { por_cada: 10, gratis: 1 } };
     expect(bonificaciones([r], ctx([linea('1', 35), linea('2', 9)]))).toEqual([{ regla_id: 'bono', producto_id: '1', gratis: 3 }]);
+  });
+});
+
+describe('condición del pedido (descuento automático)', () => {
+  const base = { alcance: 'pedido' as const, vigente_desde: '2026-01-01', prioridad: 100, activo: true };
+  const reglas = [
+    { ...base, id: 'a', nombre: '5% por 3 SKU', descuento_max_pct: 5, min_skus_distintos: 3 },
+    { ...base, id: 'b', nombre: '8% por 100 uds', descuento_max_pct: 8, min_unidades_totales: 100 },
+    { ...base, id: 'c', nombre: '12% por 5 SKU y 200 uds', descuento_max_pct: 12, min_skus_distintos: 5, min_unidades_totales: 200 },
+    { ...base, id: 'l', nombre: 'de línea', alcance: 'linea' as const, descuento_max_pct: 50 },
+  ];
+  const ctx = (skus: number, uds: number) => ({ cliente_validado: true, hoy: '2026-06-01', lineas: Array.from({ length: skus }, (_, i) => ({ producto_id: `p${i}`, unidades: Math.floor(uds / skus) })) });
+
+  it('aplica la de mayor descuento que se cumple y sugiere la siguiente más cercana', () => {
+    expect(condicionDelPedido(reglas, ctx(1, 10))).toMatchObject({ aplicada: null, siguiente: { regla: { id: 'a' }, faltantes: { skus: 2 } } });
+    expect(condicionDelPedido(reglas, ctx(3, 30))).toMatchObject({ aplicada: { pct: 5 }, siguiente: { regla: { id: 'b' }, faltantes: { unidades: 70 } } });
+    expect(condicionDelPedido(reglas, ctx(4, 120))).toMatchObject({ aplicada: { pct: 8 }, siguiente: { regla: { id: 'c' } } });
+    expect(condicionDelPedido(reglas, ctx(5, 200))).toMatchObject({ aplicada: { pct: 12 }, siguiente: null });
+  });
+
+  it('respeta vigencia, estado y droguería', () => {
+    const r = [{ ...reglas[0], vigente_hasta: '2026-03-01' }, { ...reglas[1], activo: false }, { ...reglas[2], drogueria_id: 'd1' }];
+    expect(condicionDelPedido(r, { ...ctx(5, 200), drogueria_id: 'd2' }).aplicada).toBeNull();
+    expect(condicionDelPedido(r, { ...ctx(5, 200), drogueria_id: 'd1' }).aplicada?.pct).toBe(12);
+  });
+
+  it('describe los requisitos', () => {
+    expect(describirRequisitos({ min_skus_distintos: 3, min_unidades_totales: null })).toBe('Desde 3 productos distintos');
+    expect(describirRequisitos({ min_skus_distintos: 5, min_unidades_totales: 200 })).toBe('Desde 5 productos distintos y 200 unidades');
+    expect(describirRequisitos({ min_skus_distintos: null, min_unidades_totales: null })).toBe('Sin mínimo');
   });
 });

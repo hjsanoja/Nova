@@ -12,6 +12,8 @@ export interface EstadoSync {
   necesitaLogin: boolean;
   ultimaSync: number | null;
   ultimoError: string | null;
+  /** Los cambios del servidor llegan en vivo (Realtime conectado). Si no, se consulta cada pocos segundos. */
+  enVivo: boolean;
   /** Mutaciones locales esperando envío. */
   pendientes: number;
   /** Mutaciones rechazadas o en conflicto: requieren atención del usuario. */
@@ -25,6 +27,7 @@ let estado: EstadoSync = {
   necesitaLogin: false,
   ultimaSync: null,
   ultimoError: null,
+  enVivo: false,
   pendientes: 0,
   errores: 0,
 };

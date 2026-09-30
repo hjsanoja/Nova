@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 
-export const EVENTO_ERROR_ALMACENAMIENTO = 'nova:storage-error';
+const EVENTO_ERROR_ALMACENAMIENTO = 'nova:storage-error';
 
 const escrituras = new Map<string, () => void>();
 
@@ -37,7 +37,7 @@ function guardarEnIndexedDB(clave: string, valor: unknown) {
 }
 
 /** Lectura asíncrona de respaldo desde IndexedDB */
-export function leerDeIndexedDB<T>(clave: string): Promise<T | null> {
+function leerDeIndexedDB<T>(clave: string): Promise<T | null> {
   if (typeof window === 'undefined' || !window.indexedDB) return Promise.resolve(null);
   return new Promise((resolve) => {
     try {
@@ -140,7 +140,7 @@ export function usePersistentState<T>(
 }
 
 /** Claves de los datos de trabajo guardados en el navegador (catálogos, histórico y homologación cargados en "Datos"). */
-export const CLAVES_DATOS_LOCALES = [
+const CLAVES_DATOS_LOCALES = [
   'PHARMA_CLIENTES', 'PHARMA_PRODUCTOS', 'PHARMA_DROGUERIAS_V2', 'PHARMA_HISTORICO', 'PHARMA_CLIENTE_ALIAS',
   'PHARMA_PRODUCTO_MAPEO', 'PHARMA_PEDIDOS_CAB', 'PHARMA_PEDIDOS_DET', 'PHARMA_USUARIOS', 'PHARMA_BORRADOR_LOCAL',
 ];

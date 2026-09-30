@@ -35,8 +35,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     root.style.colorScheme = oscuro ? 'dark' : 'light';
     document.body.className = `${CLASES_BODY} ${
       oscuro
-        ? 'bg-slate-950 text-slate-100 selection:bg-teal-500'
-        : 'bg-slate-50 text-slate-800 selection:bg-teal-600'
+        ? 'bg-slate-950 text-slate-100 selection:bg-marca-500'
+        : 'bg-slate-50 text-slate-800 selection:bg-marca-700'
     } selection:text-white`;
     document
       .querySelector('meta[name="theme-color"]')

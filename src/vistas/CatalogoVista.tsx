@@ -8,12 +8,12 @@ import { useDroguerias, useMapClientes, useMapProductos, useProductos } from './
 
 const POR_PAGINA = 80;
 
-/** Consulta de productos y droguerías (solo lectura; se editan en "Cargar y editar datos"). */
+/** Consulta de productos y droguerías (solo lectura; se editan en "Datos maestros"). */
 export function CatalogoVista({ usuario }: { usuario: Usuario }) {
   const [seccion, setSeccion] = useState<'productos' | 'droguerias'>('productos');
   return (
     <div>
-      <PageHeader titulo="Catálogo" descripcion={usuario.rol === 'admin' ? 'Para modificarlo, ve a "Cargar y editar datos".' : 'Productos y droguerías.'} />
+      <PageHeader titulo="Catálogo" descripcion={usuario.rol === 'admin' ? 'Para modificarlo, ve a "Datos maestros".' : 'Productos y droguerías.'} />
       <Segmentado opciones={[{ id: 'productos', texto: 'Productos' }, { id: 'droguerias', texto: 'Droguerías' }]} valor={seccion} onChange={setSeccion} />
       {seccion === 'productos' ? <Productos /> : <Droguerias />}
     </div>
@@ -59,7 +59,7 @@ function Productos() {
 
       <Tarjeta className="!p-0">
         {lista.length === 0 ? (
-          <Vacio icono={Pill} titulo={productos.length === 0 ? 'El catálogo está vacío' : 'Sin resultados'} texto={productos.length === 0 ? 'Cárgalo desde "Cargar y editar datos".' : undefined} />
+          <Vacio icono={Pill} titulo={productos.length === 0 ? 'El catálogo está vacío' : 'Sin resultados'} texto={productos.length === 0 ? 'Cárgalo desde "Datos maestros".' : undefined} />
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
             {lista.slice(0, limite).map((p) => (
@@ -78,7 +78,7 @@ function Productos() {
             ))}
           </ul>
         )}
-        {lista.length > limite && <div className="border-t border-slate-100 p-2 text-center dark:border-slate-800"><button type="button" className="text-sm font-semibold text-teal-700 dark:text-teal-300" onClick={() => setLimite((l) => l + POR_PAGINA)}>Ver más ({lista.length - limite})</button></div>}
+        {lista.length > limite && <div className="border-t border-slate-100 p-2 text-center dark:border-slate-800"><button type="button" className="text-sm font-semibold text-marca-700 dark:text-marca-300" onClick={() => setLimite((l) => l + POR_PAGINA)}>Ver más ({lista.length - limite})</button></div>}
       </Tarjeta>
 
       <Sheet abierto={!!actual} titulo={actual?.nombre_comercial ?? ''} onCerrar={() => setAbierto(null)}>
@@ -117,7 +117,7 @@ function Droguerias() {
   return (
     <Tarjeta className="!p-0">
       {droguerias.length === 0 ? (
-        <Vacio icono={Truck} titulo="No hay droguerías" texto='Se cargan desde "Cargar y editar datos".' />
+        <Vacio icono={Truck} titulo="No hay droguerías" texto='Se cargan desde "Datos maestros".' />
       ) : (
         <ul className="divide-y divide-slate-100 dark:divide-slate-800">
           {droguerias.sort((a, b) => a.nombre.localeCompare(b.nombre)).map((d) => {

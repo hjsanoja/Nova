@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
-import { UserPlus } from 'lucide-react';
+import { Search, Trash2, UserPlus } from 'lucide-react';
 import type { RolUsuario, Usuario } from '../../types/pharmacy';
 import { getSupabaseClient, crearClienteSinSesion } from '../../services/supabaseClient';
 import { crearUsuarioNube, rolDesdeV3 } from '../../services/nubeV3';
-import { Boton, Etiqueta, Tarjeta, Vacio, estiloInput, useAviso } from '../../components/ui/kit';
+import { Avatar, BarraSeleccion, Boton, Campo, Casilla, Etiqueta, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useSeleccion } from '../../components/ui/kit';
+import { Sheet } from '../../components/capture/Sheet';
+import { eliminarUsuarios, filtrarPorTexto } from '../../services/maestros';
 import { useUsuariosNube } from '../useDatos';
 import type { UsuarioNube } from '../useDatos';
 
@@ -27,6 +29,10 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
   const [guardando, setGuardando] = useState<string | null>(null);
   const [nuevo, setNuevo] = useState(false);
   const { mostrar, nodo } = useAviso();
+  const { confirmar, nodo: nodoConfirmar } = useConfirmar();
+  const sel = useSeleccion();
+  const [texto, setTexto] = useState('');
+  const [zona, setZona] = useState<UsuarioNube | null>(null);
   const equipos = useMemo(() => Array.from(new Set(usuarios.map((u) => u.equipo).filter((e): e is string => !!e))).sort(), [usuarios]);
 
   const actual = (u: UsuarioNube): Borrador => borradores[u.id] ?? { rol: u.rol, equipo: u.equipo ?? '', activo: u.activo };
@@ -50,12 +56,30 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
   };
 
   const porActivar = usuarios.filter((u) => !u.activo);
+  const visibles = filtrarPorTexto([...porActivar, ...usuarios.filter((u) => u.activo)], texto, (u) => [u.nombre_completo, u.email, u.rol, u.equipo]);
+  const seleccionables = visibles.filter((u) => u.id !== yo.id).map((u) => u.id);
+
+  const eliminar = async () => {
+    const sb = getSupabaseClient();
+    if (!sb || sel.cantidad === 0) return;
+    const ok = await confirmar(`Eliminar ${sel.cantidad} usuario${sel.cantidad === 1 ? '' : 's'}`, 'No podrán entrar ni ver datos, y sus farmacias salen de su fichero. Sus pedidos se conservan. Para borrar también la cuenta de acceso, hazlo en Supabase → Authentication → Users.', { accion: 'Eliminar', peligro: true });
+    if (!ok) return;
+    try {
+      const n = await eliminarUsuarios(sb, [...sel.ids]);
+      sel.limpiar();
+      setRecarga((x) => x + 1);
+      mostrar({ tipo: 'ok', texto: `${n} usuario${n === 1 ? '' : 's'} eliminado${n === 1 ? '' : 's'}.` });
+    } catch (e: unknown) {
+      mostrar({ tipo: 'error', texto: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   if (!getSupabaseClient()) return <Vacio titulo="Los usuarios se administran en la nube" texto="Conecta Supabase para crear cuentas y asignar roles." />;
 
   return (
     <div className="space-y-3">
       {nodo}
+      {nodoConfirmar}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="max-w-2xl text-xs text-slate-500">Cada persona entra con su correo. <b>Vendedor</b>: ve solo su fichero de farmacias. <b>Transferencista</b>: procesa pedidos y ve todas las farmacias. <b>Gerente</b>: consulta y reportes. <b>Administrador</b>: todo.</p>
         <Boton variante="primario" icono={UserPlus} onClick={() => setNuevo((v) => !v)}>Nuevo usuario</Boton>
@@ -69,24 +93,51 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
         </p>
       )}
 
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden />
+        <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar por nombre, correo, rol o equipo" aria-label="Buscar usuario" className={`${estiloInput} pl-9`} />
+      </div>
+
+      <BarraSeleccion cantidad={sel.cantidad} onLimpiar={sel.limpiar}>
+        <Boton tamano="sm" variante="peligro" icono={Trash2} onClick={() => void eliminar()}>Eliminar {sel.cantidad}</Boton>
+      </BarraSeleccion>
+
       <Tarjeta className="!p-0">
         {cargando ? <Vacio titulo="Cargando…" /> : error ? <Vacio titulo="No se pudo cargar" texto={error} /> : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {[...porActivar, ...usuarios.filter((u) => u.activo)].map((u) => {
+            <li className="flex items-center gap-1 bg-slate-50 px-1 text-xs font-medium text-slate-500 dark:bg-slate-950">
+              <Casilla
+                etiqueta="Seleccionar todos"
+                marcada={seleccionables.length > 0 && seleccionables.every((id) => sel.tiene(id))}
+                parcial={seleccionables.some((id) => sel.tiene(id)) && !seleccionables.every((id) => sel.tiene(id))}
+                onChange={(v) => sel.fijarTodos(seleccionables, v)}
+              />
+              {visibles.length} persona{visibles.length === 1 ? '' : 's'}
+            </li>
+            {visibles.map((u) => {
               const b = actual(u);
               const soyYo = u.id === yo.id;
               return (
-                <li key={u.id} className="grid gap-2 px-3 py-2.5 md:grid-cols-[1fr_auto_auto_auto_auto] md:items-center">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">{u.nombre_completo}{soyYo && <span className="ml-1 text-xs font-normal text-slate-400">(tú)</span>}</p>
-                    <p className="truncate text-xs text-slate-500">{u.email}</p>
+                <li key={u.id} className={`grid gap-2 py-2.5 pl-1 pr-3 md:grid-cols-[auto_1fr_auto_auto_auto_auto] md:items-center ${sel.tiene(u.id) ? 'bg-marca-50 dark:bg-marca-950/60' : ''}`}>
+                  <div className="flex items-center gap-2 md:contents">
+                    {soyYo ? <span className="w-10" /> : <Casilla etiqueta={`Seleccionar ${u.nombre_completo}`} marcada={sel.tiene(u.id)} onChange={() => sel.alternar(u.id)} />}
+                    <div className="flex min-w-0 items-center gap-3">
+                      <Avatar nombre={u.nombre_completo} foto={u.foto_url} tamano={36} />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{u.nombre_completo}{soyYo && <span className="ml-1 text-xs font-normal text-slate-400">(tú)</span>}</p>
+                        <p className="truncate text-xs text-slate-500">{u.email}</p>
+                        <button type="button" onClick={() => setZona(u)} className="truncate text-xs font-medium text-marca-700 hover:underline dark:text-marca-300">
+                          {[u.region, u.estado_geografico, u.ciudad].filter(Boolean).join(' · ') || 'Asignar zona'}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                   <select value={b.rol} disabled={soyYo} onChange={(e) => cambiar(u, { rol: e.target.value })} aria-label={`Rol de ${u.nombre_completo}`} className={`${estiloInput} md:w-40`}>
                     {ROLES.map((r) => <option key={r.id} value={r.id}>{r.texto}</option>)}
                   </select>
                   <input value={b.equipo} onChange={(e) => cambiar(u, { equipo: e.target.value })} list="equipos" placeholder="Equipo (opcional)" aria-label={`Equipo de ${u.nombre_completo}`} className={`${estiloInput} md:w-36`} />
                   <label className="flex min-h-10 items-center gap-2 text-sm font-semibold">
-                    <input type="checkbox" checked={b.activo} disabled={soyYo} onChange={(e) => cambiar(u, { activo: e.target.checked })} className="h-4 w-4 accent-teal-600" /> Activo
+                    <input type="checkbox" checked={b.activo} disabled={soyYo} onChange={(e) => cambiar(u, { activo: e.target.checked })} className="h-4 w-4 accent-marca-600" /> Activo
                   </label>
                   <div className="flex items-center gap-2">
                     {sucio(u) ? <Boton variante="primario" disabled={guardando === u.id} onClick={() => void guardar(u)}>Guardar</Boton> : u.rol === 'vendedor' && u.activo ? <Boton variante="suave" onClick={onFichero}>Fichero</Boton> : <Etiqueta tono={u.activo ? 'verde' : 'ambar'}>{u.activo ? 'Al día' : 'Inactivo'}</Etiqueta>}
@@ -98,7 +149,38 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
         )}
         <datalist id="equipos">{equipos.map((e) => <option key={e} value={e} />)}</datalist>
       </Tarjeta>
+      {zona && <ZonaUsuario usuario={zona} onCerrar={() => setZona(null)} onGuardado={() => { setZona(null); setRecarga((x) => x + 1); mostrar({ tipo: 'ok', texto: 'Zona guardada.' }); }} />}
     </div>
+  );
+}
+
+/** Estado, ciudad y región de la persona: sirven para dirigirle comunicados por zona. */
+function ZonaUsuario({ usuario: u, onCerrar, onGuardado }: { usuario: UsuarioNube; onCerrar: () => void; onGuardado: () => void }) {
+  const [z, setZ] = useState({ region: u.region ?? '', estado_geografico: u.estado_geografico ?? '', ciudad: u.ciudad ?? '' });
+  const [error, setError] = useState('');
+  const guardar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const limpio = (t: string) => t.trim() || null;
+    const { error: err } = await sb.from('dim_usuarios').update({ region: limpio(z.region), estado_geografico: limpio(z.estado_geografico), ciudad: limpio(z.ciudad) }).eq('id', u.id);
+    if (err) return setError(err.message);
+    onGuardado();
+  };
+  return (
+    <Sheet abierto titulo={`Zona de ${u.nombre_completo}`} onCerrar={onCerrar}>
+      <form onSubmit={guardar} className="flex flex-col gap-3">
+        <p className="text-sm text-slate-600 dark:text-slate-300">Se usa para enviarle comunicados por región, estado o ciudad. A un vendedor también le llegan los de las zonas de las farmacias de su fichero.</p>
+        <Campo rotulo="Región"><input value={z.region} onChange={(e) => setZ({ ...z, region: e.target.value })} placeholder="Ej.: Occidente" className={estiloInput} /></Campo>
+        <Campo rotulo="Estado"><input value={z.estado_geografico} onChange={(e) => setZ({ ...z, estado_geografico: e.target.value })} placeholder="Ej.: Zulia" className={estiloInput} /></Campo>
+        <Campo rotulo="Ciudad"><input value={z.ciudad} onChange={(e) => setZ({ ...z, ciudad: e.target.value })} placeholder="Ej.: Maracaibo" className={estiloInput} /></Campo>
+        {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Boton onClick={onCerrar}>Cancelar</Boton>
+          <Boton type="submit" variante="primario">Guardar</Boton>
+        </div>
+      </form>
+    </Sheet>
   );
 }
 

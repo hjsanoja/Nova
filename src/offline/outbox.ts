@@ -32,10 +32,6 @@ export async function encolar(db: NovaDB, e: EntradaOutbox, ahora = Date.now()):
   });
 }
 
-export async function contarPendientes(db: NovaDB): Promise<number> {
-  return db.outbox.count();
-}
-
 /** Tras recuperar la red se ignora la espera acumulada y se reintenta de inmediato. */
 export async function reintentarAhora(db: NovaDB): Promise<void> {
   await db.outbox.where('estado').equals('pendiente').modify({ proximo_intento: 0 });
@@ -110,7 +106,7 @@ const num = (v: unknown, defecto = 0): number => (typeof v === 'number' ? v : de
 
 /** Aplica la respuesta del servidor al estado local y retira la mutación. Devuelve true si hubo conflicto. */
 async function aplicarRespuesta(db: NovaDB, item: OutboxItem, r: FilaRemota): Promise<boolean> {
-  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.plantillas];
+  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.mapClientes, db.plantillas];
   return db.transaction('rw', tablas, async () => {
     switch (item.tipo) {
       case 'pedido.crear':
@@ -179,9 +175,25 @@ async function aplicarRespuesta(db: NovaDB, item: OutboxItem, r: FilaRemota): Pr
         });
         return false;
       }
+      case 'farmacia.codigo': {
+        await db.outbox.delete(item.seq!);
+        // Si el código ya existía en el servidor, su fila reemplaza a la provisional.
+        const id = String(r.id ?? item.entidad_id);
+        if (id !== item.entidad_id) await db.mapClientes.delete(item.entidad_id);
+        await db.mapClientes.put({
+          id,
+          drogueria_id: String(r.drogueria_id ?? item.payload.drogueria_id),
+          cliente_id: String(r.cliente_id ?? item.payload.cliente_id),
+          codigo_cuenta: String(r.codigo_cuenta ?? item.payload.codigo),
+          nombre_en_drogueria: (r.nombre_en_drogueria as string | null) ?? null,
+          es_principal: r.es_principal !== false,
+        });
+        return false;
+      }
       case 'plantilla.guardar': {
         await db.outbox.delete(item.seq!);
-        await db.plantillas.update(item.entidad_id, { sync_estado: 'sincronizado' });
+        if (item.payload.eliminar) await db.plantillas.delete(item.entidad_id);
+        else if (!(await quedanMutaciones(db, item.entidad_id, item.seq!))) await db.plantillas.update(item.entidad_id, { sync_estado: 'sincronizado' });
         return false;
       }
       case 'prospecto.crear': {
@@ -198,7 +210,7 @@ async function aplicarRespuesta(db: NovaDB, item: OutboxItem, r: FilaRemota): Pr
 
 /** Rechazo definitivo del servidor: la mutación queda en "error" (no se reintenta) y se compensa lo local. */
 async function marcarErrorPermanente(db: NovaDB, item: OutboxItem, error: ErrorRemoto): Promise<void> {
-  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.plantillas];
+  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.mapClientes, db.plantillas];
   await db.transaction('rw', tablas, async () => {
     await db.outbox.update(item.seq!, { estado: 'error', error: error.message });
     const patch = { sync_estado: 'error' as const, sync_error: error.message };
@@ -219,11 +231,15 @@ async function marcarErrorPermanente(db: NovaDB, item: OutboxItem, error: ErrorR
       case 'visita.registrar':
         await db.visitas.update(item.entidad_id, { sync_estado: 'error' });
         break;
+      case 'prospecto.crear':
+        await db.clientes.update(item.entidad_id, { sync_estado: 'error' });
+        break;
       case 'plantilla.guardar':
         await db.plantillas.update(item.entidad_id, { sync_estado: 'error' });
         break;
-      case 'prospecto.crear':
-        await db.clientes.update(item.entidad_id, { sync_estado: 'error' });
+      case 'farmacia.codigo':
+        // Rechazado (p. ej. el código es de otra farmacia): se retira para que la app vuelva a pedirlo.
+        await db.mapClientes.delete(item.entidad_id);
         break;
     }
   });

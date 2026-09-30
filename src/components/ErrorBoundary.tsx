@@ -55,7 +55,7 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError && this.props.compacto) {
       return (
-        <div role="alert" className="p-6 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200 space-y-3">
+        <div role="alert" className="p-6 rounded-xl border border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200 space-y-3">
           <div className="flex items-center gap-2 font-bold text-sm">
             <AlertCircle className="w-4 h-4" />
             No se pudo cargar esta sección
@@ -66,7 +66,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <button
             type="button"
             onClick={this.handleReload}
-            className="min-h-11 inline-flex items-center gap-2 px-4 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white"
+            className="min-h-11 inline-flex items-center gap-2 px-4 rounded-xl text-xs font-bold bg-marca-700 hover:bg-marca-800 text-white"
           >
             <RotateCcw className="w-4 h-4" />
             Reintentar
@@ -78,8 +78,8 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="min-h-dvh bg-slate-950 text-white flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl text-center space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center justify-center mx-auto">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl text-center space-y-4">
+            <div className="w-12 h-12 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center mx-auto">
               <AlertCircle className="w-6 h-6" />
             </div>
 
@@ -91,7 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
 
             {this.state.error?.message && (
-              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px] text-red-300 text-left overflow-x-auto">
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-rose-300 text-left overflow-x-auto">
                 {this.state.error.message}
               </div>
             )}
@@ -99,7 +99,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="flex flex-col gap-2 pt-2">
               <button
                 onClick={this.handleReload}
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl font-bold text-xs bg-teal-600 hover:bg-teal-700 text-white shadow-sm transition-all"
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl font-bold text-xs bg-marca-700 hover:bg-marca-800 text-white transition-all"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>Reintentar y Recargar</span>
@@ -109,7 +109,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 onClick={this.handleResetLocalState}
                 className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl font-bold text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all border border-slate-700"
               >
-                <Trash2 className="w-4 h-4 text-red-400" />
+                <Trash2 className="w-4 h-4 text-rose-400" />
                 <span>Restaurar Datos Predeterminados de Fábrica</span>
               </button>
             </div>

@@ -66,7 +66,7 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
         <div className="mb-5 flex justify-center">
           <NovaLogo size="lg" esClaro={esClaro} />
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
           {mostrarConexion ? (
             <>
               <h1 className="text-base font-bold text-slate-900 dark:text-white">{conectado ? 'Conexión con Supabase' : 'Conecta tu proyecto'}</h1>
@@ -79,7 +79,7 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
                 }}
               />
               {conectado ? (
-                <button type="button" onClick={() => setCambiandoConexion(false)} className="mt-3 w-full text-center text-xs font-semibold text-teal-700 hover:underline dark:text-teal-300">
+                <button type="button" onClick={() => setCambiandoConexion(false)} className="mt-3 w-full text-center text-xs font-semibold text-marca-700 hover:underline dark:text-marca-300">
                   Volver al inicio de sesión
                 </button>
               ) : (
@@ -108,7 +108,7 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
                 {cargando ? 'Entrando…' : 'Entrar'}
               </Boton>
               <div className="flex items-center justify-between pt-1 text-xs">
-                <button type="button" onClick={recuperar} className="font-semibold text-teal-700 hover:underline dark:text-teal-300">
+                <button type="button" onClick={recuperar} className="font-semibold text-marca-700 hover:underline dark:text-marca-300">
                   Olvidé mi contraseña
                 </button>
                 <button type="button" onClick={() => setCambiandoConexion(true)} className="inline-flex items-center gap-1 text-slate-500 hover:underline">
@@ -118,7 +118,7 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
             </form>
           )}
         </div>
-        <p className="mt-4 text-center text-[11px] text-slate-500">Si no tienes cuenta, pídesela a un administrador.</p>
+        <p className="mt-4 text-center text-xs text-slate-500">Si no tienes cuenta, pídesela a un administrador.</p>
       </div>
     </div>
   );

@@ -1,47 +1,3 @@
-const PALABRAS_STOP = new Set(['farmacia', 'farmacias', 'botica', 'drogueria', 'c.a', 'ca', 's.a', 'sa', 's.r.l', 'srl', 'de', 'la', 'el', 'los', 'las', 'y']);
-
-/** Nombre ya normalizado y tokenizado: se prepara una vez y se compara muchas veces. */
-export interface NombrePreparado {
-  vacio: boolean;
-  texto: string;
-  tokens: string[];
-}
-
-export function prepararNombre(nombre: string): NombrePreparado {
-  if (!nombre) return { vacio: true, texto: '', tokens: [] };
-  const texto = nombre.toLowerCase().trim().replace(/[.,\-_/]/g, ' ');
-  const tokens = texto.split(/\s+/).filter((t) => t.length > 1 && !PALABRAS_STOP.has(t));
-  return { vacio: false, texto, tokens };
-}
-
-// Algoritmo de similitud de nombres de farmacias (Token Dice-Sørensen + Substring) sobre nombres preparados.
-export function similitudPreparada(a: NombrePreparado, b: NombrePreparado): number {
-  if (a.vacio || b.vacio) return 0;
-  if (a.texto === b.texto) return 100;
-  if (a.texto.includes(b.texto) || b.texto.includes(a.texto)) return 85;
-
-  const tokensA = a.tokens;
-  const tokensB = b.tokens;
-  if (tokensA.length === 0 || tokensB.length === 0) {
-    return a.texto.slice(0, 4) === b.texto.slice(0, 4) ? 60 : 0;
-  }
-
-  let coincidencias = 0;
-  for (const tA of tokensA) {
-    if (tokensB.some((tB) => tB === tA || (tA.length > 3 && tB.includes(tA)) || (tB.length > 3 && tA.includes(tB)))) {
-      coincidencias++;
-    }
-  }
-
-  const score = Math.round((2 * coincidencias / (tokensA.length + tokensB.length)) * 100);
-  return Math.min(100, Math.max(0, score));
-}
-
-export function calcularSimilitudNombres(nombreA: string, nombreB: string): number {
-  return similitudPreparada(prepararNombre(nombreA), prepararNombre(nombreB));
-}
-
-// Detección automática del mes desde el nombre del archivo (ej: ventas_enero, ventas_febrero)
 export function detectarMesDeNombreArchivo(nombre: string): { mesNum: string; mesTexto: string; anio: string; periodo: string } | null {
   if (!nombre) return null;
   const nom = nombre.toLowerCase();
@@ -98,6 +54,3 @@ export function crearLectorColumnas(muestra: FilaCsv | undefined) {
     return '';
   };
 }
-
-/** Clave normalizada para comparar textos sin distinguir mayúsculas. */
-export const norm = (v: string | undefined | null): string => (v ?? '').toLowerCase();

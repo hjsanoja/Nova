@@ -91,11 +91,11 @@ export const ScannerSheet: React.FC<ScannerSheetProps> = ({ abierto, onCerrar, o
   return (
     <Sheet abierto={abierto} titulo="Escanear empaque" onCerrar={onCerrar}>
       <div className="space-y-3">
-        <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-slate-950">
+        <div className="relative aspect-[4/3] overflow-hidden rounded-xl bg-slate-950">
           {motor === 'nativo' && <video ref={videoRef} playsInline muted className="h-full w-full object-cover" />}
           {motor === 'zxing' && <div id={REGION_ID} className="h-full w-full" />}
           {!error && (
-            <div className="pointer-events-none absolute inset-x-8 top-1/2 h-0.5 -translate-y-1/2 bg-teal-400/80 shadow-[0_0_12px_rgba(45,212,191,0.9)]" aria-hidden />
+            <div className="pointer-events-none absolute inset-x-8 top-1/2 h-0.5 -translate-y-1/2 bg-marca-400/80 shadow-[0_0_12px_rgba(45,212,191,0.9)]" aria-hidden />
           )}
           {error && <p className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-slate-300">{error}</p>}
         </div>
@@ -116,9 +116,9 @@ export const ScannerSheet: React.FC<ScannerSheetProps> = ({ abierto, onCerrar, o
             inputMode="numeric"
             placeholder="Código de barras o SKU"
             aria-label="Código de barras o SKU"
-            className="min-h-12 flex-1 rounded-xl border border-slate-300 bg-white px-3 font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            className="min-h-12 flex-1 rounded-xl border border-slate-300 bg-white px-3 font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-marca-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
           />
-          <button type="submit" className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-teal-600 px-4 font-bold text-white">
+          <button type="submit" className="inline-flex min-h-12 items-center gap-2 rounded-xl bg-marca-700 px-4 font-bold text-white">
             <ScanLine className="h-4 w-4" /> Buscar
           </button>
         </form>

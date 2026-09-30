@@ -18,8 +18,9 @@ export async function iniciarOffline(crearRemoto: (() => Promise<SyncRemote | nu
   // Otra persona en el mismo dispositivo: se vacía lo local para que no vea el fichero de la anterior.
   await prepararDispositivoPara(db, usuarioId);
   if (!remoto) await sembrarDatosDemo(db);
-  // Cada sesión refresca por completo la lista de farmacias: si le quitaron una del fichero, deja de aparecer.
-  else await db.meta.delete('cursor:dim_clientes');
+  // Cada sesión refresca por completo la lista de farmacias, los comunicados y las metas: si le quitaron una farmacia del
+  // fichero o un comunicado ya no va dirigido a esta persona, deja de aparecer.
+  else await db.meta.bulkDelete(['cursor:dim_clientes', 'cursor:comunicados', 'cursor:metas']);
 
   // Contadores en vivo para el indicador del encabezado (sin polling).
   const sub = liveQuery(() => db.outbox.toArray()).subscribe({

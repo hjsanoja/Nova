@@ -3,10 +3,8 @@ import type { ColumnaExport, FormatoExport, OrigenColumnaExport } from '../offli
 import type {
   Cliente,
   ClienteDrogueriaAlias,
-  ColumnaCsvConfig,
   Drogueria,
   FormatoCsvConfig,
-  HistoricoPedidoPrevio,
   Producto,
   EquipoVentas,
   ProductoDrogueriaMapeo,
@@ -50,19 +48,6 @@ const ORIGEN_LEGADO_A_V3: Record<string, OrigenColumnaExport> = {
   fecha_pedido: 'fecha_pedido',
 };
 
-const ORIGEN_V3_A_LEGADO: Partial<Record<OrigenColumnaExport, ColumnaCsvConfig['campo_origen']>> = {
-  codigo_cliente_drogueria: 'codigo_cliente',
-  rif_cliente: 'rif_cliente',
-  codigo_producto_drogueria: 'sku',
-  ean: 'codigo_barras',
-  descripcion_producto_drogueria: 'nombre_producto',
-  unidades_confirmadas: 'cantidad_confirmada',
-  unidades_solicitadas: 'cantidad_solicitada',
-  correlativo: 'numero_pedido',
-  fecha_pedido: 'fecha_pedido',
-  constante: 'constante',
-};
-
 /** Layout CSV de la fase 1 -> layout de exportación v3. Las columnas sin equivalente se conservan vacías para no mover el archivo. */
 export function formatoLegadoAExport(c: FormatoCsvConfig): FormatoExport {
   const columnas: ColumnaExport[] = [...(c.columnas ?? [])]
@@ -88,25 +73,6 @@ export function formatoLegadoAExport(c: FormatoCsvConfig): FormatoExport {
     formato_fecha: 'YYYYMMDD',
     nombre_archivo: '{correlativo}_{fecha}.{extension}',
     columnas,
-  };
-}
-
-/** Layout v3 -> el de las pantallas clásicas (conversión con pérdida: solo lo que esas pantallas saben editar). */
-export function formatoExportALegado(f: FormatoExport): FormatoCsvConfig {
-  return {
-    delimitador: f.delimitador === '' ? ';' : f.delimitador,
-    incluir_encabezados: f.encabezado,
-    entrecomillado: f.entrecomillado,
-    codificacion: f.codificacion === 'iso-8859-1' || f.codificacion === 'windows-1252' ? 'ISO-8859-1' : 'UTF-8',
-    salto_linea: f.salto_linea,
-    formato_decimal: f.decimal === 'coma' ? 'coma' : 'punto',
-    columnas: f.columnas.map((col, i) => ({
-      campo_origen: ORIGEN_V3_A_LEGADO[col.origen] ?? 'constante',
-      nombre_encabezado: col.encabezado,
-      orden: i + 1,
-      ...(col.origen === 'constante' || !ORIGEN_V3_A_LEGADO[col.origen] ? { valor_constante: col.valor ?? '' } : {}),
-      formato: col.formato === 'entero' ? ('entero' as const) : ('texto' as const),
-    })),
   };
 }
 
@@ -166,81 +132,6 @@ export function drogueriaAV3(d: Drogueria): Record<string, unknown> {
 
 type Fila = Record<string, unknown>;
 const t = (v: unknown, d = ''): string => (typeof v === 'string' && v !== '' ? v : d);
-const n = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-
-/** Fila de dim_clientes (v3) -> registro con la forma que esperan las pantallas clásicas (luego pasa por leerClientes). */
-export function clienteDesdeV3(f: Fila): Record<string, unknown> {
-  const activo = f.estado_validacion === 'activo';
-  return {
-    id: t(f.codigo_interno),
-    ident01: t(f.codigo_interno),
-    codigo_cliente: t(f.codigo_interno),
-    rif: t(f.rif, 'J-00000000-0'),
-    razon_social: t(f.razon_social),
-    nombre_fantasia: t(f.nombre_comercial),
-    nombre_comercial: t(f.nombre_comercial),
-    brick: t(f.brick, ''),
-    municipio_ciudad: t(f.municipio, ''),
-    estado: t(f.estado_geografico, ''),
-    direccion: t(f.direccion, ''),
-    telefono: t(f.telefono, ''),
-    bandera: t(f.bandera, 'Independiente'),
-    frecuencia: diasAFrecuencia(typeof f.frecuencia_dias === 'number' ? f.frecuencia_dias : null),
-    ...(typeof f.lat === 'number' && typeof f.lon === 'number' ? { local_gps_lat: f.lat, local_gps_lon: f.lon } : {}),
-    activo,
-  };
-}
-
-export function productoDesdeV3(f: Fila): Record<string, unknown> {
-  return {
-    id: t(f.sku),
-    sku: t(f.sku),
-    codigo: t(f.sku),
-    codigo_barras_ean13: t(f.ean13, ''),
-    nombre_comercial: t(f.nombre_comercial),
-    presentacion: t(f.presentacion, ''),
-    principio_activo: t(f.principio_activo, ''),
-    clase_terapeutica: t(f.clase_terapeutica, ''),
-    clasificacion_portafolio: t(f.categoria, ''),
-    laboratorio: t(f.laboratorio, ''),
-    empaque_minimo: n(f.empaque_minimo, 1),
-    es_prioritario: f.es_prioritario === true,
-    activo: f.activo !== false,
-  };
-}
-
-export function drogueriaDesdeV3(f: Fila): Record<string, unknown> {
-  return {
-    id: t(f.codigo),
-    codigo_drogueria: t(f.codigo),
-    nombre_drogueria: t(f.nombre),
-    rif: t(f.rif, ''),
-    email_pedidos: t(f.email_pedidos, ''),
-    telefono: t(f.telefono, ''),
-    tiempo_entrega_promedio_dias: n(f.dias_entrega, 2),
-    formato_csv_config: f.formato_export ? formatoExportALegado(f.formato_export as FormatoExport) : undefined,
-    activo: f.activo !== false,
-  };
-}
-
-/**
- * Combina lo local con lo descargado por clave natural, sin perder nada local:
- *  - claves nuevas de la nube se agregan;
- *  - en claves comunes, `prioridad: 'nube'` actualiza los campos con lo de la nube conservando el id local;
- *    `'local'` deja la fila local intacta (droguerías: el layout de exportación se edita en pantalla);
- *  - lo que solo existe localmente se conserva (puede estar pendiente de subir).
- */
-export function fusionarPorClave<T extends { id: string }>(locales: T[], nube: T[], clave: (x: T) => string, prioridad: 'nube' | 'local'): T[] {
-  const porClave = new Map(nube.map((x) => [clave(x), x]));
-  const resultado = locales.map((l) => {
-    const k = clave(l);
-    const remoto = porClave.get(k);
-    if (!remoto) return l;
-    porClave.delete(k);
-    return prioridad === 'nube' ? ({ ...l, ...remoto, id: l.id } as T) : l;
-  });
-  return [...resultado, ...porClave.values()];
-}
 
 // ---------------------------------------------------------------------------- roles y equipos
 
@@ -348,14 +239,6 @@ export const importarCatalogoClientes = (sb: SupabaseClient, clientes: Cliente[]
 export const importarCatalogoProductos = (sb: SupabaseClient, productos: Producto[], onProgreso?: Progreso) =>
   rpcPorLotes(sb, 'importar_catalogo_productos', productos.filter((p) => p.codigo || p.sku).map(productoAV3), LOTE_CATALOGO, onProgreso);
 
-/** Crea o actualiza droguerías por código, con su formato de exportación (lo edita el administrador en pantalla). */
-export async function guardarDroguerias(sb: SupabaseClient, droguerias: Drogueria[]): Promise<number> {
-  if (droguerias.length === 0) return 0;
-  const { error } = await sb.from('dim_droguerias').upsert(droguerias.map(drogueriaAV3), { onConflict: 'codigo' });
-  if (error) throw new Error(`dim_droguerias: ${error.message}`);
-  return droguerias.length;
-}
-
 /**
  * Droguerías desde archivo: una celda vacía no borra lo que ya había y el formato de exportación no se toca.
  * Devuelve cuántas se crearon o actualizaron.
@@ -375,7 +258,8 @@ export interface ResultadoHomologacion {
 /** Homologación por clave natural: farmacias (alias por droguería) y productos (Cod SAP <-> código de la droguería). */
 export async function importarHomologacion(
   sb: SupabaseClient,
-  entrada: { alias?: ClienteDrogueriaAlias[]; mapeos?: ProductoDrogueriaMapeo[] }
+  entrada: { alias?: ClienteDrogueriaAlias[]; mapeos?: ProductoDrogueriaMapeo[] },
+  onProgreso?: Progreso
 ): Promise<ResultadoHomologacion> {
   const clientes = (entrada.alias ?? [])
     .filter((a) => a.verificado)
@@ -392,6 +276,7 @@ export async function importarHomologacion(
     total.clientes += r.clientes;
     total.productos += r.productos;
     total.omitidos.push(...r.omitidos);
+    onProgreso?.(Math.min((i + 1) * LOTE_CATALOGO, clientes.length + productos.length), clientes.length + productos.length);
   }
   return total;
 }
@@ -415,12 +300,25 @@ export function checksumLote(archivo: string, filas: Array<{ fecha: string; unid
  * (y deja lo demás como pendiente de homologar). Cada trozo solo inserta y enlaza sus filas; el consolidado mensual se
  * calcula una vez por archivo al final (finalizar_lote_ventas), así el tiempo crece en línea recta con el tamaño.
  */
+/** Una fila de un reporte de ventas, con los códigos y nombres tal como los escribió la droguería. */
+export interface VentaArchivo {
+  archivo_origen?: string;
+  fecha_pedido: string;
+  nombre_drogueria?: string;
+  cod_cliente_drogueria?: string;
+  nombre_cliente?: string;
+  codigo_producto_drogueria?: string;
+  nombre_producto?: string;
+  cod_sap?: string;
+  cantidad_facturada: number;
+}
+
 export async function importarVentas(
   sb: SupabaseClient,
-  historico: HistoricoPedidoPrevio[],
+  historico: VentaArchivo[],
   onProgreso?: Progreso
 ): Promise<ResumenImportacionVentas> {
-  const porArchivo = new Map<string, HistoricoPedidoPrevio[]>();
+  const porArchivo = new Map<string, VentaArchivo[]>();
   for (const h of historico) {
     const archivo = h.archivo_origen || 'historico_acumulado.csv';
     const lista = porArchivo.get(archivo);
@@ -438,10 +336,10 @@ export async function importarVentas(
     const filas = filasArchivo.map((h, i) => ({
       n: i + 1,
       fecha: h.fecha_pedido,
-      drogueria: h.nombre_drogueria || h.drogueria_id,
+      drogueria: h.nombre_drogueria,
       cod_cliente: h.cod_cliente_drogueria || null,
       nombre_cliente: h.nombre_cliente || null,
-      cod_producto: h.codigo_producto_drogueria || h.cod_sap || h.producto_id,
+      cod_producto: h.codigo_producto_drogueria || h.cod_sap,
       nombre_producto: h.nombre_producto || null,
       cod_sap: h.cod_sap || null,
       unidades: Number.isFinite(Number(h.cantidad_facturada)) ? Math.round(Number(h.cantidad_facturada)) : 0,
@@ -503,31 +401,6 @@ async function paginar(consulta: (desde: number, hasta: number) => PromiseLike<{
   return todo;
 }
 
-export interface CatalogosNube {
-  clientes: Record<string, unknown>[];
-  productos: Record<string, unknown>[];
-  droguerias: Record<string, unknown>[];
-}
-
-/** Descarga los catálogos maestros (v3) con la forma de las pantallas clásicas. Con RLS, sin sesión devuelve vacío. */
-export async function descargarCatalogosNube(sb: SupabaseClient): Promise<CatalogosNube> {
-  const [clientes, productos, droguerias] = await Promise.all([
-    paginar((a, b) =>
-      sb.from('dim_clientes')
-        .select('codigo_interno,razon_social,nombre_comercial,rif,brick,municipio,estado_geografico,direccion,telefono,bandera,lat,lon,frecuencia_dias,estado_validacion')
-        .is('deleted_at', null).not('codigo_interno', 'is', null).order('codigo_interno').range(a, b)
-    ),
-    paginar((a, b) =>
-      sb.from('dim_productos').select('sku,ean13,nombre_comercial,presentacion,principio_activo,clase_terapeutica,categoria,laboratorio,empaque_minimo,es_prioritario,activo')
-        .is('deleted_at', null).order('sku').range(a, b)
-    ),
-    paginar((a, b) =>
-      sb.from('dim_droguerias').select('codigo,nombre,rif,email_pedidos,telefono,dias_entrega,formato_export,activo').is('deleted_at', null).order('codigo').range(a, b)
-    ),
-  ]);
-  return { clientes: clientes.map(clienteDesdeV3), productos: productos.map(productoDesdeV3), droguerias: droguerias.map(drogueriaDesdeV3) };
-}
-
 /** Texto CSV (separador ;) listo para abrir en Excel: comillas solo donde hace falta. */
 export function aCsv(encabezados: string[], filas: Array<Array<string | number | boolean | null | undefined>>): string {
   const celda = (v: string | number | boolean | null | undefined) => {
@@ -567,13 +440,3 @@ export async function descargarHomologacionesCsv(sb: SupabaseClient, tipo: 'prod
   }).sort((x, y) => `${x[0]}|${x[2]}`.localeCompare(`${y[0]}|${y[2]}`));
   return { csv: aCsv(['Codigo interno', 'Farmacia', 'Drogueria', 'Cuenta en la drogueria', 'Nombre en la drogueria', 'Principal'], datos), filas: datos.length };
 }
-
-// ---------------------------------------------------------------------------- bajas desde las pantallas de edición
-
-async function bajaLogica(sb: SupabaseClient, tabla: 'dim_clientes' | 'dim_productos' | 'dim_droguerias', columna: string, valor: string): Promise<void> {
-  const { error } = await sb.from(tabla).update({ deleted_at: new Date().toISOString() }).eq(columna, valor);
-  if (error) throw new Error(`${tabla}: ${error.message}`);
-}
-export const eliminarClienteNube = (sb: SupabaseClient, codigoInterno: string) => bajaLogica(sb, 'dim_clientes', 'codigo_interno', codigoInterno);
-export const eliminarProductoNube = (sb: SupabaseClient, sku: string) => bajaLogica(sb, 'dim_productos', 'sku', sku);
-export const eliminarDrogueriaNube = (sb: SupabaseClient, codigo: string) => bajaLogica(sb, 'dim_droguerias', 'codigo', codigo);

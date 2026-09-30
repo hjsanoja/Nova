@@ -144,7 +144,7 @@ export function Fichero() {
           <Tarjeta>
             <p className="mb-1 text-sm font-bold">Cargar muchos a la vez (CSV)</p>
             <p className="mb-2 text-xs text-slate-500">Dos columnas: código de la farmacia y correo del vendedor. Sirve para armar los ficheros de todo el equipo de una vez.</p>
-            <label className="mb-2 flex items-center gap-2 text-xs"><input type="checkbox" checked={reemplazar} onChange={(e) => setReemplazar(e.target.checked)} className="accent-teal-600" /> Reemplazar el fichero de los vendedores que aparecen en el archivo</label>
+            <label className="mb-2 flex items-center gap-2 text-xs"><input type="checkbox" checked={reemplazar} onChange={(e) => setReemplazar(e.target.checked)} className="accent-marca-600" /> Reemplazar el fichero de los vendedores que aparecen en el archivo</label>
             <label className="inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-xl border border-slate-300 px-3 text-sm font-semibold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800">
               <Upload className="h-4 w-4" /> Elegir archivo
               <input type="file" accept=".csv,.txt,text/csv" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void subirCsv(f); }} />

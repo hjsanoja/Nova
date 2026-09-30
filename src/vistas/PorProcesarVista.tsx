@@ -6,6 +6,8 @@ import { obtenerDb } from '../offline/db';
 import { sincronizarYa } from '../offline/motor';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { generarArchivoDrogueria } from '../services/exportacionDrogueria';
+import { codigoDeFarmacia, registrarCodigoFarmacia } from '../offline/homologacion';
+import { CodigoFarmacia } from '../pedido/CodigoFarmacia';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { Sheet } from '../components/capture/Sheet';
 import { Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso } from '../components/ui/kit';
@@ -28,7 +30,7 @@ const MOTIVOS: { id: MotivoAjuste; texto: string }[] = [
 ];
 
 /** Bloqueo del pedido mientras la mesa lo trabaja (evita que dos personas lo procesen a la vez). Se renueva cada 50 s. */
-function useBloqueo(pedidoId: string | null, activo: boolean) {
+function useBloqueo(pedidoId: string | null, activo: boolean, reintento = 0) {
   const [estado, setEstado] = useState<{ ok: boolean; nombre?: string; error?: string } | null>(null);
   useEffect(() => {
     const sb = getSupabaseClient();
@@ -48,7 +50,7 @@ function useBloqueo(pedidoId: string | null, activo: boolean) {
       clearInterval(t);
       void sb.rpc('liberar_pedido', { p_pedido: pedidoId });
     };
-  }, [pedidoId, activo]);
+  }, [pedidoId, activo, reintento]);
   return estado;
 }
 
@@ -127,11 +129,11 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
                 const espera = diasDesde(p.created_at);
                 return (
                   <li key={p.id}>
-                    <button type="button" onClick={() => setAbierto(p.id)} className={`flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 ${abierto === p.id ? 'bg-teal-50 dark:bg-teal-950/30' : ''}`}>
+                    <button type="button" onClick={() => setAbierto(p.id)} className={`flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 ${abierto === p.id ? 'bg-marca-50 dark:bg-marca-950/30' : ''}`}>
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold">{cliente(p.cliente_id)?.nombre_comercial ?? 'Farmacia'}</p>
                         <p className="truncate text-xs text-slate-500">{p.correlativo} · {droguerias.find((d) => d.id === p.drogueria_id)?.nombre ?? ''} · {u.solicitadas} uds</p>
-                        <p className="truncate text-[11px] text-slate-400">{vendedor(p.vendedor_id) || 'Vendedor'} · {espera === 0 ? 'hoy' : `hace ${espera} d`}</p>
+                        <p className="truncate text-xs text-slate-400">{vendedor(p.vendedor_id) || 'Vendedor'} · {espera === 0 ? 'hoy' : `hace ${espera} d`}</p>
                       </div>
                       <Etiqueta tono={e.tono}>{e.texto}</Etiqueta>
                     </button>
@@ -170,7 +172,15 @@ function Procesar({
   onListo: () => void;
 }) {
   const procesable = ['enviado_teletransferencia', 'en_revision', 'en_proceso'].includes(p.estado);
-  const bloqueo = useBloqueo(p.id, procesable);
+  const [reintento, setReintento] = useState(0);
+  const bloqueo = useBloqueo(p.id, procesable, reintento);
+  const codigoFarmacia = codigoDeFarmacia(mapClientes, p.cliente_id, p.drogueria_id);
+  const guardarCodigo = async (codigo: string) => {
+    await registrarCodigoFarmacia(obtenerDb(), { cliente_id: p.cliente_id, drogueria_id: p.drogueria_id, codigo });
+    await sincronizarYa();
+    setReintento((n) => n + 1);
+    onAviso({ tipo: 'ok', texto: 'Código guardado: la farmacia queda homologada con esta droguería.' });
+  };
   const puedeEditar = procesable && bloqueo?.ok === true;
   const [conf, setConf] = useState<Record<string, string>>(() => Object.fromEntries(lineas.map((l) => [l.id, String(l.unidades_confirmadas ?? l.unidades_solicitadas)])));
   const [motivos, setMotivos] = useState<Record<string, MotivoAjuste>>({});
@@ -247,6 +257,10 @@ function Procesar({
         </p>
       )}
 
+      {procesable && !codigoFarmacia && (
+        <CodigoFarmacia farmacia={cliente?.nombre_comercial ?? 'la farmacia'} drogueria={drogueria?.nombre ?? 'la droguería'} onGuardar={guardarCodigo} />
+      )}
+
       {/* Archivo para la droguería */}
       <div className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -276,9 +290,9 @@ function Procesar({
                 <tr key={l.id}>
                   <td className="px-2.5 py-1.5">
                     <span className="font-semibold">{nombreProducto(l.producto_id)?.nombre_comercial ?? 'Producto'}</span>
-                    <span className="block text-[11px] text-slate-400">{nombreProducto(l.producto_id)?.sku}</span>
+                    <span className="block text-xs text-slate-400">{nombreProducto(l.producto_id)?.sku}</span>
                     {puedeEditar && menos && valor !== '' && (
-                      <select value={motivos[l.id] ?? 'quiebre_stock_drogueria'} onChange={(e) => setMotivos((m) => ({ ...m, [l.id]: e.target.value as MotivoAjuste }))} aria-label="Motivo" className="mt-1 rounded-lg border border-slate-300 bg-white px-1.5 py-1 text-[11px] dark:border-slate-700 dark:bg-slate-900">
+                      <select value={motivos[l.id] ?? 'quiebre_stock_drogueria'} onChange={(e) => setMotivos((m) => ({ ...m, [l.id]: e.target.value as MotivoAjuste }))} aria-label="Motivo" className="mt-1 rounded-lg border border-slate-300 bg-white px-1.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">
                         {MOTIVOS.map((m) => <option key={m.id} value={m.id}>{m.texto}</option>)}
                       </select>
                     )}

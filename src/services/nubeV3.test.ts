@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { Cliente, Drogueria, HistoricoPedidoPrevio } from '../types/pharmacy';
 import { FORMATO_CSV_POR_DEFECTO } from './storageMigrations';
 import {
-  cargarPerfilUsuario, checksumLote, clienteAV3, clienteDesdeV3, crearUsuarioNube, diasAFrecuencia, drogueriaAV3, equipoAV3, equipoDesdeV3,
-  formatoExportALegado, formatoLegadoAExport, frecuenciaADias, fusionarPorClave, importarHomologacion, importarVentas, rolAV3, rolDesdeV3,
+  cargarPerfilUsuario, checksumLote, clienteAV3, crearUsuarioNube, diasAFrecuencia, drogueriaAV3, equipoAV3, equipoDesdeV3,
+  formatoLegadoAExport, frecuenciaADias, importarHomologacion, importarVentas, rolAV3, rolDesdeV3,
 } from './nubeV3';
 
 const cliente = (extra: Partial<Cliente> = {}): Cliente => ({
@@ -28,13 +28,6 @@ describe('mapeos hacia y desde el modelo v3', () => {
     expect(f.columnas[4]).toEqual({ encabezado: 'DESCUENTO', origen: 'constante', valor: '' });
   });
 
-  it('ida y vuelta del layout no pierde columnas, orden ni encabezados', () => {
-    const vuelta = formatoExportALegado(formatoLegadoAExport({ ...FORMATO_CSV_POR_DEFECTO, delimitador: '|', codificacion: 'ISO-8859-1', incluir_encabezados: false }));
-    expect(vuelta.columnas.map((c) => c.nombre_encabezado)).toEqual(FORMATO_CSV_POR_DEFECTO.columnas.map((c) => c.nombre_encabezado));
-    expect(vuelta).toMatchObject({ delimitador: '|', codificacion: 'ISO-8859-1', incluir_encabezados: false });
-    expect(vuelta.columnas.map((c) => c.campo_origen)).toEqual(['codigo_cliente', 'rif_cliente', 'sku', 'cantidad_confirmada', 'constante', 'numero_pedido']);
-  });
-
   it('clienteAV3: no envía coordenadas inventadas ni RIF de relleno', () => {
     expect(clienteAV3(cliente())).toMatchObject({ codigo_interno: 'CLI-1', nombre_comercial: 'La Paz', municipio: 'Chacao', lat: 10.5, lon: -66.85, frecuencia_dias: 15 });
     const sinDatos = clienteAV3(cliente({ rif: 'J-00000000-0', local_gps_lat: 10.48, local_gps_lon: -66.86 }));
@@ -45,18 +38,6 @@ describe('mapeos hacia y desde el modelo v3', () => {
   it('drogueriaAV3 arma la fila de dim_droguerias con su layout de exportación', () => {
     const d = { id: 'd1', id_numero: 1, codigo_drogueria: 'DROG-COBECA', nombre_drogueria: 'Cobeca', rif: 'J-00000000-0', email_pedidos: 'p@c.com', tiempo_entrega_promedio_dias: 2, formato_csv_config: FORMATO_CSV_POR_DEFECTO, activo: true, created_at: '' } as Drogueria;
     expect(drogueriaAV3(d)).toMatchObject({ codigo: 'DROG-COBECA', nombre: 'Cobeca', rif: null, dias_entrega: 2, email_pedidos: 'p@c.com' });
-  });
-
-  it('cliente descargado (v3) con la forma de las pantallas clásicas', () => {
-    const c = clienteDesdeV3({ codigo_interno: 'CLI-1', razon_social: 'R', nombre_comercial: 'N', rif: null, frecuencia_dias: 30, lat: 10.5, lon: -66.8, estado_validacion: 'inactivo' });
-    expect(c).toMatchObject({ ident01: 'CLI-1', nombre_fantasia: 'N', frecuencia: 'Mensual', local_gps_lat: 10.5, activo: false, rif: 'J-00000000-0' });
-  });
-
-  it('fusionarPorClave: la nube actualiza y agrega, lo local exclusivo se conserva y las droguerías conservan su layout local', () => {
-    const local = [{ id: 'x1', k: 'A', v: 'local-A' }, { id: 'x2', k: 'B', v: 'local-B' }];
-    const nube = [{ id: 'A', k: 'A', v: 'nube-A' }, { id: 'C', k: 'C', v: 'nube-C' }];
-    expect(fusionarPorClave(local, nube, (x) => x.k, 'nube')).toEqual([{ id: 'x1', k: 'A', v: 'nube-A' }, { id: 'x2', k: 'B', v: 'local-B' }, { id: 'C', k: 'C', v: 'nube-C' }]);
-    expect(fusionarPorClave(local, nube, (x) => x.k, 'local')).toEqual([{ id: 'x1', k: 'A', v: 'local-A' }, { id: 'x2', k: 'B', v: 'local-B' }, { id: 'C', k: 'C', v: 'nube-C' }]);
   });
 
   it('roles: teletransferencista <-> transferencista; un rol desconocido cae al mínimo', () => {

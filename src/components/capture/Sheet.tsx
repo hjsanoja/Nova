@@ -27,16 +27,16 @@ export const Sheet: React.FC<SheetProps> = ({ abierto, titulo, onCerrar, childre
   if (!abierto) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center">
-      <button type="button" aria-label="Cerrar" className="absolute inset-0 bg-slate-950/50" onClick={onCerrar} />
+      <button type="button" aria-label="Cerrar" className="absolute inset-0 bg-slate-950/50 dark:bg-black/70" onClick={onCerrar} />
       <div
         role="dialog"
         aria-modal="true"
         aria-label={titulo}
-        className={`animate-in relative flex max-h-[88dvh] w-full flex-col rounded-t-3xl bg-white shadow-2xl dark:bg-slate-900 ${ancho} md:rounded-3xl`}
+        className={`animate-in relative flex max-h-[88dvh] w-full flex-col rounded-t-xl bg-white shadow-xl dark:border dark:border-slate-700 dark:bg-slate-900 ${ancho} md:rounded-xl`}
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-          <h2 className="font-display text-base font-bold text-slate-900 dark:text-white">{titulo}</h2>
-          <button type="button" onClick={onCerrar} aria-label="Cerrar" className="-m-2 inline-flex h-11 w-11 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+          <h2 className=" text-base font-bold text-slate-900 dark:text-white">{titulo}</h2>
+          <button type="button" onClick={onCerrar} aria-label="Cerrar" className="-m-2 inline-flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">
             <X className="h-5 w-5" />
           </button>
         </div>

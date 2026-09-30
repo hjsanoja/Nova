@@ -49,6 +49,8 @@ export interface LocalProducto {
   empaque_minimo: number;
   es_prioritario: boolean;
   activo: boolean;
+  /** Foto del producto (URL); sin foto se muestran las iniciales. */
+  foto_url?: string | null;
   updated_at?: string;
   /** Palabras normalizadas (multiEntry): búsqueda por prefijo sin recorrer el catálogo. */
   tokens: string[];
@@ -224,16 +226,6 @@ export interface LocalVisita {
   sync_estado: EstadoSync;
 }
 
-export interface LocalPlantilla {
-  id: string;
-  vendedor_id: string;
-  cliente_id?: string | null;
-  drogueria_id?: string | null;
-  nombre: string;
-  items: { producto_id: string; unidades: number }[];
-  sync_estado: EstadoSync;
-}
-
 export interface LocalNotificacion {
   id: string;
   usuario_id: string;
@@ -245,12 +237,62 @@ export interface LocalNotificacion {
   created_at: string;
 }
 
+/** Plantilla de pedido: lo que una farmacia pide siempre (se carga en su carrito con un toque o por voz). */
+export interface LocalPlantilla {
+  id: string;
+  vendedor_id: string;
+  cliente_id: string;
+  drogueria_id: string | null;
+  nombre: string;
+  lineas: { producto_id: string; unidades: number }[];
+  updated_at: string;
+  sync_estado: 'sincronizado' | 'pendiente' | 'error';
+}
+
+export type TipoComunicado = 'anuncio' | 'descuento' | 'estrategia' | 'alerta';
+
+/** Anuncio de la gerencia (solo llegan al dispositivo los que corresponden a quien inició sesión). */
+export interface LocalComunicado {
+  id: string;
+  titulo: string;
+  mensaje: string;
+  tipo: TipoComunicado;
+  roles: string[];
+  equipos: string[];
+  estados: string[];
+  ciudades: string[];
+  regiones: string[];
+  vigente_desde: string;
+  vigente_hasta: string | null;
+  /** Calculado por el servidor: el comunicado va dirigido a este usuario (la gerencia descarga todos). */
+  para_mi: boolean;
+  creado_por: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type IndicadorMeta = 'unidades' | 'pedidos' | 'farmacias';
+
+/** Meta del mes por representante, farmacia y/o droguería (cualquier combinación). */
+export interface LocalMeta {
+  id: string;
+  /** Primer día del mes (YYYY-MM-DD). */
+  periodo: string;
+  vendedor_id: string | null;
+  cliente_id: string | null;
+  drogueria_id: string | null;
+  indicador: IndicadorMeta;
+  objetivo: number;
+  updated_at: string;
+}
+
 export type TipoOutbox =
   | 'prospecto.crear'
   | 'pedido.crear'
   | 'pedido.modificar'
   | 'pedido.rerutear'
   | 'visita.registrar'
+  | 'farmacia.codigo'
   | 'plantilla.guardar';
 
 export type EstadoOutbox = 'pendiente' | 'error' | 'conflicto';

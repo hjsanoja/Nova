@@ -34,4 +34,9 @@ export interface SyncRemote {
   traer(tabla: string, desde: string | null, limite: number, opciones?: OpcionesTraer): Promise<FilaRemota[]>;
   traerPorId(tabla: string, id: string, seleccion?: string): Promise<FilaRemota | null>;
   haySesion(): Promise<boolean>;
+  /**
+   * Avisa en vivo cuando cambia alguna de estas tablas en el servidor (Supabase Realtime). `alEstado` recibe si el canal
+   * quedó conectado. Devuelve la función para dejar de escuchar. Opcional: sin ella el motor solo consulta cada cierto tiempo.
+   */
+  escucharCambios?(tablas: string[], alCambiar: (tabla: string) => void, alEstado: (conectado: boolean) => void): () => void;
 }

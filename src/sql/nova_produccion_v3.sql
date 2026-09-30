@@ -27,7 +27,7 @@ BEGIN
   SELECT string_agg(t.nombre, ', ' ORDER BY t.nombre) INTO v_tablas
     FROM unnest(ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias','dim_productos',
                       'map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto','config_reglas_comerciales',
-                      'fact_pedidos','fact_pedido_detalles','fact_compras_mensual','crm_visitas','plantillas_reposicion',
+                      'fact_pedidos','fact_pedido_detalles','fact_compras_mensual','crm_visitas',
                       'notificaciones','alertas_comerciales']) AS t(nombre)
    WHERE to_regclass('public.' || t.nombre) IS NOT NULL
      AND NOT EXISTS (SELECT 1 FROM information_schema.columns c
@@ -262,6 +262,10 @@ CREATE TABLE IF NOT EXISTS dim_productos (
   deleted_at           timestamptz
 );
 CREATE INDEX IF NOT EXISTS idx_productos_ean ON dim_productos (ean13) WHERE ean13 IS NOT NULL;
+-- Fotos (URL pública en Supabase Storage u otra dirección). Opcionales: sin foto se muestran las iniciales.
+ALTER TABLE dim_productos ADD COLUMN IF NOT EXISTS foto_url text;
+ALTER TABLE dim_clientes  ADD COLUMN IF NOT EXISTS foto_url text;
+ALTER TABLE dim_usuarios  ADD COLUMN IF NOT EXISTS foto_url text;
 CREATE INDEX IF NOT EXISTS idx_productos_nombre_trgm ON dim_productos USING gin (nombre_comercial gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_productos_molecula_trgm ON dim_productos USING gin (principio_activo gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_productos_categoria ON dim_productos (categoria);
@@ -692,26 +696,9 @@ CREATE INDEX IF NOT EXISTS idx_visitas_cliente ON crm_visitas (cliente_id, check
 CREATE INDEX IF NOT EXISTS idx_visitas_ubicacion ON crm_visitas USING gist (checkin_ubicacion);
 CREATE INDEX IF NOT EXISTS idx_visitas_updated ON crm_visitas (updated_at);
 
-CREATE TABLE IF NOT EXISTS plantillas_reposicion (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  vendedor_id   uuid NOT NULL REFERENCES dim_usuarios(id) ON DELETE CASCADE,
-  cliente_id    uuid REFERENCES dim_clientes(id) ON DELETE CASCADE,   -- nula = plantilla general
-  drogueria_id  uuid REFERENCES dim_droguerias(id),
-  nombre        text NOT NULL,
-  created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT clock_timestamp(),
-  row_version   integer NOT NULL DEFAULT 1,
-  deleted_at    timestamptz
-);
-CREATE INDEX IF NOT EXISTS idx_plantillas_vendedor ON plantillas_reposicion (vendedor_id, cliente_id);
-CREATE INDEX IF NOT EXISTS idx_plantillas_updated ON plantillas_reposicion (updated_at);
-
-CREATE TABLE IF NOT EXISTS plantilla_items (
-  plantilla_id uuid NOT NULL REFERENCES plantillas_reposicion(id) ON DELETE CASCADE,
-  producto_id  uuid NOT NULL REFERENCES dim_productos(id),
-  unidades     integer NOT NULL CHECK (unidades > 0),
-  PRIMARY KEY (plantilla_id, producto_id)
-);
+-- Plantillas de reposición: retiradas (las reemplazan los carritos guardados en el dispositivo y el pedido sugerido).
+DROP FUNCTION IF EXISTS sync_guardar_plantilla(jsonb);
+DROP TABLE IF EXISTS plantilla_items, plantillas_reposicion CASCADE;
 
 CREATE TABLE IF NOT EXISTS notificaciones (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -766,7 +753,7 @@ DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias',
     'dim_productos','map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto',
-    'config_reglas_comerciales','fact_pedidos','fact_pedido_detalles','crm_visitas','plantillas_reposicion',
+    'config_reglas_comerciales','fact_pedidos','fact_pedido_detalles','crm_visitas',
     'notificaciones','alertas_comerciales','fact_compras_mensual']
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS trg_touch ON %I', t);
@@ -803,6 +790,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
       OR EXISTS (SELECT 1 FROM rel_cliente_vendedor r
                  WHERE r.cliente_id = p_cliente AND r.vendedor_id = auth.uid() AND r.activo AND r.deleted_at IS NULL)
       OR EXISTS (SELECT 1 FROM dim_clientes c WHERE c.id = p_cliente AND c.creado_por = auth.uid())
+$$;
+
+-- Farmacias visibles para un vendedor (su fichero + las que él creó), como conjunto: las políticas lo usan con
+-- `x IN (SELECT app.mis_clientes())`, que se calcula una vez por consulta y no una vez por fila.
+CREATE OR REPLACE FUNCTION app.mis_clientes() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT r.cliente_id FROM rel_cliente_vendedor r WHERE r.vendedor_id = auth.uid() AND r.activo AND r.deleted_at IS NULL
+  UNION
+  SELECT c.id FROM dim_clientes c WHERE c.creado_por = auth.uid()
 $$;
 
 CREATE OR REPLACE FUNCTION app.cfg_num(p_clave text, p_defecto numeric) RETURNS numeric
@@ -1189,21 +1185,6 @@ BEGIN
                             'dentro_de_radio', v_row.dentro_de_radio, 'row_version', v_row.row_version);
 END $$;
 
-CREATE OR REPLACE FUNCTION sync_guardar_plantilla(p jsonb) RETURNS jsonb
-LANGUAGE plpgsql SET search_path = public AS $$
-DECLARE v_id uuid := (p->>'id')::uuid; i jsonb;
-BEGIN
-  INSERT INTO plantillas_reposicion (id, vendedor_id, cliente_id, drogueria_id, nombre)
-  VALUES (v_id, auth.uid(), nullif(p->>'cliente_id','')::uuid, nullif(p->>'drogueria_id','')::uuid, p->>'nombre')
-  ON CONFLICT (id) DO UPDATE SET nombre = excluded.nombre, drogueria_id = excluded.drogueria_id
-    WHERE plantillas_reposicion.vendedor_id = auth.uid();
-  DELETE FROM plantilla_items WHERE plantilla_id = v_id;
-  FOR i IN SELECT * FROM jsonb_array_elements(coalesce(p->'items', '[]'::jsonb)) LOOP
-    INSERT INTO plantilla_items (plantilla_id, producto_id, unidades)
-    VALUES (v_id, (i->>'producto_id')::uuid, (i->>'unidades')::integer);
-  END LOOP;
-  RETURN jsonb_build_object('id', v_id);
-END $$;
 
 -- ------------------------------------------------------------------------------
 -- 11. MESA DE TRANSFERENCIAS: BLOQUEO, CONFIRMACIÓN Y SPLIT ORDERS
@@ -1803,18 +1784,19 @@ BEGIN
   IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
   WITH ins AS (
     INSERT INTO dim_productos (sku, ean13, nombre_comercial, presentacion, principio_activo, clase_terapeutica, categoria,
-                               laboratorio, equipo_id, empaque_minimo, es_prioritario, activo)
+                               laboratorio, equipo_id, empaque_minimo, es_prioritario, activo, foto_url)
     SELECT btrim(r->>'sku'), nullif(r->>'ean13', ''), coalesce(nullif(r->>'nombre_comercial', ''), r->>'sku'), nullif(r->>'presentacion', ''),
            nullif(r->>'principio_activo', ''), nullif(r->>'clase_terapeutica', ''), nullif(r->>'categoria', ''),
            nullif(r->>'laboratorio', ''), (SELECT e.id FROM dim_equipos e WHERE e.codigo = r->>'equipo'),
            greatest(coalesce((r->>'empaque_minimo')::integer, 1), 1), coalesce((r->>'es_prioritario')::boolean, false),
-           coalesce((r->>'activo')::boolean, true)
+           coalesce((r->>'activo')::boolean, true), nullif(btrim(r->>'foto_url'), '')
       FROM jsonb_array_elements(p) r WHERE coalesce(btrim(r->>'sku'), '') <> ''
     ON CONFLICT (sku) DO UPDATE SET ean13 = excluded.ean13, nombre_comercial = excluded.nombre_comercial,
         presentacion = excluded.presentacion, principio_activo = excluded.principio_activo,
         clase_terapeutica = excluded.clase_terapeutica, categoria = excluded.categoria, laboratorio = excluded.laboratorio,
         equipo_id = coalesce(excluded.equipo_id, dim_productos.equipo_id), empaque_minimo = excluded.empaque_minimo,
-        es_prioritario = excluded.es_prioritario, activo = excluded.activo, deleted_at = NULL
+        es_prioritario = excluded.es_prioritario, activo = excluded.activo, deleted_at = NULL,
+        foto_url = coalesce(excluded.foto_url, dim_productos.foto_url)
     RETURNING 1)
   SELECT count(*) INTO v_n FROM ins;
   RETURN v_n;
@@ -1866,6 +1848,11 @@ BEGIN
         dias_entrega = coalesce(excluded.dias_entrega, dim_droguerias.dias_entrega), activo = excluded.activo, deleted_at = NULL
     RETURNING 1)
   SELECT count(*) INTO v_n FROM ins;
+  -- Separador del archivo de pedidos (formulario de la droguería): solo si viene y es válido.
+  UPDATE dim_droguerias d SET formato_export = jsonb_set(d.formato_export, '{delimitador}', to_jsonb(r->>'delimitador'))
+    FROM jsonb_array_elements(p) r
+   WHERE d.codigo = upper(btrim(r->>'codigo')) AND r->>'delimitador' IN (';', ',', '|', E'\t')
+     AND d.formato_export->>'delimitador' IS DISTINCT FROM r->>'delimitador';
   RETURN v_n;
 END $$;
 
@@ -2077,7 +2064,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias',
     'dim_productos','map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto',
     'config_reglas_comerciales','config_sistema','secretos_sistema','fact_pedidos','fact_pedido_detalles',
-    'pedido_bloqueos','crm_visitas','plantillas_reposicion','plantilla_items','notificaciones',
+    'pedido_bloqueos','crm_visitas','notificaciones',
     'alertas_comerciales','audit_log','import_lotes','fact_ventas_drogueria','fact_compras_mensual']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
@@ -2123,7 +2110,7 @@ CREATE POLICY usuarios_admin ON dim_usuarios FOR ALL TO authenticated
 DROP POLICY IF EXISTS clientes_lectura ON dim_clientes;
 -- creado_por se evalúa sobre la propia fila: INSERT ... ON CONFLICT exige poder "leer" la fila nueva.
 CREATE POLICY clientes_lectura ON dim_clientes FOR SELECT TO authenticated
-  USING (creado_por = (SELECT auth.uid()) OR app.puede_ver_cliente(id));
+  USING ((SELECT app.es_staff()) OR creado_por = (SELECT auth.uid()) OR id IN (SELECT app.mis_clientes()));
 DROP POLICY IF EXISTS clientes_alta_campo ON dim_clientes;
 CREATE POLICY clientes_alta_campo ON dim_clientes FOR INSERT TO authenticated
   WITH CHECK ((SELECT app.rol()) = 'vendedor' OR (SELECT app.es_mesa()));
@@ -2148,7 +2135,7 @@ CREATE POLICY relcv_propio ON rel_cliente_vendedor FOR INSERT TO authenticated
 -- Pedidos: lectura cruzada entre equipos por farmacia asignada (regla 5); edición del vendedor solo mientras es editable.
 DROP POLICY IF EXISTS pedidos_lectura ON fact_pedidos;
 CREATE POLICY pedidos_lectura ON fact_pedidos FOR SELECT TO authenticated
-  USING (vendedor_id = (SELECT auth.uid()) OR app.puede_ver_cliente(cliente_id));
+  USING (vendedor_id = (SELECT auth.uid()) OR (SELECT app.es_staff()) OR cliente_id IN (SELECT app.mis_clientes()));
 DROP POLICY IF EXISTS pedidos_alta ON fact_pedidos;
 CREATE POLICY pedidos_alta ON fact_pedidos FOR INSERT TO authenticated
   WITH CHECK (vendedor_id = (SELECT auth.uid()) OR (SELECT app.es_admin()));
@@ -2182,13 +2169,6 @@ CREATE POLICY visitas_propias ON crm_visitas FOR ALL TO authenticated
 DROP POLICY IF EXISTS visitas_staff ON crm_visitas;
 CREATE POLICY visitas_staff ON crm_visitas FOR SELECT TO authenticated USING ((SELECT app.es_staff()));
 
-DROP POLICY IF EXISTS plantillas_propias ON plantillas_reposicion;
-CREATE POLICY plantillas_propias ON plantillas_reposicion FOR ALL TO authenticated
-  USING (vendedor_id = (SELECT auth.uid())) WITH CHECK (vendedor_id = (SELECT auth.uid()));
-DROP POLICY IF EXISTS plantilla_items_propios ON plantilla_items;
-CREATE POLICY plantilla_items_propios ON plantilla_items FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM plantillas_reposicion pl WHERE pl.id = plantilla_id AND pl.vendedor_id = (SELECT auth.uid())))
-  WITH CHECK (EXISTS (SELECT 1 FROM plantillas_reposicion pl WHERE pl.id = plantilla_id AND pl.vendedor_id = (SELECT auth.uid())));
 
 DROP POLICY IF EXISTS notif_propias ON notificaciones;
 CREATE POLICY notif_propias ON notificaciones FOR SELECT TO authenticated USING (usuario_id = (SELECT auth.uid()));
@@ -2199,7 +2179,7 @@ CREATE POLICY notif_leer ON notificaciones FOR UPDATE TO authenticated
 DROP POLICY IF EXISTS alertas_lectura ON alertas_comerciales;
 CREATE POLICY alertas_lectura ON alertas_comerciales FOR SELECT TO authenticated
   USING ((SELECT app.es_staff())
-         OR equipo_id IS NULL AND cliente_id IS NOT NULL AND app.puede_ver_cliente(cliente_id)
+         OR equipo_id IS NULL AND cliente_id IS NOT NULL AND cliente_id IN (SELECT app.mis_clientes())
          OR equipo_id = (SELECT equipo_id FROM dim_usuarios WHERE id = (SELECT auth.uid())));
 
 -- Ventas reportadas por las droguerías: solo lectura para el personal (se escriben con importar_ventas_drogueria).
@@ -2210,7 +2190,7 @@ CREATE POLICY ventas_lectura ON fact_ventas_drogueria FOR SELECT TO authenticate
 -- El consolidado mensual baja al dispositivo del vendedor solo para las farmacias que atiende (todos los equipos).
 DROP POLICY IF EXISTS compras_lectura ON fact_compras_mensual;
 CREATE POLICY compras_lectura ON fact_compras_mensual FOR SELECT TO authenticated
-  USING ((SELECT app.es_staff()) OR app.puede_ver_cliente(cliente_id));
+  USING ((SELECT app.es_staff()) OR cliente_id IN (SELECT app.mis_clientes()));
 
 DROP POLICY IF EXISTS audit_admin ON audit_log;
 CREATE POLICY audit_admin ON audit_log FOR SELECT TO authenticated USING ((SELECT app.es_admin()));
@@ -2306,7 +2286,8 @@ BEGIN
   IF p_usuario = auth.uid() AND (p_rol <> 'admin' OR NOT p_activo) THEN
     RAISE EXCEPTION 'No puedes quitarte a ti mismo el rol de administrador' USING ERRCODE = '42501';
   END IF;
-  UPDATE dim_usuarios SET rol = p_rol, equipo_id = v_equipo, activo = p_activo,
+  -- Activar a alguien dado de baja lo restaura.
+  UPDATE dim_usuarios SET rol = p_rol, equipo_id = v_equipo, activo = p_activo, deleted_at = CASE WHEN p_activo THEN NULL ELSE deleted_at END,
          nombre_completo = coalesce(nullif(btrim(p_nombre), ''), nombre_completo), telefono = coalesce(p_telefono, telefono)
    WHERE id = p_usuario;
   IF NOT FOUND THEN RAISE EXCEPTION 'El usuario no existe' USING ERRCODE = 'P0002'; END IF;
@@ -2394,13 +2375,63 @@ REVOKE ALL ON FUNCTION farmacias_disponibles(text, integer) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION farmacias_disponibles(text, integer) TO authenticated;
 
 -- ------------------------------------------------------------------------------
+-- 14D. BAJA DE VARIOS REGISTROS A LA VEZ (selección múltiple en las pantallas del administrador)
+-- Baja lógica (deleted_at): los pedidos e historial que los mencionan se conservan y los dispositivos los retiran al
+-- sincronizar. Volver a cargar el mismo código (archivo o formulario) lo reactiva.
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION eliminar_registros(p_tipo text, p_claves text[]) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer := 0;
+        v_claves text[] := ARRAY(SELECT DISTINCT btrim(c) FROM unnest(coalesce(p_claves, ARRAY[]::text[])) c WHERE btrim(c) <> '');
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  IF p_tipo = 'clientes' THEN
+    UPDATE dim_clientes SET deleted_at = now() WHERE deleted_at IS NULL AND codigo_interno = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    UPDATE rel_cliente_vendedor r SET activo = false, deleted_at = now()
+      FROM dim_clientes c WHERE c.id = r.cliente_id AND c.codigo_interno = ANY (v_claves) AND r.deleted_at IS NULL;
+  ELSIF p_tipo = 'productos' THEN
+    UPDATE dim_productos SET deleted_at = now() WHERE deleted_at IS NULL AND sku = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSIF p_tipo = 'droguerias' THEN
+    UPDATE dim_droguerias SET deleted_at = now() WHERE deleted_at IS NULL AND codigo = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSIF p_tipo = 'reglas' THEN
+    UPDATE config_reglas_comerciales SET deleted_at = now(), activo = false WHERE deleted_at IS NULL AND id::text = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSE
+    RAISE EXCEPTION 'Tipo inválido: %', p_tipo USING ERRCODE = '22023';
+  END IF;
+  INSERT INTO audit_log (usuario_id, accion, detalle)
+  VALUES (auth.uid(), 'registros_eliminados', jsonb_build_object('tipo', p_tipo, 'cantidad', v_n, 'claves', to_jsonb(v_claves[1:50])));
+  RETURN v_n;
+END $$;
+
+-- Usuarios: se desactivan y dan de baja (no pueden entrar ni ven datos). La cuenta de Supabase Auth se conserva: se borra,
+-- si hace falta, desde Authentication → Users. Nadie puede darse de baja a sí mismo.
+CREATE OR REPLACE FUNCTION admin_eliminar_usuarios(p_ids uuid[]) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer;
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  IF auth.uid() = ANY (p_ids) THEN RAISE EXCEPTION 'No puedes eliminar tu propia cuenta' USING ERRCODE = '42501'; END IF;
+  UPDATE dim_usuarios SET activo = false, deleted_at = now() WHERE id = ANY (p_ids) AND deleted_at IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  UPDATE rel_cliente_vendedor SET activo = false, deleted_at = now() WHERE vendedor_id = ANY (p_ids) AND deleted_at IS NULL;
+  INSERT INTO audit_log (usuario_id, accion, detalle) VALUES (auth.uid(), 'usuarios_eliminados', jsonb_build_object('cantidad', v_n));
+  RETURN v_n;
+END $$;
+REVOKE ALL ON FUNCTION eliminar_registros(text, text[]), admin_eliminar_usuarios(uuid[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION eliminar_registros(text, text[]), admin_eliminar_usuarios(uuid[]) TO authenticated;
+
+-- ------------------------------------------------------------------------------
 -- 15. MANTENIMIENTO: BORRADO DE DATOS CON CLAVE
 -- ------------------------------------------------------------------------------
 -- Protecciones: rol administrador + "borrado habilitado" (interruptor de config_sistema) + clave propia (bcrypt, distinta de
 -- la de inicio de sesión) + máximo 5 intentos fallidos cada 15 minutos. Cada uso queda en audit_log.
 -- Nunca se tocan usuarios, equipos, configuración, secretos ni auditoría.
 --   alcance 'historial'       -> ventas reportadas por las droguerías, sus lotes y el consolidado mensual
---   alcance 'pedidos'         -> pedidos, detalles, visitas, plantillas, notificaciones y alertas (el correlativo reinicia)
+--   alcance 'pedidos'         -> pedidos, detalles, visitas, notificaciones y alertas (el correlativo reinicia)
 --   alcance 'homologaciones'  -> códigos de farmacias y productos por droguería; las ventas vuelven a "sin homologar"
 --   alcance 'fichero'         -> asignación de farmacias a vendedores
 --   alcance 'clientes'        -> farmacias + pedidos (dependen de ellas), fichero y homologaciones de farmacias;
@@ -2463,8 +2494,8 @@ BEGIN
     TRUNCATE fact_compras_mensual, fact_ventas_drogueria, import_lotes RESTART IDENTITY CASCADE;
   END IF;
   IF p_alcance IN ('pedidos', 'clientes', 'productos', 'droguerias', 'todo') THEN
-    TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, plantilla_items,
-             plantillas_reposicion, alertas_comerciales, fact_pedidos RESTART IDENTITY CASCADE;
+    TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, alertas_comerciales,
+             fact_pedidos RESTART IDENTITY CASCADE;
     PERFORM setval('seq_correlativo_pedido', 1001, false);
   END IF;
   IF p_alcance = 'homologaciones' THEN
@@ -2526,3 +2557,312 @@ GRANT EXECUTE ON FUNCTION recalcular_segmentos_clientes(), generar_alertas_comer
 -- Programación diaria (si pg_cron está habilitado en el proyecto):
 --   SELECT cron.schedule('nova-analitica', '0 5 * * *',
 --          $$SELECT recalcular_segmentos_clientes(); SELECT generar_alertas_comerciales();$$);
+
+-- ------------------------------------------------------------------------------
+-- 16. NOVEDADES: código de la farmacia desde el pedido, plantillas, comunicados, accesos, metas y tiempo real
+-- ------------------------------------------------------------------------------
+
+-- 16.1 Código de la farmacia en una droguería, registrado UNA vez por quien toma el pedido (o por la mesa).
+-- Sin ese código la droguería no reconoce al cliente y el pedido no puede transferirse; la app no deja enviarlo sin él.
+-- Idempotente (el id lo genera el dispositivo): reintentar no duplica. Un código pertenece a una sola farmacia por droguería.
+CREATE OR REPLACE FUNCTION sync_registrar_codigo_farmacia(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_id      uuid := coalesce(nullif(p->>'id','')::uuid, gen_random_uuid());
+  v_cliente uuid := nullif(p->>'cliente_id','')::uuid;
+  v_drog    uuid := nullif(p->>'drogueria_id','')::uuid;
+  v_codigo  text := nullif(btrim(p->>'codigo'), '');
+  v_fila    map_cliente_drogueria;
+  v_otro_id uuid; v_otro_cliente uuid; v_otro_nombre text;
+BEGIN
+  IF app.rol() IS NULL THEN RAISE EXCEPTION 'Sesión no válida' USING ERRCODE = '42501'; END IF;
+  IF v_cliente IS NULL OR v_drog IS NULL THEN RAISE EXCEPTION 'Faltan la farmacia o la droguería' USING ERRCODE = '22023'; END IF;
+  IF v_codigo IS NULL THEN RAISE EXCEPTION 'Escribe el código de la farmacia en la droguería' USING ERRCODE = '22023'; END IF;
+  IF length(v_codigo) > 60 THEN RAISE EXCEPTION 'El código es demasiado largo' USING ERRCODE = '22023'; END IF;
+  IF NOT (app.es_mesa() OR app.puede_ver_cliente(v_cliente)) THEN
+    RAISE EXCEPTION 'Solo puedes registrar códigos de las farmacias que atiendes' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_fila FROM map_cliente_drogueria WHERE id = v_id;
+  IF FOUND THEN RETURN to_jsonb(v_fila); END IF;   -- reintento de la misma operación
+
+  SELECT m.id, m.cliente_id, c.nombre_comercial INTO v_otro_id, v_otro_cliente, v_otro_nombre
+    FROM map_cliente_drogueria m JOIN dim_clientes c ON c.id = m.cliente_id
+   WHERE m.drogueria_id = v_drog AND m.codigo_cuenta = v_codigo AND m.deleted_at IS NULL;
+  IF v_otro_id IS NOT NULL THEN
+    IF v_otro_cliente <> v_cliente THEN
+      RAISE EXCEPTION 'El código % ya es de otra farmacia en esa droguería (%)', v_codigo, v_otro_nombre USING ERRCODE = '23505';
+    END IF;
+    UPDATE map_cliente_drogueria SET es_principal = true, verificado = true WHERE id = v_otro_id RETURNING * INTO v_fila;
+    RETURN to_jsonb(v_fila);
+  END IF;
+
+  -- El nuevo código pasa a ser el principal (el trigger degrada el anterior, que queda como alterno).
+  INSERT INTO map_cliente_drogueria (id, drogueria_id, cliente_id, codigo_cuenta, verificado, es_principal, origen)
+  VALUES (v_id, v_drog, v_cliente, v_codigo, true, true, 'manual')
+  RETURNING * INTO v_fila;
+  RETURN to_jsonb(v_fila);
+END $$;
+REVOKE ALL ON FUNCTION sync_registrar_codigo_farmacia(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION sync_registrar_codigo_farmacia(jsonb) TO authenticated;
+
+-- 16.2 Plantillas de pedido: lo que una farmacia pide siempre (se guardan al dictar o desde el carrito).
+CREATE TABLE IF NOT EXISTS plantillas_pedido (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  vendedor_id  uuid NOT NULL DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE CASCADE,
+  cliente_id   uuid NOT NULL REFERENCES dim_clientes(id) ON DELETE CASCADE,
+  drogueria_id uuid REFERENCES dim_droguerias(id) ON DELETE SET NULL,
+  nombre       text NOT NULL CHECK (btrim(nombre) <> ''),
+  lineas       jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(lineas) = 'array'),
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version  integer NOT NULL DEFAULT 1,
+  deleted_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_plantillas_vendedor ON plantillas_pedido (vendedor_id, cliente_id);
+CREATE INDEX IF NOT EXISTS idx_plantillas_updated ON plantillas_pedido (updated_at);
+
+-- Guardar o borrar una plantilla desde el dispositivo (cola Outbox): idempotente por id; solo las propias.
+CREATE OR REPLACE FUNCTION sync_guardar_plantilla(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE v_row plantillas_pedido;
+BEGIN
+  INSERT INTO plantillas_pedido (id, vendedor_id, cliente_id, drogueria_id, nombre, lineas, deleted_at)
+  VALUES ((p->>'id')::uuid, auth.uid(), (p->>'cliente_id')::uuid, nullif(p->>'drogueria_id','')::uuid,
+          coalesce(nullif(btrim(p->>'nombre'),''), 'Plantilla'), coalesce(p->'lineas', '[]'::jsonb),
+          CASE WHEN (p->>'eliminar')::boolean THEN now() END)
+  ON CONFLICT (id) DO UPDATE
+    SET nombre = excluded.nombre, drogueria_id = excluded.drogueria_id, lineas = excluded.lineas,
+        deleted_at = excluded.deleted_at
+    WHERE plantillas_pedido.vendedor_id = auth.uid()
+  RETURNING * INTO v_row;
+  IF v_row.id IS NULL THEN RAISE EXCEPTION 'Esa plantilla no es tuya' USING ERRCODE = '42501'; END IF;
+  RETURN jsonb_build_object('id', v_row.id, 'row_version', v_row.row_version);
+END $$;
+REVOKE ALL ON FUNCTION sync_guardar_plantilla(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION sync_guardar_plantilla(jsonb) TO authenticated;
+
+-- 16.3 Comunicados: anuncios, descuentos, estrategias o alertas para todos o por rol, equipo, estado, ciudad o región.
+-- Listas vacías = sin filtro. Estado y ciudad coinciden con los datos del usuario o con las farmacias de su fichero.
+ALTER TABLE dim_usuarios ADD COLUMN IF NOT EXISTS estado_geografico text;
+ALTER TABLE dim_usuarios ADD COLUMN IF NOT EXISTS ciudad text;
+ALTER TABLE dim_usuarios ADD COLUMN IF NOT EXISTS region text;
+
+CREATE TABLE IF NOT EXISTS comunicados (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  titulo        text NOT NULL CHECK (btrim(titulo) <> ''),
+  mensaje       text NOT NULL DEFAULT '',
+  tipo          text NOT NULL DEFAULT 'anuncio' CHECK (tipo IN ('anuncio','descuento','estrategia','alerta')),
+  roles         text[] NOT NULL DEFAULT '{}',
+  equipos       uuid[] NOT NULL DEFAULT '{}',
+  estados       text[] NOT NULL DEFAULT '{}',
+  ciudades      text[] NOT NULL DEFAULT '{}',
+  regiones      text[] NOT NULL DEFAULT '{}',
+  vigente_desde timestamptz NOT NULL DEFAULT now(),
+  vigente_hasta timestamptz,
+  creado_por    uuid DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version   integer NOT NULL DEFAULT 1,
+  deleted_at    timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_comunicados_updated ON comunicados (updated_at);
+
+-- ¿Este comunicado es para quien consulta? (se evalúa en la política y como columna calculada `para_mi`).
+CREATE OR REPLACE FUNCTION app.comunicado_visible(p_roles text[], p_equipos uuid[], p_estados text[], p_ciudades text[], p_regiones text[])
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH u AS (
+    SELECT rol::text AS rol, equipo_id, app.norm_texto(estado_geografico) AS estado, app.norm_texto(ciudad) AS ciudad,
+           app.norm_texto(region) AS region
+      FROM dim_usuarios WHERE id = auth.uid() AND activo AND deleted_at IS NULL
+  ),
+  f AS (SELECT DISTINCT app.norm_texto(c.estado_geografico) AS estado, app.norm_texto(c.municipio) AS ciudad
+          FROM dim_clientes c WHERE c.id IN (SELECT app.mis_clientes()))
+  SELECT EXISTS (
+    SELECT 1 FROM u
+     WHERE (cardinality(p_roles) = 0 OR u.rol = ANY (p_roles))
+       AND (cardinality(p_equipos) = 0 OR u.equipo_id = ANY (p_equipos))
+       AND (cardinality(p_regiones) = 0 OR u.region IN (SELECT app.norm_texto(x) FROM unnest(p_regiones) x))
+       AND (cardinality(p_estados) = 0
+            OR u.estado IN (SELECT app.norm_texto(x) FROM unnest(p_estados) x)
+            OR EXISTS (SELECT 1 FROM f WHERE f.estado IN (SELECT app.norm_texto(x) FROM unnest(p_estados) x)))
+       AND (cardinality(p_ciudades) = 0
+            OR u.ciudad IN (SELECT app.norm_texto(x) FROM unnest(p_ciudades) x)
+            OR EXISTS (SELECT 1 FROM f WHERE f.ciudad IN (SELECT app.norm_texto(x) FROM unnest(p_ciudades) x)))
+  )
+$$;
+
+-- Columna calculada para la API: GET /comunicados?select=*,para_mi
+CREATE OR REPLACE FUNCTION para_mi(c comunicados) RETURNS boolean
+LANGUAGE sql STABLE SET search_path = public AS $$
+  SELECT app.comunicado_visible(c.roles, c.equipos, c.estados, c.ciudades, c.regiones)
+$$;
+GRANT EXECUTE ON FUNCTION para_mi(comunicados) TO authenticated;
+
+-- Opciones para dirigir un comunicado: estados y ciudades de las farmacias y de los usuarios, y regiones de los usuarios.
+CREATE OR REPLACE FUNCTION zonas_disponibles() RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN coalesce(app.rol()::text, '') IN ('admin','gerente') THEN jsonb_build_object(
+    'estados', (SELECT coalesce(jsonb_agg(x ORDER BY x), '[]') FROM (
+                  SELECT DISTINCT btrim(estado_geografico) x FROM dim_clientes WHERE deleted_at IS NULL AND btrim(coalesce(estado_geografico,'')) <> ''
+                  UNION SELECT DISTINCT btrim(estado_geografico) FROM dim_usuarios WHERE btrim(coalesce(estado_geografico,'')) <> '') e),
+    'ciudades', (SELECT coalesce(jsonb_agg(x ORDER BY x), '[]') FROM (
+                  SELECT DISTINCT btrim(municipio) x FROM dim_clientes WHERE deleted_at IS NULL AND btrim(coalesce(municipio,'')) <> ''
+                  UNION SELECT DISTINCT btrim(ciudad) FROM dim_usuarios WHERE btrim(coalesce(ciudad,'')) <> '') c),
+    'regiones', (SELECT coalesce(jsonb_agg(DISTINCT btrim(region)), '[]') FROM dim_usuarios WHERE btrim(coalesce(region,'')) <> ''),
+    'equipos', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', id, 'nombre', coalesce(nombre, codigo)) ORDER BY codigo), '[]') FROM dim_equipos))
+  ELSE '{}'::jsonb END
+$$;
+REVOKE ALL ON FUNCTION zonas_disponibles() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION zonas_disponibles() TO authenticated;
+
+-- 16.4 Registro de accesos: quién entra a la app y cuántas veces (inicio de sesión o apertura con la sesión guardada).
+CREATE TABLE IF NOT EXISTS registro_accesos (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  usuario_id  uuid NOT NULL REFERENCES dim_usuarios(id) ON DELETE CASCADE,
+  evento      text NOT NULL CHECK (evento IN ('inicio_sesion','apertura')),
+  dispositivo text,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_accesos_usuario ON registro_accesos (usuario_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_accesos_fecha ON registro_accesos (created_at);
+
+-- Una apertura se cuenta como máximo una vez cada 30 minutos por persona (recargar la página no infla el conteo).
+CREATE OR REPLACE FUNCTION registrar_acceso(p_evento text, p_dispositivo text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NULL OR NOT EXISTS (SELECT 1 FROM dim_usuarios WHERE id = auth.uid()) THEN RETURN; END IF;
+  IF p_evento NOT IN ('inicio_sesion','apertura') THEN RAISE EXCEPTION 'Evento no válido' USING ERRCODE = '22023'; END IF;
+  IF p_evento = 'apertura' AND EXISTS (SELECT 1 FROM registro_accesos WHERE usuario_id = auth.uid()
+                                        AND created_at > now() - interval '30 minutes') THEN
+    RETURN;
+  END IF;
+  INSERT INTO registro_accesos (usuario_id, evento, dispositivo) VALUES (auth.uid(), p_evento, left(p_dispositivo, 200));
+END $$;
+
+-- Resumen por persona (incluye a quien no entró). Solo administración y gerencia.
+CREATE OR REPLACE FUNCTION reporte_accesos(p_desde date, p_hasta date)
+RETURNS TABLE (usuario_id uuid, nombre text, email text, rol text, inicios_sesion integer, aperturas integer,
+               dias_activos integer, ultimo_acceso timestamptz)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF coalesce(app.rol()::text, '') NOT IN ('admin','gerente') THEN
+    RAISE EXCEPTION 'Solo administración y gerencia ven los accesos' USING ERRCODE = '42501';
+  END IF;
+  RETURN QUERY
+  SELECT u.id, u.nombre_completo, u.email, u.rol::text,
+         count(*) FILTER (WHERE a.evento = 'inicio_sesion')::integer,
+         count(*) FILTER (WHERE a.evento = 'apertura')::integer,
+         count(DISTINCT (a.created_at AT TIME ZONE 'America/Caracas')::date)::integer,
+         (SELECT max(x.created_at) FROM registro_accesos x WHERE x.usuario_id = u.id)
+    FROM dim_usuarios u
+    LEFT JOIN registro_accesos a ON a.usuario_id = u.id
+         AND a.created_at >= p_desde AND a.created_at < p_hasta + 1
+   WHERE u.deleted_at IS NULL
+   GROUP BY u.id
+   ORDER BY count(a.id) DESC, u.nombre_completo;
+END $$;
+REVOKE ALL ON FUNCTION registrar_acceso(text, text), reporte_accesos(date, date) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION registrar_acceso(text, text), reporte_accesos(date, date) TO authenticated;
+
+-- 16.5 Metas del mes: por representante, por farmacia, por droguería, o cualquier combinación de las tres.
+-- Mide unidades, pedidos o farmacias con pedido. El avance se calcula en la app con los pedidos del mes.
+CREATE TABLE IF NOT EXISTS metas (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  periodo      date NOT NULL CHECK (date_trunc('month', periodo)::date = periodo),
+  vendedor_id  uuid REFERENCES dim_usuarios(id) ON DELETE CASCADE,
+  cliente_id   uuid REFERENCES dim_clientes(id) ON DELETE CASCADE,
+  drogueria_id uuid REFERENCES dim_droguerias(id) ON DELETE CASCADE,
+  indicador    text NOT NULL DEFAULT 'unidades' CHECK (indicador IN ('unidades','pedidos','farmacias')),
+  objetivo     numeric(14,2) NOT NULL CHECK (objetivo > 0),
+  creado_por   uuid DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version  integer NOT NULL DEFAULT 1,
+  deleted_at   timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_metas ON metas (periodo, indicador,
+  coalesce(vendedor_id, '00000000-0000-0000-0000-000000000000'::uuid),
+  coalesce(cliente_id, '00000000-0000-0000-0000-000000000000'::uuid),
+  coalesce(drogueria_id, '00000000-0000-0000-0000-000000000000'::uuid)) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_metas_updated ON metas (updated_at);
+
+-- Totales por mes para el Resumen (todo el historial, no solo lo que guarda el dispositivo). Respeta la seguridad por
+-- filas de quien consulta; un vendedor pasa su propio id para ver solo lo suyo.
+CREATE OR REPLACE FUNCTION resumen_pedidos_mensual(p_meses integer DEFAULT 12, p_vendedor uuid DEFAULT NULL)
+RETURNS TABLE (mes date, pedidos bigint, unidades bigint, farmacias bigint)
+LANGUAGE sql STABLE SET search_path = public AS $$
+  SELECT date_trunc('month', p.created_at AT TIME ZONE 'America/Caracas')::date,
+         count(DISTINCT p.id), coalesce(sum(d.unidades_solicitadas), 0)::bigint, count(DISTINCT p.cliente_id)
+    FROM fact_pedidos p
+    LEFT JOIN fact_pedido_detalles d ON d.pedido_id = p.id AND d.deleted_at IS NULL
+   WHERE p.deleted_at IS NULL
+     AND p.estado::text NOT IN ('borrador','cancelado','rechazado')
+     AND p.created_at >= (date_trunc('month', now() AT TIME ZONE 'America/Caracas') - make_interval(months => greatest(p_meses, 1) - 1)) AT TIME ZONE 'America/Caracas'
+     AND (p_vendedor IS NULL OR p.vendedor_id = p_vendedor)
+   GROUP BY 1
+   ORDER BY 1
+$$;
+REVOKE ALL ON FUNCTION resumen_pedidos_mensual(integer, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION resumen_pedidos_mensual(integer, uuid) TO authenticated;
+
+-- 16.6 Marcas de tiempo, seguridad por filas y tiempo real de las tablas nuevas.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['plantillas_pedido','comunicados','metas'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_touch ON %I', t);
+    EXECUTE format('CREATE TRIGGER trg_touch BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION app.touch()', t);
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['plantillas_pedido','comunicados','metas','registro_accesos'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+  END LOOP;
+END $$;
+
+DROP POLICY IF EXISTS plantillas_propias ON plantillas_pedido;
+CREATE POLICY plantillas_propias ON plantillas_pedido FOR ALL TO authenticated
+  USING (vendedor_id = (SELECT auth.uid()))
+  WITH CHECK (vendedor_id = (SELECT auth.uid()) AND ((SELECT app.es_staff()) OR cliente_id IN (SELECT app.mis_clientes())));
+DROP POLICY IF EXISTS plantillas_staff ON plantillas_pedido;
+CREATE POLICY plantillas_staff ON plantillas_pedido FOR SELECT TO authenticated USING ((SELECT app.es_staff()));
+
+-- La gerencia y la administración ven y publican todos; el resto solo recibe los que le corresponden.
+DROP POLICY IF EXISTS comunicados_lectura ON comunicados;
+CREATE POLICY comunicados_lectura ON comunicados FOR SELECT TO authenticated
+  USING ((SELECT app.rol())::text IN ('admin','gerente') OR app.comunicado_visible(roles, equipos, estados, ciudades, regiones));
+DROP POLICY IF EXISTS comunicados_gestion ON comunicados;
+CREATE POLICY comunicados_gestion ON comunicados FOR ALL TO authenticated
+  USING ((SELECT app.rol())::text IN ('admin','gerente')) WITH CHECK ((SELECT app.rol())::text IN ('admin','gerente'));
+
+DROP POLICY IF EXISTS accesos_lectura ON registro_accesos;
+CREATE POLICY accesos_lectura ON registro_accesos FOR SELECT TO authenticated
+  USING ((SELECT app.rol())::text IN ('admin','gerente'));
+
+-- Un representante ve sus metas y las de las farmacias de su fichero que no son de otro representante.
+DROP POLICY IF EXISTS metas_lectura ON metas;
+CREATE POLICY metas_lectura ON metas FOR SELECT TO authenticated
+  USING ((SELECT app.es_staff()) OR vendedor_id = (SELECT auth.uid())
+         OR (vendedor_id IS NULL AND cliente_id IN (SELECT app.mis_clientes())));
+DROP POLICY IF EXISTS metas_gestion ON metas;
+CREATE POLICY metas_gestion ON metas FOR ALL TO authenticated
+  USING ((SELECT app.rol())::text IN ('admin','gerente')) WITH CHECK ((SELECT app.rol())::text IN ('admin','gerente'));
+
+REVOKE ALL ON plantillas_pedido, comunicados, metas, registro_accesos FROM anon;
+
+-- Tiempo real: la app se actualiza sola cuando cambian estas tablas (además consulta cada pocos segundos por si acaso).
+DO $$
+DECLARE t text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    FOREACH t IN ARRAY ARRAY['fact_pedidos','fact_pedido_detalles','notificaciones','comunicados','metas','plantillas_pedido',
+                             'config_reglas_comerciales','map_cliente_drogueria','map_producto_drogueria','dim_droguerias',
+                             'rel_cliente_vendedor'] LOOP
+      IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = t) THEN
+        EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+      END IF;
+    END LOOP;
+  END IF;
+END $$;
+
+NOTIFY pgrst, 'reload schema';

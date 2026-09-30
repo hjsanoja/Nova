@@ -35,7 +35,7 @@ guarda en el dispositivo y se sincroniza solo, en segundo plano, cuando vuelve l
 | Acceso | `src/services/sesion.ts`, `src/components/acceso/*` | Inicio de sesión obligatorio (Supabase Auth); rol y equipo se leen de `dim_usuarios` |
 | | `src/offline/aislamiento.ts` | Al cambiar de usuario en el dispositivo se borran los datos locales del anterior (el vendedor solo ve su fichero) |
 | UI | `src/vistas/*` | Menús: Resumen, Tomar pedido, Por procesar, Pedidos, Clientes, Catálogo, Reportes, Cargar y editar datos, Configuración (según rol) |
-| | `src/components/capture/*` | Pantalla de captura móvil/tablet (carrito flotante, búsqueda, condiciones, escáner) |
+| | `src/pedido/*` | Tienda de pedidos: catálogo en tarjetas, un carrito por farmacia (varios a la vez, envío en bloque), dictado por voz con vista previa |
 | | `src/components/ui/kit.tsx` | Piezas visuales comunes (encabezado, tarjetas, botones compactos, avisos) |
 | | `src/components/SyncStatusChip.tsx` | Indicador de sincronización del encabezado |
 | PWA | `public/sw.js`, `manifest.webmanifest`, `vite.config.ts` (plugin `sw-manifest`) | Instalable y abre sin red |
@@ -64,7 +64,7 @@ guarda en el dispositivo y se sincroniza solo, en segundo plano, cuando vuelve l
 | **Dimensiones** | `dim_equipos`, `dim_usuarios`, `dim_clientes`, `dim_productos`, `dim_droguerias` | Los "quién / qué / dónde": cada fila es una entidad maestra con **un solo** identificador interno (UUID) y su clave natural (`codigo_interno` = ident01, `sku` = Cod SAP, `codigo` de droguería). |
 | **Puentes** | `rel_cliente_vendedor`, `map_cliente_drogueria`, `map_producto_drogueria` | Conectan dimensiones. Los `map_*` traducen entre **nuestro** código y **el de cada droguería**. |
 | **Hechos** | `fact_pedidos` + `fact_pedido_detalles` (lo que Nova toma), `fact_ventas_drogueria` (lo que reportan las droguerías), `fact_compras_mensual` (consolidado) | Los eventos medibles (unidades). Sin precios en fase 1. |
-| **Operativas** | `crm_visitas`, `plantillas_reposicion`/`plantilla_items`, `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `import_lotes`, `config_sistema`, `secretos_sistema`, `audit_log` | Soporte de campo, alertas, reglas, auditoría. |
+| **Operativas** | `crm_visitas`, `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `import_lotes`, `config_sistema`, `secretos_sistema`, `audit_log` | Soporte de campo, alertas, reglas, auditoría. |
 
 ### Cada droguería habla su propio idioma (códigos y nombres únicos)
 
@@ -102,7 +102,8 @@ transacción de IndexedDB; el servidor la aplica con una RPC **idempotente** (mi
 | `pedido.rerutear` | `rerutear_remanente(pedido, drogueria, nuevo_id)` | por `nuevo_id` | correlativo `PED-XXXX-R1`, líneas con ids del servidor |
 | `prospecto.crear` | `sync_crear_prospecto(p)` | upsert por `id` | `estado_validacion` |
 | `visita.registrar` | `sync_registrar_visita(p)` | upsert por `id` | distancia real (PostGIS) y `dentro_de_radio` |
-| `plantilla.guardar` | `sync_guardar_plantilla(p)` | upsert por `id` | — |
+| `farmacia.codigo` | `sync_registrar_codigo_farmacia(p)` | por `p.id`; un código es de una sola farmacia por droguería | la fila de `map_cliente_drogueria` (reemplaza a la provisional) |
+| `plantilla.guardar` | `sync_guardar_plantilla(p)` | upsert por `id` (solo las propias); `eliminar: true` la da de baja | `row_version` |
 
 - **Orden:** FIFO por `seq`. Un item espera a los anteriores de su misma entidad y a los de la entidad de la que depende
   (`depende_de`): un re-ruteo no sale antes del alta de su pedido padre. Un item en error **no bloquea** a otras entidades.
@@ -169,7 +170,7 @@ comparten los mismos casos de prueba (`politicas.test.ts` y `db-tests/10_escenar
 
 **Equipos vs. usuarios:** `dim_equipos` agrupa vendedores (La Santé, Comercial/OTC); `dim_usuarios` contiene a **todas** las personas con su rol (vendedor, transferencista, gerente, admin). Cada vendedor es un usuario; un gerente no necesita equipo.
 
-Opcional: programar `recalcular_segmentos_clientes()` y `generar_alertas_comerciales()` a diario (pg_cron, ver el final del DDL). Realtime ya queda habilitado para `fact_pedidos`, `pedido_bloqueos`, `notificaciones` y `dim_clientes`.
+Opcional: programar `recalcular_segmentos_clientes()` y `generar_alertas_comerciales()` a diario (pg_cron, ver el final del DDL). Realtime queda habilitado para las tablas de `TABLAS_EN_VIVO` (sección 16 del DDL) además de `pedido_bloqueos` y `dim_clientes`.
 
 **Borrado de datos (solo admin):** `configurar_password_purga` (clave, mín. 6) → `habilitar_borrado(true)` → `borrar_datos(clave, alcance)`.
 Alcances: `historial` (ventas de droguerías), `pedidos`, `homologaciones` (las ventas vuelven a pendientes), `fichero`,
@@ -209,8 +210,10 @@ split `PED-1001-R1`, exportación, prospecto, check-in, aislamiento de errores y
   pestaña y cada 30 s con la app abierta; con la app cerrada en iOS no hay envío hasta abrirla.
 - El navegador puede liberar IndexedDB si el dispositivo se queda sin espacio: `navigator.storage.persist()` reduce el riesgo
   pero no lo elimina. Lo pendiente de enviar es lo único irremplazable; conviene sincronizar al final de cada jornada.
-- La lista "Por procesar" del transferencista se actualiza al sincronizar o con el botón **Actualizar**; la presencia en vivo por Realtime
-  (el servidor ya la soporta) aún no está conectada a la pantalla. El bloqueo de 120 s (`tomar_pedido`) evita que dos personas procesen el mismo pedido.
-- Las reglas comerciales se editan como datos en la tabla `config_reglas_comerciales` (sin pantalla).
+- **Tiempo real:** el motor escucha Supabase Realtime (`TABLAS_EN_VIVO` en `motor.ts`: pedidos, detalles, notificaciones, comunicados,
+  metas, plantillas, reglas, homologaciones, droguerías y fichero) y descarga al recibir un aviso (agrupa ráfagas en 0,8 s). Si el canal
+  no está conectado consulta cada 15 s con la pestaña visible; con él, cada 60 s por seguridad. El botón ⟳ del encabezado fuerza una
+  actualización. Las tablas masivas (farmacias, productos, ventas) se revisan solo con la consulta periódica.
+- El bloqueo de 120 s (`tomar_pedido`) evita que dos personas procesen el mismo pedido.
 - El inventario de droguería sigue sin usarse (fuera del alcance de la fase 1). Sin precios: solo unidades.
-- El dictado por voz y el modo de toma clásica fueron retirados: la captura v3 es la única vía de toma de pedidos.
+- El dictado por voz usa el reconocimiento del navegador (Chrome, Edge, Safari); en Firefox se escribe la frase.

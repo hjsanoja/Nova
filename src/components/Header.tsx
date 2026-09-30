@@ -48,7 +48,7 @@ export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuario
       <div className="flex h-full items-center justify-between gap-2 px-3 sm:px-5">
         <NovaLogo size="sm" esClaro={esClaro} />
         <div className="flex items-center gap-1.5">
-          {esDemo && <span className="hidden rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900 sm:inline dark:bg-amber-950 dark:text-amber-300">Demostración</span>}
+          {esDemo && <span className="hidden rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 sm:inline dark:bg-amber-950 dark:text-amber-300">Demostración</span>}
           <SyncStatusChip onAbrirConfig={onAbrirConfig} />
           <button
             type="button"
@@ -66,23 +66,23 @@ export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuario
               aria-expanded={abierto}
               className="flex h-9 items-center gap-2 rounded-xl pl-1 pr-2 hover:bg-slate-100 dark:hover:bg-slate-800"
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-teal-600 text-xs font-bold text-white">{nombre.charAt(0).toUpperCase()}</span>
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-marca-700 text-xs font-bold text-white">{nombre.charAt(0).toUpperCase()}</span>
               <span className="hidden max-w-36 flex-col text-left leading-tight md:flex">
                 <span className="truncate text-xs font-bold">{nombre}</span>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400">{rol}</span>
+                <span className="text-xs text-slate-500 dark:text-slate-400">{rol}</span>
               </span>
               <ChevronDown className="hidden h-3.5 w-3.5 text-slate-400 sm:block" />
             </button>
             {abierto && (
-              <div role="menu" className="animate-in absolute right-0 z-50 mt-2 w-64 max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+              <div role="menu" className="animate-in absolute right-0 z-50 mt-2 w-64 max-w-[calc(100vw-1.5rem)] rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-slate-800 dark:bg-slate-900">
                 <div className="border-b border-slate-100 px-3 pb-2 pt-1 dark:border-slate-800">
                   <p className="truncate text-sm font-bold">{nombre}</p>
                   <p className="truncate text-xs text-slate-500">{usuarioActual?.email}</p>
-                  <p className="text-xs font-semibold text-teal-700 dark:text-teal-300">{rol}</p>
+                  <p className="text-xs font-semibold text-marca-700 dark:text-marca-300">{rol}</p>
                 </div>
                 <div className="pt-1">
                   <button type="button" role="menuitem" onClick={accion(onAbrirConfig)} className={itemMenu}>
-                    <Settings className="h-4 w-4 text-teal-600" /> Configuración
+                    <Settings className="h-4 w-4 text-marca-600" /> Configuración
                   </button>
                   <button type="button" role="menuitem" onClick={accion(onCerrarSesion)} className={`${itemMenu} text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40`}>
                     <LogOut className="h-4 w-4" /> Cerrar sesión

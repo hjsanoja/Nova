@@ -31,12 +31,12 @@ export function DialogoCarga({ estado, onConfirmar, onCerrar }: { estado: Estado
   const pct = estado.fase === 'cargando' && estado.total > 0 ? Math.min(100, Math.round((estado.hechas / estado.total) * 100)) : 0;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="dialogo-carga-titulo">
-      <div className="max-h-[90dvh] w-full overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:max-w-lg sm:rounded-2xl">
+      <div className="max-h-[90dvh] w-full overflow-y-auto rounded-t-xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:max-w-lg sm:rounded-xl">
         <h2 id="dialogo-carga-titulo" className="mb-3 flex items-center gap-2 text-base font-bold text-slate-900 dark:text-white">
           {estado.fase === 'resultado' ? (
             estado.ok ? <CheckCircle2 className="h-5 w-5 text-emerald-600" /> : <XCircle className="h-5 w-5 text-rose-600" />
           ) : (
-            <UploadCloud className="h-5 w-5 text-teal-600" />
+            <UploadCloud className="h-5 w-5 text-marca-600" />
           )}
           {estado.titulo}
         </h2>
@@ -79,7 +79,7 @@ export function DialogoCarga({ estado, onConfirmar, onCerrar }: { estado: Estado
           <>
             <p className="mb-2 text-sm text-slate-700 dark:text-slate-200">{estado.etapa}…</p>
             <div className="h-3 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-              <div className="h-full rounded-full bg-teal-600 transition-[width] duration-300" style={{ width: `${pct}%` }} />
+              <div className="h-full rounded-full bg-marca-600 transition-[width] duration-300" style={{ width: `${pct}%` }} />
             </div>
             <p className="mt-2 text-xs text-slate-500">
               {estado.hechas.toLocaleString()} de {estado.total.toLocaleString()} ({pct}%). No cierres esta pestaña.
@@ -108,11 +108,11 @@ export function DialogoCarga({ estado, onConfirmar, onCerrar }: { estado: Estado
 }
 
 function Cifra({ rotulo, valor, tono }: { rotulo: string; valor: number; tono?: 'teal' | 'ambar' }) {
-  const color = tono === 'teal' ? 'text-teal-700 dark:text-teal-300' : tono === 'ambar' ? 'text-amber-700 dark:text-amber-300' : 'text-slate-900 dark:text-white';
+  const color = tono === 'teal' ? 'text-marca-700 dark:text-marca-300' : tono === 'ambar' ? 'text-amber-700 dark:text-amber-300' : 'text-slate-900 dark:text-white';
   return (
     <div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-950">
-      <dd className={`text-lg font-extrabold ${color}`}>{valor.toLocaleString()}</dd>
-      <dt className="text-[11px] text-slate-500">{rotulo}</dt>
+      <dd className={`text-lg font-bold ${color}`}>{valor.toLocaleString()}</dd>
+      <dt className="text-xs text-slate-500">{rotulo}</dt>
     </div>
   );
 }

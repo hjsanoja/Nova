@@ -81,3 +81,32 @@ export function clearSupabaseConfig(): void {
   localStorage.removeItem(STORAGE_KEY_URL);
   localStorage.removeItem(STORAGE_KEY_ANON_KEY);
 }
+
+/** Parámetro del enlace que trae la conexión ya puesta (URL y clave pública "anon", que no es secreta). */
+const PARAM_ENLACE = 'conexion';
+
+/** Enlace de la app con la conexión incluida: quien lo abre no tiene que escribir la URL ni la clave. */
+export function enlaceConConexion(base = `${location.origin}${location.pathname}`): string {
+  const { url, anonKey } = getStoredSupabaseConfig();
+  if (!url || !anonKey) return base;
+  const valor = btoa(`${url}|${anonKey}`).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${base}?${PARAM_ENLACE}=${valor}`;
+}
+
+/** Al abrir un enlace con `?conexion=…` se guarda la conexión y se limpia la barra de direcciones. Devuelve si la aplicó. */
+export function aplicarConexionDelEnlace(): boolean {
+  try {
+    const params = new URLSearchParams(location.search);
+    const valor = params.get(PARAM_ENLACE);
+    if (!valor) return false;
+    const [url, anonKey] = atob(valor.replace(/-/g, '+').replace(/_/g, '/')).split('|');
+    params.delete(PARAM_ENLACE);
+    const resto = params.toString();
+    history.replaceState(null, '', `${location.pathname}${resto ? `?${resto}` : ''}${location.hash}`);
+    if (!url || !anonKey || !/^https?:\/\//.test(url)) return false;
+    saveSupabaseConfig(url, anonKey);
+    return true;
+  } catch {
+    return false;
+  }
+}

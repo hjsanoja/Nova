@@ -15,13 +15,17 @@ import { obtenerEstadoSync } from './offline/syncStore';
 
 // Cada módulo se descarga solo cuando se usa (el bundle inicial se reduce a la estructura).
 const Inicio = lazy(() => import('./vistas/Inicio').then((m) => ({ default: m.Inicio })));
-const PedidoCapturaScreen = lazy(() => import('./components/capture/PedidoCapturaScreen').then((m) => ({ default: m.PedidoCapturaScreen })));
+const TiendaVista = lazy(() => import('./pedido/TiendaVista').then((m) => ({ default: m.TiendaVista })));
 const ClientesVista = lazy(() => import('./vistas/ClientesVista').then((m) => ({ default: m.ClientesVista })));
 const PedidosVista = lazy(() => import('./vistas/PedidosVista').then((m) => ({ default: m.PedidosVista })));
 const PorProcesarVista = lazy(() => import('./vistas/PorProcesarVista').then((m) => ({ default: m.PorProcesarVista })));
 const CatalogoVista = lazy(() => import('./vistas/CatalogoVista').then((m) => ({ default: m.CatalogoVista })));
 const ReportesVista = lazy(() => import('./vistas/ReportesVista').then((m) => ({ default: m.ReportesVista })));
 const DatosVista = lazy(() => import('./vistas/DatosVista').then((m) => ({ default: m.DatosVista })));
+const CondicionesVista = lazy(() => import('./vistas/CondicionesVista').then((m) => ({ default: m.CondicionesVista })));
+const ComunicadosVista = lazy(() => import('./comunicados/ComunicadosVista').then((m) => ({ default: m.ComunicadosVista })));
+const MetasVista = lazy(() => import('./metas/MetasVista').then((m) => ({ default: m.MetasVista })));
+const BannerComunicados = lazy(() => import('./comunicados/BannerComunicados').then((m) => ({ default: m.BannerComunicados })));
 const ConfigVista = lazy(() => import('./vistas/config/ConfigVista').then((m) => ({ default: m.ConfigVista })));
 
 const leerTabDelHash = () => window.location.hash.replace(/^#\/?/, '');
@@ -31,10 +35,10 @@ const Cargando = () => (
     <div className="h-7 w-56 rounded-lg bg-slate-200 dark:bg-slate-800" />
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="h-20 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+        <div key={i} className="h-20 rounded-xl bg-slate-200 dark:bg-slate-800" />
       ))}
     </div>
-    <div className="h-56 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+    <div className="h-56 rounded-xl bg-slate-200 dark:bg-slate-800" />
   </div>
 );
 
@@ -141,15 +145,23 @@ function AppContent() {
         <SideNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} />
 
         <main className="mx-auto w-full min-w-0 max-w-[1500px] flex-1 px-3 py-3 pb-24 sm:px-5 sm:py-4 md:pb-6 lg:px-6">
+          <ErrorBoundary compacto>
+            <Suspense fallback={null}>
+              <BannerComunicados />
+            </Suspense>
+          </ErrorBoundary>
           <ErrorBoundary compacto resetKey={tabActiva}>
             <Suspense fallback={<Cargando />}>
               {tabActiva === 'inicio' && <Inicio usuario={usuarioActual} irATab={irATab} />}
-              {tabActiva === 'captura' && <PedidoCapturaScreen vendedorId={usuarioActual.id} equipoId={null} />}
+              {tabActiva === 'captura' && <TiendaVista vendedorId={usuarioActual.id} equipoId={null} />}
               {tabActiva === 'clientes' && <ClientesVista usuario={usuarioActual} irATab={irATab} />}
               {tabActiva === 'pedidos' && <PedidosVista usuario={usuarioActual} />}
               {tabActiva === 'por_procesar' && <PorProcesarVista usuario={usuarioActual} irATab={irATab} />}
               {tabActiva === 'catalogo' && <CatalogoVista usuario={usuarioActual} />}
               {tabActiva === 'reportes' && <ReportesVista usuario={usuarioActual} />}
+              {tabActiva === 'condiciones' && <CondicionesVista usuario={usuarioActual} />}
+              {tabActiva === 'metas' && <MetasVista />}
+              {tabActiva === 'comunicados' && <ComunicadosVista />}
               {tabActiva === 'datos' && <DatosVista usuario={usuarioActual} esDemo={esDemo} />}
               {tabActiva === 'config' && (
                 <ConfigVista usuario={usuarioActual} irATab={irATab} esDemo={esDemo} onCerrarSesion={handleCerrarSesion} onConexionCambiada={() => setConectado(getStoredSupabaseConfig().isConnected)} onUsuarioActualizado={setUsuarioActual} />

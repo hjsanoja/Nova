@@ -124,5 +124,38 @@ BEGIN
   ASSERT (SELECT count(*) FROM audit_log WHERE accion = 'purga_ejecutada' AND detalle->>'alcance' = 'clientes') = 1, 'auditado';
   RAISE NOTICE 'OK 34: borrado por tabla (fichero, homologaciones, farmacias, productos, droguerías)';
 END $$;
+
+-- ---------------------------------------------------------------- 35. baja de varios registros y de usuarios
+DO $$
+DECLARE n integer;
+BEGIN
+  INSERT INTO dim_droguerias (codigo, nombre) VALUES ('D1', 'Uno'), ('D2', 'Dos');
+  PERFORM importar_catalogo_clientes('[{"codigo_interno":"B-1","nombre_comercial":"B1"},{"codigo_interno":"B-2","nombre_comercial":"B2"},{"codigo_interno":"B-3","nombre_comercial":"B3"}]');
+  PERFORM importar_catalogo_productos('[{"sku":"Q-1","nombre_comercial":"Q1","foto_url":"https://x/q1.png"},{"sku":"Q-2","nombre_comercial":"Q2"}]');
+  PERFORM asignar_clientes_vendedor('a0000000-0000-0000-0000-0000000000c1', ARRAY['B-1', 'B-2'], 'agregar');
+  n := eliminar_registros('clientes', ARRAY['B-1', 'B-2', 'NO-EXISTE', ' B-1 ']);
+  ASSERT n = 2, 'dos farmacias: ' || n;
+  ASSERT (SELECT count(*) FROM rel_cliente_vendedor r JOIN dim_clientes c ON c.id = r.cliente_id WHERE c.codigo_interno IN ('B-1', 'B-2') AND r.activo) = 0, 'salen del fichero';
+  ASSERT eliminar_registros('productos', ARRAY['Q-1']) = 1 AND eliminar_registros('droguerias', ARRAY['D1', 'D2']) = 2;
+  ASSERT (SELECT foto_url FROM dim_productos WHERE sku = 'Q-1') = 'https://x/q1.png', 'la foto se guardó';
+  -- Volver a cargar el mismo código lo restaura (y no pisa la foto si no viene).
+  PERFORM importar_catalogo_productos('[{"sku":"Q-1","nombre_comercial":"Q1 nuevo"}]');
+  ASSERT (SELECT deleted_at IS NULL AND foto_url = 'https://x/q1.png' FROM dim_productos WHERE sku = 'Q-1'), 'restaurado con su foto';
+  BEGIN PERFORM eliminar_registros('usuarios', ARRAY['x']); ASSERT false; EXCEPTION WHEN sqlstate '22023' THEN NULL; END;
+  -- Separador del archivo de pedidos desde el formulario de la droguería.
+  PERFORM importar_catalogo_droguerias('[{"codigo":"D3","nombre":"Tres","delimitador":"|"}]');
+  ASSERT (SELECT formato_export->>'delimitador' FROM dim_droguerias WHERE codigo = 'D3') = '|';
+  -- Usuarios: nadie se elimina a sí mismo; eliminar desactiva y retira el fichero; reactivar lo restaura.
+  BEGIN PERFORM admin_eliminar_usuarios(ARRAY['a0000000-0000-0000-0000-000000000001'::uuid]); ASSERT false; EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+  ASSERT admin_eliminar_usuarios(ARRAY['a0000000-0000-0000-0000-0000000000c2'::uuid]) = 1;
+  ASSERT (SELECT NOT activo AND deleted_at IS NOT NULL FROM dim_usuarios WHERE id = 'a0000000-0000-0000-0000-0000000000c2');
+  PERFORM admin_configurar_usuario('a0000000-0000-0000-0000-0000000000c2', 'vendedor', NULL, true);
+  ASSERT (SELECT activo AND deleted_at IS NULL FROM dim_usuarios WHERE id = 'a0000000-0000-0000-0000-0000000000c2'), 'reactivado';
+END $$;
+SELECT t.como(:v1);
+DO $$ BEGIN
+  BEGIN PERFORM eliminar_registros('clientes', ARRAY['B-3']); ASSERT false, 'solo admin'; EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+  RAISE NOTICE 'OK 35: baja de varios registros y usuarios (solo admin; se restauran al volver a cargarlos)';
+END $$;
 RESET ROLE;
 \echo CARGAS: TODOS LOS ESCENARIOS PASARON

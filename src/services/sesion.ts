@@ -41,12 +41,33 @@ async function usuarioDesdePerfil(sb: SupabaseClient, id: string, email: string,
   return { id, email, nombre_completo: perfil.nombre_completo, rol: perfil.rol, equipo: perfil.equipo, telefono: perfil.telefono, activo: true, created_at: creado };
 }
 
+/** "Android · Chrome", "Windows · Edge"… (sin datos personales): para el reporte de accesos. */
+function dispositivo(): string {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  const so = /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iPhone/iPad' : /Windows/i.test(ua) ? 'Windows' : /Mac OS/i.test(ua) ? 'Mac' : /Linux/i.test(ua) ? 'Linux' : 'Otro';
+  const nav = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Navegador';
+  const instalada = typeof window !== 'undefined' && window.matchMedia?.('(display-mode: standalone)').matches;
+  return `${so} · ${nav}${instalada ? ' · app instalada' : ''}`;
+}
+
+/** Deja constancia de un acceso (inicio de sesión o apertura de la app). Nunca bloquea ni falla hacia el usuario. */
+function registrarAcceso(evento: 'inicio_sesion' | 'apertura', sb: SupabaseClient | null = getSupabaseClient()): void {
+  if (!sb || typeof sb.rpc !== 'function') return;
+  try {
+    void Promise.resolve(sb.rpc('registrar_acceso', { p_evento: evento, p_dispositivo: dispositivo() })).catch(() => undefined);
+  } catch {
+    /* el registro de accesos nunca impide entrar */
+  }
+}
+
 export async function iniciarSesionNube(email: string, password: string, sb: SupabaseClient | null = getSupabaseClient()): Promise<Usuario> {
   const cliente = requerirCliente(sb);
   const { data, error } = await cliente.auth.signInWithPassword({ email: email.trim(), password });
   if (error || !data.user) throw new Error(traducirErrorAuth(error?.message ?? 'No se pudo iniciar sesión.'));
   try {
-    return await usuarioDesdePerfil(cliente, data.user.id, data.user.email ?? email.trim(), data.user.created_at);
+    const usuario = await usuarioDesdePerfil(cliente, data.user.id, data.user.email ?? email.trim(), data.user.created_at);
+    registrarAcceso('inicio_sesion', cliente);
+    return usuario;
   } catch (e) {
     await cliente.auth.signOut();
     throw new Error(traducirErrorAuth(e instanceof Error ? e.message : String(e)));
@@ -63,7 +84,9 @@ export async function restaurarSesionNube(sb: SupabaseClient | null = getSupabas
     if (error) return { estado: navigator.onLine === false ? 'sin_red' : 'sin_sesion' };
     const u = data.session?.user;
     if (!u) return { estado: navigator.onLine === false ? 'sin_red' : 'sin_sesion' };
-    return { estado: 'ok', usuario: await usuarioDesdePerfil(sb, u.id, u.email ?? '', u.created_at) };
+    const usuario = await usuarioDesdePerfil(sb, u.id, u.email ?? '', u.created_at);
+    registrarAcceso('apertura', sb);
+    return { estado: 'ok', usuario };
   } catch {
     return { estado: navigator.onLine === false ? 'sin_red' : 'sin_sesion' };
   }

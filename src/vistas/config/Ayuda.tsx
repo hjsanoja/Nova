@@ -5,9 +5,12 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
   vendedor: {
     titulo: 'Para vendedores',
     items: [
-      'Inicio te muestra qué clientes llevan tiempo sin comprar. Toca "Pedido" junto a uno para empezar.',
-      'Tomar pedido: elige la farmacia, busca los productos (o escanea el código) y toca "Enviar". Funciona sin señal: se envía solo al recuperar la conexión.',
-      'Mis clientes: solo aparecen las farmacias de tu fichero, con su teléfono, ubicación y lo que más compran.',
+      'Inicio: tus unidades y pedidos del mes, cuántas farmacias de tu fichero ya compraron y quiénes llevan tiempo sin comprar.',
+      'Nuevo pedido: elige la farmacia, agrega productos con sus unidades y la droguería; cada farmacia tiene su propio carrito. Puedes armar varios y enviarlos juntos con "Enviar todos". Funciona sin señal.',
+      'Dictar: toca el micrófono y di la farmacia, la droguería, los productos y las unidades (por ejemplo "Farmacia La Paz por Cobeca, diez losartán 50 y cinco omeprazol"). Revisa la vista previa y confirma.',
+      'Plantillas: termina el dictado con "guárdalo como plantilla semanal" (o usa "Guardar como plantilla" en el carrito). La próxima vez di "Farmacia La Paz, plantilla semanal" o tócala sobre el catálogo.',
+      'Código de la farmacia: si la droguería elegida aún no tiene el número de cliente de esa farmacia, la app te lo pide una sola vez antes de enviar. Sin ese código la droguería no reconoce el pedido.',
+      'Mis clientes: tus farmacias con su teléfono y ubicación. Con "Agregar farmacias" armas tu fichero.',
       'Mis pedidos: mira en qué estado va cada uno. Si la droguería despacha solo una parte, aquí puedes re-rutear lo pendiente a otra droguería.',
     ],
   },
@@ -16,20 +19,28 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
     items: [
       'Por procesar: abre un pedido, descarga el archivo con los códigos de la droguería y envíalo por su portal.',
       'Cuando la droguería responda, escribe cuántas unidades confirmó por producto y toca "Confirmar". Si no despachó algo, indica el motivo.',
-      'Si el archivo no se puede descargar, el aviso dice qué falta (por ejemplo, un producto sin código en esa droguería).',
+      'Si el archivo no se puede descargar, el aviso dice qué falta (por ejemplo, un producto sin código en esa droguería). Si falta el código de la farmacia, escríbelo ahí mismo y queda guardado.',
       'Clientes y Catálogo son de consulta: verás todas las farmacias, productos y droguerías.',
     ],
   },
   gerente: {
     titulo: 'Para gerencia',
-    items: ['Resumen: pedidos del día y cuáles llevan tiempo esperando.', 'Reportes: pedidos con filtros (descargables a Excel), cumplimiento de cada droguería y alertas comerciales.', 'Clientes, Pedidos y Catálogo son de consulta.'],
+    items: [
+      'Resumen: pedidos, unidades, promedios por día y por mes, farmacias con pedido, avance de metas y rankings de representantes, productos y droguerías.',
+      'Metas: objetivos del mes por representante, farmacia o droguería (o combinados), en unidades, pedidos o farmacias con pedido.',
+      'Comunicados: anuncios, descuentos o estrategias para todos o por rol, equipo, estado, ciudad o región. Aparecen arriba en la app de cada persona.',
+      'Condiciones comerciales: descuento, mínimo de productos distintos y mínimo de unidades por pedido.',
+      'Reportes: pedidos (descargables a Excel), cumplimiento de cada droguería, alertas comerciales y accesos (quién entra y cuántas veces).',
+    ],
   },
   admin: {
     titulo: 'Para administradores',
     items: [
-      'Cargar y editar datos: sube droguerías, productos, farmacias y el historial de ventas desde archivos CSV.',
-      'Fichero: asigna a cada vendedor las farmacias que atiende. Pendientes: relaciona lo que las droguerías reportan con tus farmacias y productos.',
-      'Configuración → Usuarios: crea cuentas y define rol y equipo. Configuración → Base de datos: instalar el esquema y borrar datos de prueba.',
+      'Datos maestros: carga o edita droguerías, productos, farmacias y ventas. Marca uno o varios registros para borrarlos.',
+      'Archivo de pedido de cada droguería: Datos maestros → Droguerías → toca la droguería → "Formato del archivo de pedido". Arma las columnas, el separador y el nombre del archivo, con vista previa.',
+      'Fichero: asigna a cada vendedor las farmacias que atiende. Homologación: relaciona los códigos de cada droguería con tus farmacias y productos.',
+      'Condiciones comerciales: define el % de descuento y sus requisitos (productos distintos y unidades del pedido), juntos o por separado.',
+      'Configuración → Usuarios: crea cuentas, define rol, equipo y zona (región, estado, ciudad). Configuración → Sincronización: copia el enlace con la conexión ya puesta para compartir la app.',
     ],
   },
 };

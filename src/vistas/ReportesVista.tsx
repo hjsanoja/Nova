@@ -7,18 +7,19 @@ import { aCsv, cumplimientoPorDrogueria, descargarTexto, detallesPorPedido, ESTA
 import type { GrupoEstado } from './logica';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
 
-type Seccion = 'pedidos' | 'cumplimiento' | 'alertas';
+type Seccion = 'pedidos' | 'cumplimiento' | 'alertas' | 'accesos';
 
 /** Reportes para gerencia y administración: pedidos con filtros, cumplimiento de las droguerías y alertas comerciales. */
 export function ReportesVista({ usuario }: { usuario: Usuario }) {
   const [seccion, setSeccion] = useState<Seccion>('pedidos');
   return (
     <div>
-      <PageHeader titulo="Reportes" descripcion="Se calculan con los pedidos de los últimos 90 días." />
-      <Segmentado opciones={[{ id: 'pedidos', texto: 'Pedidos' }, { id: 'cumplimiento', texto: 'Cumplimiento' }, { id: 'alertas', texto: 'Alertas' }]} valor={seccion} onChange={setSeccion} />
+      <PageHeader titulo="Reportes" descripcion={seccion === 'accesos' ? 'Quién entra a NOVA y cuántas veces.' : 'Se calculan con los pedidos de los últimos 90 días.'} />
+      <Segmentado opciones={[{ id: 'pedidos', texto: 'Pedidos' }, { id: 'cumplimiento', texto: 'Cumplimiento' }, { id: 'alertas', texto: 'Alertas' }, { id: 'accesos', texto: 'Accesos' }]} valor={seccion} onChange={setSeccion} />
       {seccion === 'pedidos' && <ReportePedidos />}
       {seccion === 'cumplimiento' && <Cumplimiento />}
       {seccion === 'alertas' && <Alertas esAdmin={usuario.rol === 'admin'} />}
+      {seccion === 'accesos' && <Accesos />}
     </div>
   );
 }
@@ -195,5 +196,122 @@ function Alertas({ esAdmin }: { esAdmin: boolean }) {
         )}
       </Tarjeta>
     </>
+  );
+}
+
+interface FilaAcceso { usuario_id: string; nombre: string; email: string; rol: string; inicios_sesion: number; aperturas: number; dias_activos: number; ultimo_acceso: string | null }
+type Rango = 'hoy' | '7' | '30' | 'mes';
+const ROL_TEXTO: Record<string, string> = { vendedor: 'Vendedor', transferencista: 'Transferencista', gerente: 'Gerente', admin: 'Administrador' };
+
+function desdeRango(r: Rango): Date {
+  const hoy = new Date();
+  if (r === 'hoy') return hoy;
+  if (r === 'mes') return new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  return new Date(hoy.getTime() - (Number(r) - 1) * MS_DIA);
+}
+const fechaSql = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const haceCuanto = (iso: string | null) => {
+  if (!iso) return 'Nunca';
+  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (min < 2) return 'Ahora';
+  if (min < 60) return `Hace ${min} min`;
+  if (min < 24 * 60) return `Hace ${Math.round(min / 60)} h`;
+  return new Date(iso).toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' });
+};
+
+/** Accesos por persona: inicios de sesión, aperturas de la app, días activos y último acceso. */
+function Accesos() {
+  const [rango, setRango] = useState<Rango>('7');
+  const [filas, setFilas] = useState<FilaAcceso[] | null>(null);
+  const [error, setError] = useState('');
+  const [detalle, setDetalle] = useState<{ fila: FilaAcceso; eventos: { created_at: string; evento: string; dispositivo: string | null }[] | null } | null>(null);
+
+  useEffect(() => {
+    const sb = getSupabaseClient();
+    if (!sb) return setError('Conecta Supabase para ver los accesos.');
+    setFilas(null);
+    void sb.rpc('reporte_accesos', { p_desde: fechaSql(desdeRango(rango)), p_hasta: fechaSql(new Date()) }).then(({ data, error: e }) => {
+      if (e) return setError(e.message);
+      setError('');
+      setFilas((data ?? []) as FilaAcceso[]);
+    });
+  }, [rango]);
+
+  const abrir = async (fila: FilaAcceso) => {
+    setDetalle({ fila, eventos: null });
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const { data } = await sb.from('registro_accesos').select('created_at,evento,dispositivo').eq('usuario_id', fila.usuario_id).order('created_at', { ascending: false }).limit(50);
+    setDetalle({ fila, eventos: (data ?? []) as { created_at: string; evento: string; dispositivo: string | null }[] });
+  };
+
+  const activos = (filas ?? []).filter((f) => f.inicios_sesion + f.aperturas > 0).length;
+  const total = (filas ?? []).reduce((a, f) => a + f.inicios_sesion + f.aperturas, 0);
+  const exportar = () =>
+    filas && descargarTexto(`accesos_${fechaSql(new Date())}.csv`, aCsv(['Persona', 'Correo', 'Rol', 'Inicios de sesion', 'Aperturas', 'Dias activos', 'Ultimo acceso'], filas.map((f) => [f.nombre, f.email, ROL_TEXTO[f.rol] ?? f.rol, f.inicios_sesion, f.aperturas, f.dias_activos, f.ultimo_acceso ?? ''])));
+
+  return (
+    <div className="mt-4 flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Segmentado valor={rango} onChange={setRango} opciones={[{ id: 'hoy', texto: 'Hoy' }, { id: '7', texto: '7 días' }, { id: '30', texto: '30 días' }, { id: 'mes', texto: 'Este mes' }]} />
+        <Boton icono={Download} disabled={!filas?.length} onClick={exportar}>Descargar CSV</Boton>
+      </div>
+      {error ? (
+        <Tarjeta><Vacio titulo="No se pudo cargar" texto={error.includes('reporte_accesos') ? 'Ejecuta de nuevo nova_produccion_v3.sql en Supabase para activar este reporte.' : error} /></Tarjeta>
+      ) : !filas ? (
+        <Tarjeta><Vacio titulo="Cargando…" /></Tarjeta>
+      ) : (
+        <>
+          <p className="text-sm text-slate-600 dark:text-slate-300"><b>{activos}</b> de {filas.length} personas entraron · <b>{total.toLocaleString('es-VE')}</b> accesos en el período.</p>
+          <Tarjeta className="!p-0 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs text-slate-500 dark:bg-slate-950">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Persona</th>
+                  <th className="px-3 py-2 font-medium">Rol</th>
+                  <th className="px-3 py-2 text-right font-medium">Inicios de sesión</th>
+                  <th className="px-3 py-2 text-right font-medium">Aperturas</th>
+                  <th className="px-3 py-2 text-right font-medium">Días activos</th>
+                  <th className="px-3 py-2 font-medium">Último acceso</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filas.map((f) => (
+                  <tr key={f.usuario_id} onClick={() => void abrir(f)} className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/60">
+                    <td className="px-3 py-2">
+                      <p className="font-medium text-slate-900 dark:text-white">{f.nombre}</p>
+                      <p className="text-xs text-slate-500">{f.email}</p>
+                    </td>
+                    <td className="px-3 py-2 text-slate-600 dark:text-slate-300">{ROL_TEXTO[f.rol] ?? f.rol}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{f.inicios_sesion}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{f.aperturas}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{f.dias_activos}</td>
+                    <td className="px-3 py-2">{f.inicios_sesion + f.aperturas === 0 ? <Etiqueta tono="aviso">Sin accesos</Etiqueta> : <span className="text-slate-600 dark:text-slate-300">{haceCuanto(f.ultimo_acceso)}</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Tarjeta>
+        </>
+      )}
+      {detalle && (
+        <Tarjeta>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-slate-900 dark:text-white">Últimos accesos de {detalle.fila.nombre}</p>
+            <Boton tamano="sm" variante="fantasma" onClick={() => setDetalle(null)}>Cerrar</Boton>
+          </div>
+          {!detalle.eventos ? <p className="text-sm text-slate-500">Cargando…</p> : detalle.eventos.length === 0 ? <p className="text-sm text-slate-500">Nunca ha entrado.</p> : (
+            <ul className="divide-y divide-slate-100 text-sm dark:divide-slate-800">
+              {detalle.eventos.map((e, i) => (
+                <li key={i} className="flex flex-wrap justify-between gap-2 py-1.5">
+                  <span>{new Date(e.created_at).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                  <span className="text-slate-500">{e.evento === 'inicio_sesion' ? 'Inició sesión' : 'Abrió la app'}{e.dispositivo ? ` · ${e.dispositivo}` : ''}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Tarjeta>
+      )}
+    </div>
   );
 }
