@@ -31,6 +31,13 @@ export function limpiarSupabaseUrl(raw: string): string {
     return `https://${matchDashboard[1]}.supabase.co`;
   }
 
+  // 1b. Si pegó la cadena de conexión de PostgreSQL (postgresql://postgres:…@db.<ref>.supabase.co:5432/postgres o la del
+  //     pooler, postgres.<ref>:…@aws-….pooler.supabase.com): el proyecto está dentro.
+  const matchPostgres = url.match(/@db\.([a-z0-9]+)\.supabase\.co/i) ?? url.match(/^postgres(?:ql)?:\/\/postgres\.([a-z0-9]+)[:@]/i);
+  if (matchPostgres && matchPostgres[1]) {
+    return `https://${matchPostgres[1].toLowerCase()}.supabase.co`;
+  }
+
   // 2. Si pegó solo el identificador de 20 caracteres del proyecto (ej: ct4r32pdnto5qmx24uakdb)
   if (/^[a-z0-9]{15,30}$/i.test(url) && !url.includes('.')) {
     return `https://${url}.supabase.co`;

@@ -23,7 +23,7 @@ export function traducirErrorAuth(mensaje: string): string {
   if (m.includes('invalid login') || m.includes('invalid credentials')) return 'Correo o contraseña incorrectos.';
   if (m.includes('email not confirmed')) return 'Confirma tu correo (revisa tu bandeja) antes de entrar.';
   if (m.includes('rate limit') || m.includes('too many')) return 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.';
-  if (m.includes('failed to fetch') || m.includes('network') || m.includes('load failed')) return 'No hay conexión con el servidor. Revisa tu internet.';
+  if (m.includes('failed to fetch') || m.includes('network') || m.includes('load failed')) return `No hay conexión con el servidor. Revisa tu internet. (Detalle: ${mensaje})`;
   if (m.includes('password should be')) return 'La contraseña es demasiado corta (mínimo 6 caracteres).';
   return mensaje;
 }
