@@ -334,15 +334,3 @@ export function generarArchivoDrogueria(entrada: EntradaExportacion, opciones: O
     advertencias: Array.from(advertencias),
   };
 }
-
-/** Descarga el archivo en el navegador (sin pasar por ningún servidor). */
-export function descargarArchivoExportado(res: ResultadoExportacion): void {
-  const url = URL.createObjectURL(new Blob([res.bytes as BlobPart], { type: res.mime }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = res.nombre_archivo;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}

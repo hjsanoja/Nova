@@ -32,10 +32,6 @@ export async function encolar(db: NovaDB, e: EntradaOutbox, ahora = Date.now()):
   });
 }
 
-export async function contarPendientes(db: NovaDB): Promise<number> {
-  return db.outbox.count();
-}
-
 /** Tras recuperar la red se ignora la espera acumulada y se reintenta de inmediato. */
 export async function reintentarAhora(db: NovaDB): Promise<void> {
   await db.outbox.where('estado').equals('pendiente').modify({ proximo_intento: 0 });

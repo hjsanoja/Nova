@@ -5,9 +5,10 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
   vendedor: {
     titulo: 'Para vendedores',
     items: [
-      'Inicio te muestra qué clientes llevan tiempo sin comprar. Toca "Pedido" junto a uno para empezar.',
-      'Tomar pedido: elige la farmacia, busca los productos (o escanea el código) y toca "Enviar". Funciona sin señal: se envía solo al recuperar la conexión.',
-      'Mis clientes: solo aparecen las farmacias de tu fichero, con su teléfono, ubicación y lo que más compran.',
+      'Inicio: tus unidades y pedidos del mes, cuántas farmacias de tu fichero ya compraron y quiénes llevan tiempo sin comprar.',
+      'Nuevo pedido: elige la farmacia, agrega productos con sus unidades y la droguería; cada farmacia tiene su propio carrito. Puedes armar varios y enviarlos juntos con "Enviar todos". Funciona sin señal.',
+      'Dictar: toca el micrófono y di la farmacia, los productos y las unidades (por ejemplo "Farmacia La Paz, diez losartán 50 y cinco omeprazol"). Revisa la vista previa y confirma.',
+      'Mis clientes: tus farmacias con su teléfono y ubicación. Con "Agregar farmacias" armas tu fichero.',
       'Mis pedidos: mira en qué estado va cada uno. Si la droguería despacha solo una parte, aquí puedes re-rutear lo pendiente a otra droguería.',
     ],
   },
@@ -22,13 +23,14 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
   },
   gerente: {
     titulo: 'Para gerencia',
-    items: ['Resumen: pedidos del día y cuáles llevan tiempo esperando.', 'Reportes: pedidos con filtros (descargables a Excel), cumplimiento de cada droguería y alertas comerciales.', 'Clientes, Pedidos y Catálogo son de consulta.'],
+    items: ['Resumen: unidades y pedidos del mes con su variación, unidades por día, ranking de vendedores, productos y droguerías.', 'Condiciones comerciales: descuento, mínimo de productos distintos y mínimo de unidades por pedido.', 'Reportes: pedidos con filtros (descargables a Excel), cumplimiento de cada droguería y alertas comerciales.', 'Clientes, Pedidos y Catálogo son de consulta.'],
   },
   admin: {
     titulo: 'Para administradores',
     items: [
-      'Cargar y editar datos: sube droguerías, productos, farmacias y el historial de ventas desde archivos CSV.',
-      'Fichero: asigna a cada vendedor las farmacias que atiende. Pendientes: relaciona lo que las droguerías reportan con tus farmacias y productos.',
+      'Datos maestros: carga o edita droguerías, productos, farmacias y ventas. Marca uno o varios registros para borrarlos.',
+      'Fichero: asigna a cada vendedor las farmacias que atiende. Homologación: relaciona los códigos de cada droguería con tus farmacias y productos.',
+      'Condiciones comerciales: define el % de descuento y sus requisitos (productos distintos y unidades del pedido), juntos o por separado.',
       'Configuración → Usuarios: crea cuentas y define rol y equipo. Configuración → Base de datos: instalar el esquema y borrar datos de prueba.',
     ],
   },

@@ -114,7 +114,7 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
           <Vacio
             icono={Users}
             titulo={clientes.length === 0 ? (esVendedor ? 'Aún no tienes clientes asignados' : 'Todavía no hay clientes') : 'Sin resultados'}
-            texto={clientes.length === 0 ? (esVendedor ? (puedeEditarFichero ? 'Toca "Agregar farmacias" y marca las que atiendes.' : 'Pídele a un administrador que te asigne tu fichero.') : 'Cárgalos desde "Cargar y editar datos".') : 'Prueba con otra búsqueda o quita los filtros.'}
+            texto={clientes.length === 0 ? (esVendedor ? (puedeEditarFichero ? 'Toca "Agregar farmacias" y marca las que atiendes.' : 'Pídele a un administrador que te asigne tu fichero.') : 'Cárgalos desde "Datos maestros".') : 'Prueba con otra búsqueda o quita los filtros.'}
           />
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">

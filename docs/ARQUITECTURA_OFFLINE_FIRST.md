@@ -35,7 +35,7 @@ guarda en el dispositivo y se sincroniza solo, en segundo plano, cuando vuelve l
 | Acceso | `src/services/sesion.ts`, `src/components/acceso/*` | Inicio de sesión obligatorio (Supabase Auth); rol y equipo se leen de `dim_usuarios` |
 | | `src/offline/aislamiento.ts` | Al cambiar de usuario en el dispositivo se borran los datos locales del anterior (el vendedor solo ve su fichero) |
 | UI | `src/vistas/*` | Menús: Resumen, Tomar pedido, Por procesar, Pedidos, Clientes, Catálogo, Reportes, Cargar y editar datos, Configuración (según rol) |
-| | `src/components/capture/*` | Pantalla de captura móvil/tablet (carrito flotante, búsqueda, condiciones, escáner) |
+| | `src/pedido/*` | Tienda de pedidos: catálogo en tarjetas, un carrito por farmacia (varios a la vez, envío en bloque), dictado por voz con vista previa |
 | | `src/components/ui/kit.tsx` | Piezas visuales comunes (encabezado, tarjetas, botones compactos, avisos) |
 | | `src/components/SyncStatusChip.tsx` | Indicador de sincronización del encabezado |
 | PWA | `public/sw.js`, `manifest.webmanifest`, `vite.config.ts` (plugin `sw-manifest`) | Instalable y abre sin red |
@@ -64,7 +64,7 @@ guarda en el dispositivo y se sincroniza solo, en segundo plano, cuando vuelve l
 | **Dimensiones** | `dim_equipos`, `dim_usuarios`, `dim_clientes`, `dim_productos`, `dim_droguerias` | Los "quién / qué / dónde": cada fila es una entidad maestra con **un solo** identificador interno (UUID) y su clave natural (`codigo_interno` = ident01, `sku` = Cod SAP, `codigo` de droguería). |
 | **Puentes** | `rel_cliente_vendedor`, `map_cliente_drogueria`, `map_producto_drogueria` | Conectan dimensiones. Los `map_*` traducen entre **nuestro** código y **el de cada droguería**. |
 | **Hechos** | `fact_pedidos` + `fact_pedido_detalles` (lo que Nova toma), `fact_ventas_drogueria` (lo que reportan las droguerías), `fact_compras_mensual` (consolidado) | Los eventos medibles (unidades). Sin precios en fase 1. |
-| **Operativas** | `crm_visitas`, `plantillas_reposicion`/`plantilla_items`, `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `import_lotes`, `config_sistema`, `secretos_sistema`, `audit_log` | Soporte de campo, alertas, reglas, auditoría. |
+| **Operativas** | `crm_visitas`, `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `import_lotes`, `config_sistema`, `secretos_sistema`, `audit_log` | Soporte de campo, alertas, reglas, auditoría. |
 
 ### Cada droguería habla su propio idioma (códigos y nombres únicos)
 
@@ -102,7 +102,6 @@ transacción de IndexedDB; el servidor la aplica con una RPC **idempotente** (mi
 | `pedido.rerutear` | `rerutear_remanente(pedido, drogueria, nuevo_id)` | por `nuevo_id` | correlativo `PED-XXXX-R1`, líneas con ids del servidor |
 | `prospecto.crear` | `sync_crear_prospecto(p)` | upsert por `id` | `estado_validacion` |
 | `visita.registrar` | `sync_registrar_visita(p)` | upsert por `id` | distancia real (PostGIS) y `dentro_de_radio` |
-| `plantilla.guardar` | `sync_guardar_plantilla(p)` | upsert por `id` | — |
 
 - **Orden:** FIFO por `seq`. Un item espera a los anteriores de su misma entidad y a los de la entidad de la que depende
   (`depende_de`): un re-ruteo no sale antes del alta de su pedido padre. Un item en error **no bloquea** a otras entidades.

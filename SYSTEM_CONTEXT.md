@@ -60,7 +60,7 @@ Cada droguería tiene **sus propios** códigos y nombres para cada producto y ca
 * **`fact_pedidos` / `fact_pedido_detalles`**: lo que Nova toma en campo. Correlativo del servidor (`PED-1045`, derivados `PED-1045-R1` con `parent_pedido_id`), estados con máquina de transiciones, campos de precio nulos.
 * **`fact_ventas_drogueria`** (+ `import_lotes`): lo que **reportan las droguerías**, guardado con sus códigos y nombres; `cliente_id`/`producto_id` se enlazan con los `map_*` (`app.homologar_ventas`) y quedan nulos si no se reconocen (`vw_pendientes_clientes`, `vw_pendientes_productos`). Homologar después enlaza el histórico retroactivamente.
 * **`fact_compras_mensual`**: consolidado farmacia × producto × mes. Baja al dispositivo (6 meses) y alimenta pedido sugerido, segmentos y alertas.
-* Operativas: `crm_visitas` (geofence), `plantillas_reposicion`, `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `audit_log`.
+* Operativas: `crm_visitas` (geofence), `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `audit_log`.
 
 ---
 
@@ -95,42 +95,47 @@ Cada droguería tiene **sus propios** códigos y nombres para cada producto y ca
     │   ├── exportacionDrogueria.ts    # Archivo de pedido por droguería con los códigos principales
     │   └── nubeV3.ts                  # Carga masiva, catálogos, usuarios y borrado contra el esquema v3
     ├── offline/                       # Dexie, Outbox, pull incremental, motor de sync, aislamiento por usuario
+    ├── pedido/                        # Tienda: carritos por farmacia (carritos.ts), dictado (dictado.ts + useDictado.ts), vista previa
     ├── sql/
     │   ├── 00_reiniciar_esquema_anterior.sql  # Solo si hay restos de otra versión: los aparta en un respaldo
     │   └── nova_produccion_v3.sql     # Esquema vigente: DDL, RLS, triggers, RPC
     ├── types/
     │   └── pharmacy.ts                # Interfaces TypeScript de dominio
     ├── vistas/                        # Un archivo por menú (cargados con React.lazy) + lógica pura testeada
-    │   ├── Inicio.tsx                 # Resumen del rol (KPIs reales, pedidos recientes)
+    │   ├── Inicio.tsx                 # Resumen del rol: unidades/pedidos del mes con variación, gráfico diario, rankings
+    │   ├── indicadores.ts             # Cálculos puros del Resumen (con pruebas)
+    │   ├── CondicionesVista.tsx       # Condiciones comerciales: % descuento, mínimo de SKU y de unidades (+ simulador)
     │   ├── ClientesVista.tsx          # Fichero: vendedor = sus farmacias; teletransferencista/gerente/admin = todas
     │   ├── PedidosVista.tsx           # Listado y detalle (re-ruteo del remanente)
     │   ├── PorProcesarVista.tsx       # Mesa del teletransferencista: tomar, descargar archivo, confirmar
     │   ├── CatalogoVista.tsx          # Productos y droguerías (consulta)
     │   ├── ReportesVista.tsx          # Pedidos (CSV), cumplimiento por droguería, alertas
-    │   ├── DatosVista.tsx             # Cargar y editar datos · Fichero de vendedores · Pendientes de homologar
+    │   ├── DatosVista.tsx             # Datos maestros: farmacias, productos, droguerías, fichero, homologación, ventas
+    │   ├── maestros/                  # Una tabla por maestro (buscar, crear, editar, cargar CSV, borrar varios)
     │   ├── config/                    # Mi cuenta, Sincronización, Usuarios, Base de datos (borrado), Ayuda
     │   └── datos/                     # Fichero.tsx, Pendientes.tsx
     └── components/
         ├── Header.tsx                 # Barra superior mínima: estado de sincronización, tema, menú de usuario
         ├── acceso/                    # LoginGate (inicio de sesión obligatorio) y ConexionForm (URL/anon key)
         ├── shell/                     # navConfig.ts (menús por rol) y Navigation.tsx (lateral / inferior)
-        ├── ui/kit.tsx                 # Encabezado, tarjetas, botones compactos, avisos
-        ├── capture/                   # Pantalla de toma de pedido offline
-        ├── import/HomologationPanels.tsx
-        ├── DataImportStudioTab.tsx    # Carga masiva de catálogos, ventas y homologaciones
+        ├── ui/kit.tsx                 # Sistema de diseño: botones, etiquetas, campos, tarjetas, selección múltiple, avatar
+        ├── graficos/Graficos.tsx      # Columnas, ranking en barras y medidor (una serie, con tabla y ayuda al pasar)
+        ├── maestros/TablaMaestro.tsx  # Tabla genérica con casillas y barra de acciones
+        ├── import/                    # Diálogo de carga con confirmación, progreso y resultado
         ├── SyncStatusChip.tsx         # Estado de sincronización (abre Configuración)
         ├── ErrorBoundary.tsx
         └── NovaLogo.tsx
 ```
 
-**Menús por rol:** vendedor (Resumen, Tomar pedido, Pedidos, Clientes, Catálogo, Configuración) · teletransferencista (Resumen, Por procesar, Pedidos, Clientes, Catálogo, Reportes, Configuración) ·
-gerente (consulta y reportes) · admin (todo, más *Cargar y editar datos*). Sin sesión no hay datos: no existe usuario por defecto; el modo demostración solo está disponible cuando Supabase no está configurado.
+**Menús por rol** (`navConfig.ts`, agrupados en Ventas · Clientes y productos · Gestión · Cuenta): vendedor (Inicio, Nuevo pedido, Mis pedidos, Mis clientes, Configuración) ·
+teletransferencista (Por procesar, Pedidos, Clientes, Catálogo, Configuración) · gerente (Resumen, Pedidos, Clientes, Catálogo, Reportes, Condiciones comerciales, Configuración) ·
+admin (todo, más *Datos maestros*). Sin sesión no hay datos: no existe usuario por defecto; el modo demostración solo está disponible cuando Supabase no está configurado.
 
 ---
 
 ## 4.1. Arquitectura offline-first v3 (captura en campo)
 
-La captura de pedidos v3 (`src/components/capture/`) trabaja sobre **IndexedDB (Dexie)** y una cola de sincronización, no sobre `localStorage`.
+La toma de pedidos (`src/pedido/`: tienda con un carrito por farmacia, envío en bloque y dictado por voz) trabaja sobre **IndexedDB (Dexie)** y una cola de sincronización, no sobre `localStorage`.
 Esquema de producción: `src/sql/nova_produccion_v3.sql` (PostGIS, RLS, RPC idempotentes). Documentación completa en
 `docs/ARQUITECTURA_OFFLINE_FIRST.md`. Reglas que no deben romperse:
 
