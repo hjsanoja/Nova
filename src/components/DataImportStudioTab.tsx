@@ -9,6 +9,7 @@ import {
   ProductoDrogueriaMapeo
 } from '../types/pharmacy';
 import { getSupabaseClient } from '../services/supabaseClient';
+import { getStoredSupabaseConfig } from '../services/supabaseConfig';
 import {
   contarVentasNube,
   guardarDroguerias,
@@ -16,9 +17,6 @@ import {
   importarCatalogoProductos,
   importarHomologacion,
   importarVentas,
-  clienteAV3,
-  drogueriaAV3,
-  productoAV3,
 } from '../services/nubeV3';
 import { prepararNombre, similitudPreparada, detectarMesDeNombreArchivo, crearLectorColumnas, norm } from '../services/importUtils';
 import type { NombrePreparado } from '../services/importUtils';
@@ -33,14 +31,12 @@ import {
   Check, 
   AlertCircle, 
   Database, 
-  Copy, 
   Users, 
   Pill, 
   History,
   Building2,
   ExternalLink,
   Globe,
-  HelpCircle,
   Pencil,
   Trash2,
   Plus,
@@ -50,7 +46,6 @@ import {
   Network,
   Zap,
   CheckCircle2,
-  Terminal,
   Sparkles,
   Calculator,
   Calendar,
@@ -117,11 +112,10 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
   onImportarHistorico,
 }) => {
   const { esClaro } = useTheme();
-  const [subTab, setSubTab] = useState<'droguerias' | 'clientes' | 'productos' | 'historico' | 'sql_generator'>('droguerias');
+  const [subTab, setSubTab] = useState<'droguerias' | 'clientes' | 'productos' | 'historico'>('droguerias');
   const [archivoTexto, setArchivoTexto] = useState('');
   const [nombreArchivo, setNombreArchivo] = useState('');
   const [notificacion, setNotificacion] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
-  const [copiadoSql, setCopiadoSql] = useState(false);
 
   // Estados para CRUD de Droguerías
   const [modalDrogueriaEditarAbierto, setModalDrogueriaEditarAbierto] = useState(false);
@@ -185,25 +179,22 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
   const [formClienteNuevo, setFormClienteNuevo] = useState(initialFormCliente);
 
   // Estados para Estrategia de +1.000.000 de Filas en Histórico
-  const [estrategia1M, setEstrategia1M] = useState<'agregada' | 'ventana90' | 'copy_cli'>('agregada');
-  const [lenguajeScript1M, setLenguajeScript1M] = useState<'sql' | 'python'>('sql');
   const [filtroHistorico, setFiltroHistorico] = useState('');
-  const [copiadoScript1M, setCopiadoScript1M] = useState(false);
 
   // Diccionarios aprendidos (alias de farmacias y Cod SAP por droguería), persistidos con debounce
   const [aliasesFarmacias, setAliasesFarmacias] = usePersistentState<ClienteDrogueriaAlias[]>(
     'PHARMA_CLIENTE_ALIAS',
-    () => ALIAS_SEMILLA,
+    () => (getStoredSupabaseConfig().isConnected ? [] : ALIAS_SEMILLA),
     leerLista
   );
   const [mapeosProductosDrogueria, setMapeosProductosDrogueria] = usePersistentState<ProductoDrogueriaMapeo[]>(
     'PHARMA_PRODUCTO_MAPEO',
-    () => MAPEO_SEMILLA,
+    () => (getStoredSupabaseConfig().isConnected ? [] : MAPEO_SEMILLA),
     leerLista
   );
 
   const [infoMesDetectado, setInfoMesDetectado] = useState<{ mesNum: string; mesTexto: string; anio: string; periodo: string } | null>(null);
-  const [seccionHistoricoActiva, setSeccionHistoricoActiva] = useState<'cargar' | 'homologar' | 'mapeo_sap' | 'acumulado' | 'guia'>('cargar');
+  const [seccionHistoricoActiva, setSeccionHistoricoActiva] = useState<'cargar' | 'homologar' | 'mapeo_sap' | 'acumulado'>('cargar');
   const [filasEnSupabase, setFilasEnSupabase] = useState<number | null>(null);
   const [verificandoSupabase, setVerificandoSupabase] = useState(false);
   const [sincronizandoSupabase, setSincronizandoSupabase] = useState(false);
@@ -1323,205 +1314,6 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     );
   }, [clientes, filtroBusquedaCliente]);
 
-  // Generador de SQL para el SQL Editor de Supabase (esquema v3). Se ejecuta como el rol postgres, así que usa INSERT directos
-  // (las funciones importar_* exigen una sesión de administrador y son para la app). Reutiliza los mismos mapeos que la app.
-  const sqlGenerado = useMemo(() => {
-    if (subTab !== 'sql_generator') return '';
-    const q = (v: unknown): string =>
-      v === null || v === undefined || v === '' ? 'NULL' : typeof v === 'number' || typeof v === 'boolean' ? String(v) : `'${String(v).replace(/'/g, "''")}'`;
-    const lines: string[] = [
-      '-- SCRIPT DE CARGA DIRECTA PARA SUPABASE SQL EDITOR (esquema v3: nova_produccion_v3.sql)',
-      '-- Generado automaticamente desde NOVA Data Studio. Requiere haber ejecutado antes el esquema v3.',
-      'BEGIN;',
-      '',
-      '-- 1. DROGUERIAS (dim_droguerias) con su layout de exportacion',
-    ];
-
-    droguerias.forEach((d) => {
-      const r = drogueriaAV3(d);
-      lines.push(
-        `INSERT INTO dim_droguerias (codigo, nombre, rif, email_pedidos, telefono, dias_entrega, formato_export, activo) ` +
-        `VALUES (${q(r.codigo)}, ${q(r.nombre)}, ${q(r.rif)}, ${q(r.email_pedidos)}, ${q(r.telefono)}, ${q(r.dias_entrega)}, ${q(JSON.stringify(r.formato_export))}::jsonb, ${q(r.activo)}) ` +
-        `ON CONFLICT (codigo) DO UPDATE SET nombre = EXCLUDED.nombre, email_pedidos = EXCLUDED.email_pedidos, telefono = EXCLUDED.telefono, ` +
-        `dias_entrega = EXCLUDED.dias_entrega, formato_export = EXCLUDED.formato_export, activo = EXCLUDED.activo, deleted_at = NULL;`
-      );
-    });
-
-    lines.push('', '-- 2. PRODUCTOS (dim_productos; el SKU es el Cod SAP)');
-    productos.forEach((p) => {
-      const r = productoAV3(p);
-      lines.push(
-        `INSERT INTO dim_productos (sku, ean13, nombre_comercial, presentacion, principio_activo, clase_terapeutica, categoria, laboratorio, empaque_minimo, es_prioritario, activo) ` +
-        `VALUES (${q(r.sku)}, ${q(r.ean13)}, ${q(r.nombre_comercial)}, ${q(r.presentacion)}, ${q(r.principio_activo)}, ${q(r.clase_terapeutica)}, ${q(r.categoria)}, ${q(r.laboratorio)}, ${q(r.empaque_minimo)}, ${q(r.es_prioritario)}, ${q(r.activo)}) ` +
-        `ON CONFLICT (sku) DO UPDATE SET nombre_comercial = EXCLUDED.nombre_comercial, presentacion = EXCLUDED.presentacion, principio_activo = EXCLUDED.principio_activo, ` +
-        `categoria = EXCLUDED.categoria, laboratorio = EXCLUDED.laboratorio, empaque_minimo = EXCLUDED.empaque_minimo, es_prioritario = EXCLUDED.es_prioritario, activo = EXCLUDED.activo, deleted_at = NULL;`
-      );
-    });
-
-    lines.push('', '-- 3. FARMACIAS (dim_clientes; ident01 = codigo_interno. El RIF puede repetirse: una cadena comparte razon social entre locales)');
-    clientes.forEach((c) => {
-      const r = clienteAV3(c);
-      const punto = r.lat !== null && r.lon !== null ? `ST_SetSRID(ST_MakePoint(${r.lon}, ${r.lat}), 4326)::geography` : 'NULL';
-      lines.push(
-        `INSERT INTO dim_clientes (codigo_interno, razon_social, nombre_comercial, rif, rif_verificado, brick, municipio, estado_geografico, direccion, telefono, bandera, ubicacion, frecuencia_dias, estado_validacion, origen) ` +
-        `VALUES (${q(r.codigo_interno)}, ${q(r.razon_social)}, ${q(r.nombre_comercial)}, ${q(r.rif)}, true, ${q(r.brick)}, ${q(r.municipio)}, ${q(r.estado_geografico)}, ${q(r.direccion)}, ${q(r.telefono)}, ${q(r.bandera)}, ${punto}, ${q(r.frecuencia_dias)}, ${c.activo ? "'activo'" : "'inactivo'"}, 'oficina') ` +
-        `ON CONFLICT (codigo_interno) DO UPDATE SET razon_social = EXCLUDED.razon_social, nombre_comercial = EXCLUDED.nombre_comercial, brick = EXCLUDED.brick, ` +
-        `estado_geografico = EXCLUDED.estado_geografico, ubicacion = COALESCE(EXCLUDED.ubicacion, dim_clientes.ubicacion), frecuencia_dias = COALESCE(EXCLUDED.frecuencia_dias, dim_clientes.frecuencia_dias), deleted_at = NULL;`
-      );
-    });
-
-    const alias = aliasesFarmacias.filter((a) => a.verificado);
-    if (alias.length > 0) {
-      lines.push('', '-- 4. HOMOLOGACION DE FARMACIAS: como cada drogueria llama (codigo de cuenta y/o nombre) a cada farmacia');
-      lines.push(
-        'INSERT INTO map_cliente_drogueria (drogueria_id, cliente_id, codigo_cuenta, nombre_en_drogueria, es_principal, origen)',
-        'SELECT DISTINCT ON (d.id, coalesce(v.cuenta, app.norm_texto(v.nombre))) d.id, c.id, v.cuenta, v.nombre, false, \'importacion\'',
-        '  FROM (VALUES',
-        alias.map((a) => `    (${q(a.drogueria)}, ${q(a.cliente_ident01)}, ${q(a.cod_cliente_drogueria)}, ${q(a.nombre_cliente_drogueria)})`).join(',\n'),
-        '  ) AS v(drogueria, ident01, cuenta, nombre)',
-        '  JOIN dim_droguerias d ON app.norm_texto(d.codigo) = app.norm_texto(v.drogueria) OR d.nombre_normalizado = app.norm_texto(v.drogueria)',
-        '  JOIN dim_clientes c ON c.codigo_interno = v.ident01',
-        ' WHERE v.cuenta IS NOT NULL OR app.norm_texto(v.nombre) IS NOT NULL',
-        ' ORDER BY d.id, coalesce(v.cuenta, app.norm_texto(v.nombre))',
-        'ON CONFLICT DO NOTHING;'
-      );
-    }
-    if (mapeosProductosDrogueria.length > 0) {
-      lines.push('', '-- 5. HOMOLOGACION DE PRODUCTOS: Cod SAP (SKU interno) <-> codigo que cada drogueria usa (varios codigos por producto: el primero es el principal)');
-      lines.push(
-        'INSERT INTO map_producto_drogueria (drogueria_id, producto_id, codigo_drogueria, descripcion_drogueria, es_principal, origen)',
-        'SELECT DISTINCT ON (d.id, v.codigo) d.id, p.id, v.codigo, v.descripcion, false, \'importacion\'',
-        '  FROM (VALUES',
-        mapeosProductosDrogueria.map((m) => `    (${q(m.drogueria)}, ${q(m.cod_sap)}, ${q(m.codigo_producto_drogueria)}, ${q(m.nombre_producto_drogueria)})`).join(',\n'),
-        '  ) AS v(drogueria, sku, codigo, descripcion)',
-        '  JOIN dim_droguerias d ON app.norm_texto(d.codigo) = app.norm_texto(v.drogueria) OR d.nombre_normalizado = app.norm_texto(v.drogueria)',
-        '  JOIN dim_productos p ON p.sku = v.sku',
-        ' WHERE v.codigo IS NOT NULL',
-        ' ORDER BY d.id, v.codigo',
-        'ON CONFLICT DO NOTHING;'
-      );
-    }
-
-    lines.push(
-      '',
-      '-- Las ventas historicas NO van aqui: se suben desde la pestana Historico (boton "Subir a Supabase Ahora"),',
-      '-- que envia los codigos de cada drogueria y deja que el servidor los enlace con la farmacia y el producto.',
-      '-- Al insertar homologaciones nuevas, las ventas ya cargadas se enlazan solas (triggers de map_*).',
-      '',
-      'COMMIT;'
-    );
-    return lines.join('\n');
-  }, [subTab, droguerias, productos, clientes, aliasesFarmacias, mapeosProductosDrogueria]);
-
-  const handleCopiarSql = () => {
-    navigator.clipboard.writeText(sqlGenerado);
-    setCopiadoSql(true);
-    showNotification('exito', 'Sentencias SQL copiadas al portapapeles.');
-    setTimeout(() => setCopiadoSql(false), 3000);
-  };
-
-  const script1MContenido = useMemo(() => {
-    if (subTab !== 'historico' || seccionHistoricoActiva !== 'guia') return '';
-    if (estrategia1M === 'agregada') {
-      if (lenguajeScript1M === 'sql') {
-        return `-- ==============================================================================
--- CARGA MASIVA DE VENTAS DE DROGUERIAS (esquema v3) DESDE UN CSV DE 8 COLUMNAS
--- Fecha | Cod Cliente | Nombre_cliente | Drogueria | Codigo Producto | Nombre Producto | Unidades | Cod Sap
--- Cada fila conserva los codigos y nombres que uso la drogueria; el servidor los enlaza con la farmacia y el producto
--- (map_cliente_drogueria / map_producto_drogueria). Lo que no reconozca queda en vw_pendientes_clientes / _productos.
--- ==============================================================================
-CREATE UNLOGGED TABLE IF NOT EXISTS staging_ventas (
-    fecha date, cod_cliente text, nombre_cliente text, drogueria text,
-    codigo_producto text, nombre_producto text, unidades integer, cod_sap text
-);
-TRUNCATE staging_ventas;
--- Desde psql:  \\COPY staging_ventas FROM 'ventas.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';');
-
-INSERT INTO import_lotes (archivo, checksum)
-VALUES ('ventas.csv', 'ventas.csv|' || (SELECT count(*) FROM staging_ventas) || '|' || (SELECT coalesce(sum(unidades), 0) FROM staging_ventas))
-ON CONFLICT (checksum) DO NOTHING;
-
-INSERT INTO fact_ventas_drogueria (lote_id, fila, fecha, drogueria_id, cod_cliente_drogueria, nombre_cliente_drogueria,
-                                   cod_producto_drogueria, nombre_producto_drogueria, cod_sap_reportado, unidades)
-SELECT (SELECT id FROM import_lotes WHERE archivo = 'ventas.csv' ORDER BY created_at DESC LIMIT 1),
-       row_number() OVER (ORDER BY s.fecha, s.cod_cliente, s.codigo_producto), s.fecha, d.id,
-       nullif(btrim(s.cod_cliente), ''), coalesce(nullif(btrim(s.nombre_cliente), ''), 'SIN NOMBRE'),
-       btrim(s.codigo_producto), s.nombre_producto, nullif(btrim(s.cod_sap), ''), s.unidades
-  FROM staging_ventas s
-  JOIN dim_droguerias d ON app.norm_texto(d.codigo) = app.norm_texto(s.drogueria) OR d.nombre_normalizado = app.norm_texto(s.drogueria)
-ON CONFLICT (lote_id, fila) DO NOTHING;
-
--- Enlaza con farmacias/productos, aprende codigos desde el Cod SAP del reporte y actualiza el consolidado mensual:
-SELECT app.homologar_ventas();
-SELECT * FROM vw_estado_homologacion ORDER BY filas_sin_farmacia + filas_sin_producto DESC;`;      } else {
-        return `# ==============================================================================
-# SCRIPT PYTHON: CONDENSAR TUS 8 COLUMNAS Y 1.000.000 DE FILAS EN < 4 SEGUNDOS
-# Columnas: Fecha | Cod Cliente | Nombre_cliente | Drogueria | Codigo Producto | Nombre Producto | Unidades | Cod Sap
-# Requiere: pip install pandas
-# ==============================================================================
-import pandas as pd
-
-print("Leyendo archivo de ventas brutas (1.000.000+ filas)...")
-# 1. Leer archivo (ajusta delimitador ';' o ',')
-df = pd.read_csv("historico_ventas_1M.csv", sep=";", dtype=str)
-
-# 2. Extraer Año-Mes de la columna Fecha (ej: '2026-02-15' -> '2026-02')
-df['Fecha_Mes'] = df['Fecha'].astype(str).str.slice(0, 7)
-df['Unidades'] = pd.to_numeric(df['Unidades'], errors='coerce').fillna(0).astype(int)
-
-# 3. Agrupación por Mes manteniendo la integridad de tus 8 columnas
-resumen = df.groupby([
-    'Fecha_Mes', 'Cod Cliente', 'Nombre_cliente', 'Drogueria',
-    'Codigo Producto', 'Nombre Producto', 'Cod Sap'
-]).agg(
-    Unidades=('Unidades', 'sum')
-).reset_index()
-
-resumen.rename(columns={'Fecha_Mes': 'Fecha'}, inplace=True)
-
-# 4. Guardar archivo condensado (< 5 MB listo para subir al sistema)
-resumen.to_csv("historico_resumen_mensual_8col.csv", sep=";", index=False)
-print(f"¡Listo! Se redujo de {len(df):,} filas diarias a {len(resumen):,} filas mensuales agrupadas.")`;
-      }
-    } else if (estrategia1M === 'ventana90') {
-      return `-- ==============================================================================
--- ESTRATEGIA VENTANA MÓVIL: solo los últimos 90 días de ventas por farmacia y producto
--- ==============================================================================
--- Detalle diario tal como lo reportó cada droguería (sus códigos y nombres):
-SELECT v.fecha, d.nombre AS drogueria, v.cod_cliente_drogueria, v.nombre_cliente_drogueria,
-       v.cod_producto_drogueria, v.nombre_producto_drogueria, v.unidades, p.sku AS cod_sap
-  FROM fact_ventas_drogueria v
-  JOIN dim_droguerias d ON d.id = v.drogueria_id
-  LEFT JOIN dim_productos p ON p.id = v.producto_id
- WHERE v.fecha >= CURRENT_DATE - INTERVAL '90 days'
- ORDER BY v.fecha DESC;
-
--- Lo que usa el pedido sugerido en el celular: el consolidado por farmacia, producto y mes (ya homologado).
-SELECT c.codigo_interno, p.sku, m.periodo, m.unidades
-  FROM fact_compras_mensual m
-  JOIN dim_clientes c ON c.id = m.cliente_id
-  JOIN dim_productos p ON p.id = m.producto_id
- WHERE m.deleted_at IS NULL AND m.periodo >= date_trunc('month', CURRENT_DATE - INTERVAL '3 months')
- ORDER BY c.codigo_interno, p.sku, m.periodo DESC;`;
-    } else {
-      return `# ==============================================================================
-# CARGA MASIVA DIRECTA POR CLI POSTGRESQL (1.000.000 FILAS EN ~40 SEGUNDOS)
-# 1) Crea staging_ventas y ejecuta el script SQL de esta guía (estrategia "agregada" / SQL) hasta el TRUNCATE.
-# 2) Carga el CSV a la tabla staging con COPY:
-# ==============================================================================
-psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgres" \\
-  -c "\\COPY staging_ventas(fecha, cod_cliente, nombre_cliente, drogueria, codigo_producto, nombre_producto, unidades, cod_sap) FROM 'historico_1M.csv' WITH (FORMAT csv, HEADER true, DELIMITER ';');"
-# 3) Ejecuta el resto del script SQL (INSERT INTO import_lotes ... SELECT app.homologar_ventas();).`;
-    }
-  }, [subTab, seccionHistoricoActiva, estrategia1M, lenguajeScript1M]);
-
-  const handleCopiarScript1M = () => {
-    navigator.clipboard.writeText(script1MContenido);
-    setCopiadoScript1M(true);
-    showNotification('exito', 'Script copiado al portapapeles.');
-    setTimeout(() => setCopiadoScript1M(false), 3000);
-  };
-
   // Solo se calcula mientras se mira la tabla del histórico acumulado; la búsqueda usa un valor diferido
   // para no bloquear el teclado y los cruces con clientes/productos usan índices (antes, un .find por fila).
   const viendoAcumulado = subTab === 'historico' && seccionHistoricoActiva === 'acumulado';
@@ -1600,26 +1392,6 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
         </div>
       )}
 
-      {/* Cabecera Principal */}
-      <div className={`p-5 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ${
-        esClaro ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800 shadow-lg'
-      }`}>
-        <div>
-          <h2 className={`text-xl font-bold ${esClaro ? 'text-slate-900' : 'text-white'}`}>
-            Carga y Gestion de Dimensiones (Paso 5)
-          </h2>
-          <p className={`text-xs mt-0.5 ${esClaro ? 'text-slate-500' : 'text-slate-400'}`}>
-            Modulo de administracion dimensional: Droguerias con ID numerico, Productos de 12 campos (sin acentos) y Clientes.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] px-2.5 py-1 rounded-full bg-teal-500/10 text-teal-700 dark:text-teal-300 font-bold border border-teal-500/20">
-            Tablas Dimensionales
-          </span>
-        </div>
-      </div>
-
       {/* Barra de Sub-Pestañas */}
       <div className={`flex flex-nowrap sm:flex-wrap overflow-x-auto scrollbar-none gap-2 p-1.5 rounded-2xl border [&>button]:shrink-0 [&>button]:whitespace-nowrap ${
         esClaro ? 'bg-slate-100/80 border-slate-200' : 'bg-slate-900/80 border-slate-800'
@@ -1633,7 +1405,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
           }`}
         >
           <Building2 className="w-4 h-4" />
-          <span>1. Droguerias ({droguerias.length})</span>
+          <span>Droguerías ({droguerias.length})</span>
         </button>
 
         <button
@@ -1645,7 +1417,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
           }`}
         >
           <Pill className="w-4 h-4" />
-          <span>2. Productos ({productos.length})</span>
+          <span>Productos ({productos.length})</span>
         </button>
 
         <button
@@ -1657,7 +1429,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
           }`}
         >
           <Users className="w-4 h-4" />
-          <span>3. Clientes ({clientes.length})</span>
+          <span>Farmacias ({clientes.length})</span>
         </button>
 
         <button
@@ -1669,23 +1441,12 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
           }`}
         >
           <History className="w-4 h-4" />
-          <span>4. Historico Ventas ({historicoPrevio.length})</span>
+          <span>Ventas históricas ({historicoPrevio.length})</span>
         </button>
 
-        <button
-          onClick={() => setSubTab('sql_generator')}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all min-h-[44px] ${
-            subTab === 'sql_generator'
-              ? 'bg-indigo-600 text-white shadow-sm'
-              : esClaro ? 'text-slate-600 hover:text-slate-900' : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          <Database className="w-4 h-4" />
-          <span>Generador SQL Supabase</span>
-        </button>
       </div>
 
-      {subTab !== 'sql_generator' ? (
+      {(
         <div className="space-y-6">
 
           {/* Tarjeta de Importación CSV */}
@@ -1939,28 +1700,15 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
             <div className={`p-5 rounded-2xl border space-y-4 ${
               esClaro ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800'
             }`}>
-              {/* Explicacion del Delimitador CSV */}
-              <div className={`p-4 rounded-xl border flex items-start gap-3 ${
-                esClaro ? 'bg-teal-50/70 border-teal-200 text-teal-900' : 'bg-teal-950/30 border-teal-800/60 text-teal-300'
-              }`}>
-                <HelpCircle className="w-5 h-5 text-teal-600 shrink-0 mt-0.5" />
-                <div className="space-y-1 text-xs">
-                  <h4 className="font-bold">¿Que es el Delimitador CSV y por que es clave para el Teletransferencista?</h4>
-                  <p className="leading-relaxed opacity-90">
-                    El <b>delimitador</b> es el caracter de separacion (punto y coma <code className="font-bold font-mono px-1 py-0.2 rounded bg-black/10">;</code>, coma <code className="font-bold font-mono px-1 py-0.2 rounded bg-black/10">,</code>, o barra <code className="font-bold font-mono px-1 py-0.2 rounded bg-black/10">|</code>) que divide las columnas en un archivo CSV. Cada drogueria (COBECA, NENA, DROVENCENTRO, etc.) tiene un sistema receptor distinto. Nova exporta automaticamente con el delimitador y orden exacto que exige cada distribuidora, permitiendo al teletransferencista hacer clic en su portal web y cargar el archivo sin ediciones manuales.
-                  </p>
-                </div>
-              </div>
-
               {/* Toolbar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 border-slate-100 dark:border-slate-800">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <Building2 className="w-4 h-4 text-teal-600" />
-                    <span>Droguerias Activas en dim_droguerias ({droguerias.length} Distribuidoras)</span>
+                    <span>Droguerías ({droguerias.length})</span>
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Nomenclatura oficial <b>Ventas al Dia</b> con ID numerico (Primary Key), portales B2B y soporte de edicion/eliminacion.
+                    Las distribuidoras con las que trabajas y el formato de su archivo de pedido.
                   </p>
                 </div>
 
@@ -1970,7 +1718,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                     className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-sm transition-all min-h-[44px]"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>Registrar Drogueria</span>
+                    <span>Nueva droguería</span>
                   </button>
                 </div>
               </div>
@@ -2240,7 +1988,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                     <span>Cartera de Farmacias en dim_clientes ({clientesFiltrados.length} de {clientes.length} Registros)</span>
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Estructura oficial de 11 campos con <b>ident01</b> como Primary Key unico, brick IMS, frecuencia y GPS.
+                    Cada farmacia se identifica por su código (ident01).
                   </p>
                 </div>
 
@@ -2482,18 +2230,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
                   </button>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setSeccionHistoricoActiva('guia')}
-                  className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-                    seccionHistoricoActiva === 'guia'
-                      ? 'bg-amber-600 text-white shadow-sm'
-                      : esClaro ? 'text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200' : 'text-amber-300 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-800'
-                  }`}
-                >
-                  <HelpCircle className="w-4 h-4" />
-                  <span>Guía: ¿Qué hacer y qué sigue?</span>
-                </button>
+
               </div>
 
               {seccionHistoricoActiva === 'homologar' && (
@@ -2635,236 +2372,6 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
 </>
               )}
 
-              {seccionHistoricoActiva === 'guia' && (
-<>
-              {/* 2. SOLUCIÓN TÉCNICA: ¿CÓMO CARGAR +1.000.000 DE FILAS EN SUPABASE GRATUITO? */}
-              <div className={`p-5 rounded-2xl border space-y-4 ${
-                esClaro ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800 shadow-lg'
-              }`}>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 border-slate-100 dark:border-slate-800">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                      <Database className="w-4 h-4 text-teal-600" />
-                      <span>Estrategia de Carga para +1.000.000 de Filas en Supabase (Gratuito y Sostenible)</span>
-                    </h3>
-                    <p className="text-xs text-slate-500">
-                      Supabase Free incluye <strong>500 MB</strong> de base de datos. Analicemos como mantener coste cero y maximo rendimiento.
-                    </p>
-                  </div>
-
-                  {/* Selector de Estrategia */}
-                  <div className={`flex p-1 rounded-xl border ${
-                    esClaro ? 'bg-slate-100 border-slate-200' : 'bg-slate-950 border-slate-800'
-                  }`}>
-                    <button
-                      type="button"
-                      onClick={() => setEstrategia1M('agregada')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        estrategia1M === 'agregada'
-                          ? 'bg-teal-600 text-white shadow-sm'
-                          : esClaro ? 'text-slate-600 hover:text-slate-900' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      ★ 1. Pre-Agregada (Recomendada)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEstrategia1M('ventana90')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        estrategia1M === 'ventana90'
-                          ? 'bg-teal-600 text-white shadow-sm'
-                          : esClaro ? 'text-slate-600 hover:text-slate-900' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      2. Ventana 90 Dias
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEstrategia1M('copy_cli')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        estrategia1M === 'copy_cli'
-                          ? 'bg-teal-600 text-white shadow-sm'
-                          : esClaro ? 'text-slate-600 hover:text-slate-900' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      3. CLI \COPY (1M Bruto)
-                    </button>
-                  </div>
-                </div>
-
-                {/* Contenido según Estrategia Seleccionada */}
-                {estrategia1M === 'agregada' && (
-                  <div className="space-y-4">
-                    {/* Cuadro Comparativo */}
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
-                      <div className={`p-3 rounded-xl border ${esClaro ? 'bg-slate-50 border-slate-200' : 'bg-slate-950 border-slate-800'}`}>
-                        <div className="text-[10px] text-slate-400 font-bold uppercase">Registros Brutos</div>
-                        <div className="text-sm font-extrabold text-slate-500 line-through">1.000.000</div>
-                        <div className="text-[10px] text-slate-400">Facturas diarias</div>
-                      </div>
-
-                      <div className={`p-3 rounded-xl border ${esClaro ? 'bg-teal-50 border-teal-200' : 'bg-teal-950/40 border-teal-800'}`}>
-                        <div className="text-[10px] text-teal-600 dark:text-teal-400 font-bold uppercase">Registros Agrupados</div>
-                        <div className="text-base font-extrabold text-teal-700 dark:text-teal-300">~38.000</div>
-                        <div className="text-[10px] text-teal-600">Reduccion del 96%</div>
-                      </div>
-
-                      <div className={`p-3 rounded-xl border ${esClaro ? 'bg-emerald-50 border-emerald-200' : 'bg-emerald-950/40 border-emerald-800'}`}>
-                        <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold uppercase">Espacio en Supabase</div>
-                        <div className="text-base font-extrabold text-emerald-700 dark:text-emerald-300">&lt; 12 MB</div>
-                        <div className="text-[10px] text-emerald-600">Usa solo el 2.4% de 500MB</div>
-                      </div>
-
-                      <div className={`p-3 rounded-xl border ${esClaro ? 'bg-indigo-50 border-indigo-200' : 'bg-indigo-950/40 border-indigo-800'}`}>
-                        <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold uppercase">Velocidad Sugeridos</div>
-                        <div className="text-base font-extrabold text-indigo-700 dark:text-indigo-300">15 ms</div>
-                        <div className="text-[10px] text-indigo-600">Ultra rapido en movil</div>
-                      </div>
-
-                      <div className={`p-3 rounded-xl border ${esClaro ? 'bg-amber-50 border-amber-200' : 'bg-amber-950/40 border-amber-800'}`}>
-                        <div className="text-[10px] text-amber-600 dark:text-amber-400 font-bold uppercase">Coste de Servidor</div>
-                        <div className="text-base font-extrabold text-amber-700 dark:text-amber-300">$0.00 / mes</div>
-                        <div className="text-[10px] text-amber-600">100% Gratuito garantizado</div>
-                      </div>
-                    </div>
-
-                    {/* Explicación Farmacéutica */}
-                    <div className={`p-4 rounded-xl border text-xs leading-relaxed space-y-2 ${
-                      esClaro ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-slate-950 border-slate-800 text-slate-300'
-                    }`}>
-                      <p>
-                        <strong>¿Por que esta es la mejor practica en la industria farmaceutica?</strong> Para calcular la reposicion de anaquel y pedido sugerido a 30, 60 y 90 dias, el sistema comercial no necesita saber la hora o numero de cada factura diaria; necesita saber:{' '}
-                        <code className="font-mono font-bold text-teal-700 dark:text-teal-300">
-                          (Farmacia ident01, Medicamento SKU, Año-Mes, Cantidad Total, Frecuencia de Compra, Descuento Promedio)
-                        </code>.
-                      </p>
-                      <p>
-                        Al agrupar tus 1.000.000 de filas mensuales, caben comodamente tanto en <b>Supabase Gratuito</b> como en el almacenamiento local del navegador, evitando cuelgues o desconexiones de red en zonas con baja senal celular.
-                      </p>
-                    </div>
-
-                    {/* Selector de Código: SQL vs Python */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                            Script de Condensacion de Datos:
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setLenguajeScript1M('sql')}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
-                              lenguajeScript1M === 'sql'
-                                ? 'bg-teal-600 text-white'
-                                : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                            }`}
-                          >
-                            SQL (Supabase / Postgres)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setLenguajeScript1M('python')}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
-                              lenguajeScript1M === 'python'
-                                ? 'bg-teal-600 text-white'
-                                : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                            }`}
-                          >
-                            Python / Pandas (En tu PC)
-                          </button>
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={handleCopiarScript1M}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700"
-                        >
-                          {copiadoScript1M ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5 text-teal-600" />}
-                          <span>{copiadoScript1M ? 'Copiado' : 'Copiar Script'}</span>
-                        </button>
-                      </div>
-
-                      <pre className="p-4 rounded-xl bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto max-h-64 leading-relaxed border border-slate-800">
-                        {script1MContenido}
-                      </pre>
-                    </div>
-                  </div>
-                )}
-
-                {estrategia1M === 'ventana90' && (
-                  <div className="space-y-4">
-                    <div className={`p-4 rounded-xl border text-xs leading-relaxed space-y-2 ${
-                      esClaro ? 'bg-slate-50 border-slate-200 text-slate-700' : 'bg-slate-950 border-slate-800 text-slate-300'
-                    }`}>
-                      <h4 className="font-bold text-sm text-slate-900 dark:text-white">
-                        Estrategia de Ventana Activa 90 / 180 Dias
-                      </h4>
-                      <p>
-                        En la dinamica comercial farmaceutica venezolana e internacional, los pedidos de hace 1 o 2 anos ya no reflejan la velocidad de rotacion real debido a la inflacion, cambios de vademecum, quiebres temporales de distribuidores o rotacion de precios.
-                      </p>
-                      <p>
-                        Si filtras tu archivo de ventas para conservar unicamente los <b>ultimos 90 o 180 dias</b>, el volumen bajara de 1.000.000 a aproximadamente <b>100.000 - 150.000 filas</b> (~35 MB), las cuales caben perfectamente en el nivel gratuito de Supabase.
-                      </p>
-                    </div>
-
-                    <pre className="p-4 rounded-xl bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto max-h-64 leading-relaxed border border-slate-800">
-                      {script1MContenido}
-                    </pre>
-                  </div>
-                )}
-
-                {estrategia1M === 'copy_cli' && (
-                  <div className="space-y-4">
-                    <div className={`p-4 rounded-xl border text-xs leading-relaxed space-y-2 ${
-                      esClaro ? 'bg-amber-50/70 border-amber-200 text-amber-900' : 'bg-amber-950/30 border-amber-800/60 text-amber-300'
-                    }`}>
-                      <h4 className="font-bold text-sm flex items-center gap-2">
-                        <Terminal className="w-4 h-4 text-amber-600" />
-                        <span>Carga Bruta de 1.000.000 de Filas por Terminal (Sin Pasar por el Navegador)</span>
-                      </h4>
-                      <p>
-                        <b>Importante:</b> NUNCA intentes cargar un archivo CSV de 1.000.000 de lineas (&gt;150 MB) arrastrandolo en la interfaz web del navegador. El navegador se congelara y la peticion HTTP se caera por Timeout a los 60 segundos.
-                      </p>
-                      <p>
-                        Para cargar 1M en bruto, debes usar la conexion directa de PostgreSQL mediante el comando nativo <code className="font-bold font-mono px-1 py-0.5 rounded bg-black/10">\COPY</code>. Este comando procesa mas de 25.000 filas por segundo y completa la carga en unos 40 segundos.
-                      </p>
-                    </div>
-
-                    <pre className="p-4 rounded-xl bg-slate-950 text-amber-400 font-mono text-xs overflow-x-auto max-h-64 leading-relaxed border border-slate-800">
-                      {script1MContenido}
-                    </pre>
-                  </div>
-                )}
-              </div>
-
-              {/* 3. GUÍA: ¿CARGAR MES A MES O TODOS LOS MESES JUNTOS? */}
-              <div className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-4 ${
-                esClaro ? 'bg-indigo-50/70 border-indigo-200 text-indigo-950' : 'bg-indigo-950/30 border-indigo-800/60 text-indigo-300'
-              }`}>
-                <div className="space-y-1 text-xs">
-                  <h4 className="font-bold text-sm flex items-center gap-2">
-                    <HelpCircle className="w-4 h-4 text-indigo-600" />
-                    <span>¿Debo cargar el historico mes a mes o todos los meses juntos?</span>
-                  </h4>
-                  <p className="leading-relaxed opacity-95">
-                    <strong>Respuesta:</strong> Si tienes 1.000.000 de filas en bruto, <strong>NO subas el archivo crudo de 1M todo junto</strong> porque el navegador colapsara por memoria. Aplica una de estas dos opciones:
-                  </p>
-                  <ul className="list-disc list-inside space-y-1 mt-1 text-[11px] opacity-90">
-                    <li>
-                      <strong>Opcion A (Todos los meses juntos - Recomendada):</strong> Usa el script de Python o SQL para condensar tus 8 columnas agrupando por mes. Obtendras <strong>un solo archivo de ~40.000 filas (4 MB)</strong> con todos los meses consolidados (2025-2026), el cual subes de una sola vez en 2 segundos.
-                    </li>
-                    <li>
-                      <strong>Opcion B (Mes a mes):</strong> Si ya tienes tus archivos separados por mes (ej. Enero.csv, Febrero.csv), puedes subirlos uno a uno. El sistema los acumulara progresivamente en la base de datos.
-                    </li>
-                    <li>
-                      <strong>Tip para Fase de Prueba:</strong> Para calibrar el Motor de Sugeridos solo necesitas los <strong>ultimos 3 meses (90 dias)</strong>, ya que el algoritmo evalua ventanas de 30/60/90 dias.
-                    </li>
-                  </ul>
-                </div>
-              </div>
-
-</>
-              )}
 
               {seccionHistoricoActiva === 'acumulado' && (
 <>
@@ -3105,35 +2612,6 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
           )}
 
         </div>
-      ) : (
-        /* Generador SQL Directo para Supabase */
-        <div className={`p-5 rounded-2xl border space-y-4 ${
-          esClaro ? 'bg-white border-slate-200 shadow-sm' : 'bg-slate-900 border-slate-800'
-        }`}>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 border-slate-100 dark:border-slate-800">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Database className="w-4 h-4 text-teal-600" />
-                <span>Sentencias SQL de Insercion para Supabase SQL Editor</span>
-              </h3>
-              <p className="text-xs text-slate-500">
-                Copia este bloque y pegalo directamente en la consola SQL de tu proyecto Supabase para sembrar las dimensiones con IDs numericos.
-              </p>
-            </div>
-
-            <button
-              onClick={handleCopiarSql}
-              className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-sm transition-all min-h-[44px]"
-            >
-              {copiadoSql ? <Check className="w-4 h-4 text-white" /> : <Copy className="w-4 h-4" />}
-              <span>{copiadoSql ? 'Copiado al Portapapeles' : 'Copiar Sentencias SQL'}</span>
-            </button>
-          </div>
-
-          <pre className="p-4 rounded-xl bg-slate-950 text-emerald-400 font-mono text-xs overflow-x-auto max-h-96 leading-relaxed">
-            {sqlGenerado}
-          </pre>
-        </div>
       )}
 
       {/* MODAL 1: Editar Droguería */}
@@ -3162,7 +2640,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
             <form onSubmit={handleGuardarEdicionDrogueria} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold mb-1">ID (Primary Key Numerico) *</label>
+                  <label className="block font-bold mb-1">Número de droguería *</label>
                   <input
                     type="number"
                     min={1}
@@ -3884,7 +3362,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
             <form onSubmit={handleGuardarEdicionCliente} className="space-y-4 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold mb-1">ident01 (ID Unico Primary Key) *</label>
+                  <label className="block font-bold mb-1">Código de la farmacia (ident01) *</label>
                   <input
                     type="text"
                     required
@@ -4087,7 +3565,7 @@ psql "postgresql://postgres:[TU_CLAVE]@db.[TU_PROYECTO].supabase.co:5432/postgre
             <form onSubmit={handleCrearClienteSubmit} className="space-y-4 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold mb-1">ident01 (ID Unico Primary Key) *</label>
+                  <label className="block font-bold mb-1">Código de la farmacia (ident01) *</label>
                   <input
                     type="text"
                     required

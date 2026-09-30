@@ -26,7 +26,7 @@ export const SideNav: React.FC<NavProps> = ({ tabs, tabActiva, onCambiarTab }) =
   return (
     <nav
       aria-label="Módulos de NOVA"
-      className="hidden md:flex shrink-0 flex-col w-20 xl:w-64 sticky top-14 self-start h-[calc(100dvh-3.5rem)] overflow-y-auto scrollbar-none border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-3 px-1.5 xl:px-3"
+      className="hidden md:flex shrink-0 flex-col w-20 xl:w-64 sticky top-12 self-start h-[calc(100dvh-3rem)] overflow-y-auto scrollbar-none border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-3 px-1.5 xl:px-3"
     >
       {grupos.map(({ grupo, items }) => (
         <div key={grupo} className="mb-2 xl:mb-3">

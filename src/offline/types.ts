@@ -61,6 +61,8 @@ export interface LocalCliente {
   nombre_comercial: string;
   rif?: string | null;
   brick?: string | null;
+  municipio?: string | null;
+  bandera?: string | null;
   direccion?: string | null;
   telefono?: string | null;
   lat?: number | null;

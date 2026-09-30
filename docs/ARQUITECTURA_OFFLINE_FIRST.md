@@ -19,8 +19,7 @@ guarda en el dispositivo y se sincroniza solo, en segundo plano, cuando vuelve l
 | Capa | Archivo | Qué hace |
 |---|---|---|
 | Base de datos | `src/sql/nova_produccion_v3.sql` | DDL completo: 24 tablas y 4 vistas, enums, PostGIS, triggers, RPC, RLS, Realtime, purga segura |
-| | `src/sql/migracion/` | Migración desde el esquema de fase 1: archivar (`1_…`) y copiar datos (`2_…`) |
-| | `db-tests/` | Valida el DDL, la homologación y la migración en un PostgreSQL local (`./db-tests/run.sh`): escenarios de negocio + verificación de migración |
+| | `db-tests/` | Valida el DDL, la homologación, el fichero por vendedor y el borrado en un PostgreSQL local (`./db-tests/run.sh`) |
 | Datos locales | `src/offline/db.ts` | Esquema Dexie (índice multiEntry `tokens` para búsqueda por prefijo) |
 | | `src/offline/types.ts` | Tipos locales (reflejan las tablas + `sync_estado`, `correlativo_provisional`) |
 | Cola | `src/offline/outbox.ts` | Outbox: encolar, enviar en orden, backoff, ack, errores, compensación |
@@ -32,8 +31,12 @@ guarda en el dispositivo y se sincroniza solo, en segundo plano, cuando vuelve l
 | Negocio cliente | `src/offline/politicas.ts` | Reglas comerciales (espejo del servidor) |
 | | `src/offline/sugerido.ts`, `busqueda.ts` | Pedido sugerido y búsqueda local |
 | Exportación | `src/services/exportacionDrogueria.ts` | CSV/TXT por droguería con los códigos **principales** de esa droguería |
-| Puente app clásica | `src/services/nubeV3.ts` | Import Studio, catálogos y usuarios contra v3 por clave natural (ident01, SKU, códigos de droguería) |
-| UI | `src/components/capture/*` | Pantalla de captura móvil/tablet (carrito flotante, búsqueda, condiciones, escáner) |
+| Puente con la nube | `src/services/nubeV3.ts` | Carga masiva, catálogos y usuarios contra v3 por clave natural (código de farmacia, SKU, códigos de droguería) |
+| Acceso | `src/services/sesion.ts`, `src/components/acceso/*` | Inicio de sesión obligatorio (Supabase Auth); rol y equipo se leen de `dim_usuarios` |
+| | `src/offline/aislamiento.ts` | Al cambiar de usuario en el dispositivo se borran los datos locales del anterior (el vendedor solo ve su fichero) |
+| UI | `src/vistas/*` | Menús: Resumen, Tomar pedido, Por procesar, Pedidos, Clientes, Catálogo, Reportes, Cargar y editar datos, Configuración (según rol) |
+| | `src/components/capture/*` | Pantalla de captura móvil/tablet (carrito flotante, búsqueda, condiciones, escáner) |
+| | `src/components/ui/kit.tsx` | Piezas visuales comunes (encabezado, tarjetas, botones compactos, avisos) |
 | | `src/components/SyncStatusChip.tsx` | Indicador de sincronización del encabezado |
 | PWA | `public/sw.js`, `manifest.webmanifest`, `vite.config.ts` (plugin `sw-manifest`) | Instalable y abre sin red |
 
@@ -155,36 +158,33 @@ comparten los mismos casos de prueba (`politicas.test.ts` y `db-tests/10_escenar
 
 ## 6. Puesta en marcha en Supabase
 
-**Proyecto nuevo:**
-1. SQL Editor: ejecutar `src/sql/nova_produccion_v3.sql` completo (re-ejecutable).
-2. Registrar tu usuario (Authentication → Users, o desde la app) y promoverte una sola vez desde el SQL Editor:
-   `UPDATE dim_usuarios SET rol = 'admin', activo = true WHERE email = 'tu@correo.com';`
-3. Iniciar sesión en la app; desde ahí, cargar catálogos, droguerías (con su layout), homologaciones y ventas en **Carga de Datos**, y dar de alta al resto del equipo en **Usuarios**.
+1. SQL Editor: ejecutar `src/sql/nova_produccion_v3.sql` completo (re-ejecutable). Si el proyecto tiene tablas de una versión anterior con los mismos nombres, el script se detiene con un mensaje antes de tocar nada.
+2. Authentication → Users → **Add user** (correo + contraseña, marcar "Auto Confirm User"). Esa cuenta nace como vendedor inactivo.
+3. SQL Editor, una sola vez, para convertirla en administrador:
+   `UPDATE dim_usuarios SET rol = 'admin', activo = true, nombre_completo = 'Nombre Apellido' WHERE email = 'tu@correo.com';`
+4. En la app: pegar URL y anon key en la pantalla de acceso, iniciar sesión. Ya con sesión de administrador:
+   - **Configuración → Usuarios**: crear equipos y personas (vendedor, transferencista, gerente).
+   - **Cargar y editar datos**: catálogos, droguerías, homologaciones y ventas; **Fichero de vendedores** para asignar farmacias.
+   - **Configuración → Base de datos**: definir la clave de borrado (solo si se va a usar).
 
-**Proyecto con el esquema de fase 1 (dim_clientes con `ident01`, `fact_historico_ventas`…):**
-1. `src/sql/migracion/1_archivar_esquema_anterior.sql` — mueve las tablas anteriores al esquema `legacy` (no borra nada) y retira el trigger de alta inseguro.
-2. `src/sql/nova_produccion_v3.sql`.
-3. `src/sql/migracion/2_migrar_datos_anteriores.sql` — copia usuarios, droguerías (convierte el layout CSV), productos, farmacias, homologaciones y ventas; enlaza el histórico e imprime el resumen y lo pendiente. Re-ejecutable.
-4. Promover tu usuario administrador si el resumen avisa que no hay ninguno (paso 2 de arriba) e iniciar sesión.
-5. Con todo verificado: `DROP SCHEMA legacy CASCADE;`.
+**Equipos vs. usuarios:** `dim_equipos` agrupa vendedores (La Santé, Comercial/OTC); `dim_usuarios` contiene a **todas** las personas con su rol (vendedor, transferencista, gerente, admin). Cada vendedor es un usuario; un gerente no necesita equipo.
 
-Después, en ambos casos:
-- Realtime ya queda habilitado para `fact_pedidos`, `pedido_bloqueos`, `notificaciones` y `dim_clientes`.
-- Programar `recalcular_segmentos_clientes()` y `generar_alertas_comerciales()` a diario (pg_cron, ver el final del DDL).
-- En la app: **Supabase (configurar)** con URL y anon key. La sesión de Supabase Auth es obligatoria (RLS): sin iniciar sesión las tablas no devuelven datos.
+Opcional: programar `recalcular_segmentos_clientes()` y `generar_alertas_comerciales()` a diario (pg_cron, ver el final del DDL). Realtime ya queda habilitado para `fact_pedidos`, `pedido_bloqueos`, `notificaciones` y `dim_clientes`.
+
+**Borrado de datos (solo admin):** `configurar_password_purga` (clave, mín. 6) → `habilitar_borrado(true)` → `borrar_datos(clave, alcance)` con alcance `historial` (pedidos, ventas, compras, visitas, alertas) o `todo` (además farmacias, productos, droguerías, homologaciones y fichero). Usuarios, equipos y configuración se conservan. Queda registrado en `audit_log`. Desde la app: **Configuración → Base de datos**.
 
 ## 7. Pruebas
 
 ```bash
-npm test                                   # 67 pruebas de lógica cliente (Dexie en memoria)
-NOVA_PG=1 PGHOST=… PGUSER=… npm test       # +9 de integración contra PostgreSQL + PostGIS reales
-./db-tests/run.sh                          # DDL (dos veces) + escenarios de negocio + migración desde la fase 1 (dos veces)
+npm test                                   # pruebas de lógica cliente (Dexie en memoria)
+NOVA_PG=1 PGHOST=… PGUSER=… npm test       # + integración contra PostgreSQL + PostGIS reales
+./db-tests/run.sh                          # DDL (dos veces) + escenarios de negocio, homologación, fichero y borrado
 ```
 
 La prueba de integración ejecuta la **misma cola** del dispositivo contra las RPC reales: cubre pull, pedido offline,
 split `PED-1001-R1`, exportación, prospecto, check-in, aislamiento de errores y el circuito ventas de droguería → homologación → consolidado → pedido sugerido.
 `db-tests/20_homologacion.sql` cubre códigos múltiples con principal, pendientes, homologación retroactiva, corrección, permisos y alta de usuarios;
-`db-tests/30-31` cargan un esquema de fase 1 con datos y verifican la migración (incluida su re-ejecución).
+`db-tests/40_gestion.sql` cubre la asignación de fichero por vendedor y el borrado por alcance con clave.
 
 ## 8. Límites conocidos
 
@@ -192,11 +192,8 @@ split `PED-1001-R1`, exportación, prospecto, check-in, aislamiento de errores y
   pestaña y cada 30 s con la app abierta; con la app cerrada en iOS no hay envío hasta abrirla.
 - El navegador puede liberar IndexedDB si el dispositivo se queda sin espacio: `navigator.storage.persist()` reduce el riesgo
   pero no lo elimina. Lo pendiente de enviar es lo único irremplazable; conviene sincronizar al final de cada jornada.
-- Falta la interfaz del panel del transferencista con presencia en vivo (el servidor —`tomar_pedido`, `pedido_bloqueos`,
-  Realtime— y el adaptador ya existen) y la del administrador para editar reglas comerciales (hoy son datos en la tabla).
-- Las pantallas anteriores (toma clásica, sugerido, teletransferencias) siguen usando el modelo local previo (`localStorage`); la
-  captura v3 convive con ellas hasta migrarlas. Sus cargas a la nube (catálogos, homologación, ventas, usuarios) ya van al esquema v3
-  a través de `src/services/nubeV3.ts`.
-- Las pantallas para resolver lo pendiente de homologar y el tablero `vw_estado_homologacion` existen como vistas/RPC; la pantalla nueva
-  está por hacer (hoy se usa la del Import Studio, que trabaja con el modelo local y sube por `importar_homologacion`).
-- La tabla `inventario_drogueria` de la fase 1 no se migra (la app nunca la usó): el inventario sigue siendo local.
+- La lista "Por procesar" del transferencista se actualiza al sincronizar o con el botón **Actualizar**; la presencia en vivo por Realtime
+  (el servidor ya la soporta) aún no está conectada a la pantalla. El bloqueo de 120 s (`tomar_pedido`) evita que dos personas procesen el mismo pedido.
+- Las reglas comerciales se editan como datos en la tabla `config_reglas_comerciales` (sin pantalla).
+- El inventario de droguería sigue sin usarse (fuera del alcance de la fase 1). Sin precios: solo unidades.
+- El dictado por voz y el modo de toma clásica fueron retirados: la captura v3 es la única vía de toma de pedidos.

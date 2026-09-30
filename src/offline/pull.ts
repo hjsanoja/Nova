@@ -41,6 +41,11 @@ interface TablaPull {
   acotarMeses?: string;
   /** Limpia lo que salió de la ventana local tras una descarga (p. ej. compras de hace más de MESES_COMPRAS meses). */
   podar?: (db: NovaDB) => Promise<void>;
+  /**
+   * Tras una descarga COMPLETA (sin cursor), retira lo local que el servidor ya no entrega a este usuario
+   * (p. ej. una farmacia que le quitaron del fichero). Recibe los ids que sí llegaron.
+   */
+  podarNoVistos?: (db: NovaDB, vistos: Set<string>) => Promise<void>;
   seleccion?: string;
 }
 
@@ -94,6 +99,10 @@ export const TABLAS_PULL: TablaPull[] = [
   },
   {
     remota: 'dim_clientes',
+    podarNoVistos: async (db, vistos) => {
+      const sobran = (await db.clientes.toArray()).filter((c) => c.sync_estado === 'sincronizado' && !vistos.has(c.id)).map((c) => c.id);
+      if (sobran.length) await db.clientes.bulkDelete(sobran);
+    },
     aplicar: async (db, filas) => {
       const ids = filas.map((f) => str(f.id));
       const locales = new Map((await db.clientes.bulkGet(ids)).filter((c): c is LocalCliente => !!c).map((c) => [c.id, c]));
@@ -110,6 +119,8 @@ export const TABLAS_PULL: TablaPull[] = [
               nombre_comercial: str(f.nombre_comercial),
               rif: strN(f.rif),
               brick: strN(f.brick),
+              municipio: strN(f.municipio),
+              bandera: strN(f.bandera),
               direccion: strN(f.direccion),
               telefono: strN(f.telefono),
               lat: numN(f.lat),
@@ -329,12 +340,15 @@ export async function traerTabla(db: NovaDB, remoto: SyncRemote, t: TablaPull): 
   let cursor = await db.leerMeta<string | null>(claveCursor(t.remota), null);
   const creadoDesde = t.acotarHistorial ? new Date(Date.now() - DIAS_HISTORIAL * 86_400_000).toISOString() : undefined;
   const minimo = t.acotarMeses ? { [t.acotarMeses]: inicioMes(MESES_COMPRAS) } : undefined;
+  const completa = cursor === null;
+  const vistos = new Set<string>();
   let total = 0;
   for (;;) {
     const desde = cursor ? new Date(new Date(cursor).getTime() - SOLAPE_MS).toISOString() : null;
     const filas = await remoto.traer(t.remota, desde, PAGINA, { creadoDesde, seleccion: t.seleccion, minimo });
     if (filas.length === 0) break;
     await t.aplicar(db, filas);
+    if (t.podarNoVistos) filas.forEach((f) => vistos.add(str(f.id)));
     total += filas.length;
     const ultimo = str(filas[filas.length - 1].updated_at);
     // Si toda la página es anterior al cursor (solo el solape), no hay más novedades.
@@ -346,6 +360,7 @@ export async function traerTabla(db: NovaDB, remoto: SyncRemote, t: TablaPull): 
     if (filas.length < PAGINA || !avanzo) break;
   }
   if (t.podar && total > 0) await t.podar(db);
+  if (t.podarNoVistos && completa) await t.podarNoVistos(db, vistos);
   return total;
 }
 

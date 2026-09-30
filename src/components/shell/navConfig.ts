@@ -1,17 +1,4 @@
-import {
-  BookOpen,
-  ClipboardPlus,
-  CheckCircle2,
-  Database,
-  Layers,
-  LayoutDashboard,
-  Pill,
-  RefreshCw,
-  ShoppingBag,
-  ShoppingCart,
-  UploadCloud,
-  Users,
-} from 'lucide-react';
+import { BarChart3, ClipboardPlus, CheckCircle2, Database, LayoutDashboard, Pill, Settings, ShoppingBag, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { RolUsuario } from '../../types/pharmacy';
 
@@ -26,58 +13,35 @@ export interface TabDef {
   principal?: boolean;
 }
 
-const GUIA: TabDef = { id: 'guia_uso', label: 'Guía de Uso', corto: 'Guía', icon: BookOpen, grupo: 'Ayuda' };
+const INICIO = (label: string): TabDef => ({ id: 'inicio', label, corto: 'Inicio', icon: LayoutDashboard, grupo: 'Operación', principal: true });
+const CAPTURA: TabDef = { id: 'captura', label: 'Tomar pedido', corto: 'Pedido', icon: ClipboardPlus, grupo: 'Operación', principal: true };
+const POR_PROCESAR: TabDef = { id: 'por_procesar', label: 'Por procesar', corto: 'Procesar', icon: CheckCircle2, grupo: 'Operación', principal: true };
+const PEDIDOS = (label: string, principal = false): TabDef => ({ id: 'pedidos', label, corto: 'Pedidos', icon: ShoppingBag, grupo: 'Operación', principal });
+const CLIENTES = (label: string, principal = false): TabDef => ({ id: 'clientes', label, corto: 'Clientes', icon: Users, grupo: 'Consulta', principal });
+const CATALOGO: TabDef = { id: 'catalogo', label: 'Catálogo', corto: 'Catálogo', icon: Pill, grupo: 'Consulta' };
+const REPORTES = (principal = false): TabDef => ({ id: 'reportes', label: 'Reportes', corto: 'Reportes', icon: BarChart3, grupo: 'Consulta', principal });
+const DATOS: TabDef = { id: 'datos', label: 'Cargar y editar datos', corto: 'Datos', icon: Database, grupo: 'Administración', principal: true };
+const CONFIG: TabDef = { id: 'config', label: 'Configuración', corto: 'Ajustes', icon: Settings, grupo: 'Administración' };
 
-/** Pestañas permitidas por rol. Definido una sola vez (antes se recreaba en cada render). */
+/** Módulos permitidos por rol. La seguridad real está en la base de datos (RLS); esto solo ordena lo que cada persona ve. */
 export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
-  vendedor: [
-    { id: 'dashboard', label: 'Mi Rendimiento', corto: 'Inicio', icon: LayoutDashboard, grupo: 'Operación', principal: true },
-    { id: 'captura', label: 'Captura de Pedido (offline)', corto: 'Captura', icon: ClipboardPlus, grupo: 'Operación', principal: true },
-    { id: 'sugerido', label: 'Motor Sugerido', corto: 'Sugerido', icon: RefreshCw, grupo: 'Operación', principal: true },
-    { id: 'mis_pedidos', label: 'Mis Pedidos', corto: 'Pedidos', icon: ShoppingBag, grupo: 'Operación', principal: true },
-    { id: 'nuevo_pedido', label: 'Toma de Pedido (clásica)', corto: 'Clásica', icon: ShoppingCart, grupo: 'Operación' },
-    { id: 'vademecum', label: 'Medicamentos', corto: 'Catálogo', icon: Pill, grupo: 'Consulta' },
-    GUIA,
-  ],
-  teletransferencista: [
-    { id: 'teletransferencia', label: 'Teletransferencias', corto: 'Pedidos', icon: CheckCircle2, grupo: 'Procesamiento', principal: true },
-    { id: 'droguerias_csv', label: 'Layouts CSV', corto: 'Layouts', icon: Layers, grupo: 'Procesamiento', principal: true },
-    { id: 'vademecum', label: 'Medicamentos', corto: 'Catálogo', icon: Pill, grupo: 'Consulta', principal: true },
-    { ...GUIA, principal: true },
-  ],
-  gerente: [
-    { id: 'dashboard', label: 'Monitoreo Ejecutivo', corto: 'Inicio', icon: LayoutDashboard, grupo: 'Monitoreo', principal: true },
-    { id: 'mis_pedidos', label: 'Auditoría de Pedidos', corto: 'Auditoría', icon: ShoppingBag, grupo: 'Monitoreo', principal: true },
-    { id: 'sugerido', label: 'Motor Sugeridos', corto: 'Sugerido', icon: RefreshCw, grupo: 'Monitoreo', principal: true },
-    { id: 'carga_datos', label: 'Visor de Datos', corto: 'Datos', icon: Database, grupo: 'Datos', principal: true },
-    { id: 'vademecum', label: 'Medicamentos', corto: 'Catálogo', icon: Pill, grupo: 'Datos' },
-    GUIA,
-  ],
-  admin: [
-    { id: 'dashboard', label: 'Dashboard', corto: 'Inicio', icon: LayoutDashboard, grupo: 'Operación', principal: true },
-    { id: 'captura', label: 'Captura de Pedido (offline)', corto: 'Captura', icon: ClipboardPlus, grupo: 'Operación' },
-    { id: 'nuevo_pedido', label: 'Toma de Pedidos (clásica)', corto: 'Clásica', icon: ShoppingCart, grupo: 'Operación' },
-    { id: 'sugerido', label: 'Sugeridos', corto: 'Sugerido', icon: RefreshCw, grupo: 'Operación' },
-    { id: 'mis_pedidos', label: 'Auditoría', corto: 'Auditoría', icon: ShoppingBag, grupo: 'Operación' },
-    { id: 'teletransferencia', label: 'Teletransferencias', corto: 'Transfer.', icon: CheckCircle2, grupo: 'Teletransferencia', principal: true },
-    { id: 'droguerias_csv', label: 'Layouts CSV', corto: 'Layouts', icon: Layers, grupo: 'Teletransferencia' },
-    { id: 'carga_inventario', label: 'Carga Masiva', corto: 'Carga', icon: UploadCloud, grupo: 'Teletransferencia' },
-    { id: 'carga_datos', label: 'Carga de Datos', corto: 'Datos', icon: Database, grupo: 'Administración', principal: true },
-    { id: 'vademecum', label: 'Vademécum', corto: 'Catálogo', icon: Pill, grupo: 'Administración', principal: true },
-    { id: 'usuarios', label: 'Gestión de Usuarios', corto: 'Usuarios', icon: Users, grupo: 'Administración' },
-    { id: 'sql_script', label: 'Script SQL', corto: 'SQL', icon: Database, grupo: 'Administración' },
-    GUIA,
-  ],
+  vendedor: [INICIO('Inicio'), CAPTURA, CLIENTES('Mis clientes', true), PEDIDOS('Mis pedidos', true), CATALOGO, CONFIG],
+  teletransferencista: [POR_PROCESAR, PEDIDOS('Pedidos', true), CLIENTES('Clientes', true), { ...CATALOGO, principal: true }, CONFIG],
+  gerente: [INICIO('Resumen'), REPORTES(true), PEDIDOS('Pedidos', true), CLIENTES('Clientes', true), CATALOGO, CONFIG],
+  admin: [INICIO('Resumen'), CAPTURA, POR_PROCESAR, PEDIDOS('Pedidos'), CLIENTES('Clientes', true), CATALOGO, REPORTES(), DATOS, CONFIG].map((t) =>
+    // En móvil: Resumen, Por procesar, Clientes y Datos; lo demás en "Más".
+    ['inicio', 'por_procesar', 'clientes', 'datos'].includes(t.id) ? { ...t, principal: true } : { ...t, principal: false }
+  ),
 };
 
 export function tabsDelRol(rol: RolUsuario): TabDef[] {
-  return TABS_POR_ROL[rol] ?? TABS_POR_ROL.admin;
+  return TABS_POR_ROL[rol] ?? TABS_POR_ROL.vendedor;
 }
 
-/** Pestaña con la que arranca cada rol. */
+/** Módulo con el que arranca cada rol. */
 export const TAB_INICIAL: Record<RolUsuario, string> = {
-  vendedor: 'dashboard',
-  teletransferencista: 'teletransferencia',
-  gerente: 'dashboard',
-  admin: 'dashboard',
+  vendedor: 'inicio',
+  teletransferencista: 'por_procesar',
+  gerente: 'inicio',
+  admin: 'inicio',
 };

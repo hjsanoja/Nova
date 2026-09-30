@@ -1,7 +1,7 @@
 import type { NovaDB } from './db';
 import { textoBusquedaCliente, tokensProducto } from './busqueda';
 import type { ReglaComercial } from './politicas';
-import type { ColumnaExport, FormatoExport, LocalCliente, LocalDrogueria, LocalMapCliente, LocalMapProducto, LocalProducto, OrigenColumnaExport } from './types';
+import type { ColumnaExport, FormatoExport, LocalCliente, LocalDetalle, LocalDrogueria, LocalMapCliente, LocalMapProducto, LocalPedido, LocalProducto, OrigenColumnaExport } from './types';
 import type { Cliente, Drogueria, Producto } from '../types/pharmacy';
 
 /**
@@ -96,13 +96,47 @@ export async function sembrarDatosDemo(db: NovaDB): Promise<boolean> {
     clientes.map((c) => ({ id: `mc-${d.id}-${c.id}`, drogueria_id: d.id, cliente_id: c.id, codigo_cuenta: `${d.codigo}-${c.codigo_interno}` }))
   );
 
-  await db.transaction('rw', [db.productos, db.clientes, db.droguerias, db.mapProductos, db.mapClientes, db.reglas], async () => {
+  const { pedidos, detalles } = pedidosDemo(productos, clientes, droguerias);
+
+  await db.transaction('rw', [db.productos, db.clientes, db.droguerias, db.mapProductos, db.mapClientes, db.reglas, db.pedidos, db.detalles], async () => {
     await db.productos.bulkPut(productos);
     await db.clientes.bulkPut(clientes);
     await db.droguerias.bulkPut(droguerias);
     await db.mapProductos.bulkPut(mapProductos);
     await db.mapClientes.bulkPut(mapClientes);
     await db.reglas.bulkPut(reglasDemo());
+    await db.pedidos.bulkPut(pedidos);
+    await db.detalles.bulkPut(detalles);
   });
   return true;
+}
+
+/** Cuatro pedidos de ejemplo en distintos estados para poder recorrer la mesa de transferencias en la demostración. */
+function pedidosDemo(productos: LocalProducto[], clientes: LocalCliente[], droguerias: LocalDrogueria[]): { pedidos: LocalPedido[]; detalles: LocalDetalle[] } {
+  const pedidos: LocalPedido[] = [];
+  const detalles: LocalDetalle[] = [];
+  const casos: { estado: LocalPedido['estado']; horas: number; lineas: [number, number, number | null][] }[] = [
+    { estado: 'enviado_teletransferencia', horas: 3, lineas: [[0, 20, null], [1, 10, null]] },
+    { estado: 'en_revision', horas: 26, lineas: [[2, 40, null]] },
+    { estado: 'procesado_parcial', horas: 50, lineas: [[0, 30, 30], [3, 12, 4]] },
+    { estado: 'procesado_total', horas: 75, lineas: [[1, 15, 15]] },
+  ];
+  casos.forEach((c, i) => {
+    const id = `demo-ped-${i + 1}`;
+    const creado = new Date(Date.now() - c.horas * 3_600_000).toISOString();
+    pedidos.push({
+      id, correlativo: `PED-${1001 + i}`, correlativo_provisional: false, folio_local: `L-DEMO-${i + 1}`,
+      cliente_id: clientes[i % clientes.length].id, drogueria_id: droguerias[i % droguerias.length].id, vendedor_id: 'demo', equipo_id: null,
+      estado: c.estado, requiere_revision_especial: c.estado === 'en_revision',
+      motivos_revision: c.estado === 'en_revision' ? [{ tipo: 'descuento_linea_excedido', sku: productos[2 % productos.length].sku, descuento: 12, maximo: 5 }] : [],
+      device_id: 'demo', created_at: creado, updated_at: creado, row_version: 1, sync_estado: 'sincronizado',
+    });
+    c.lineas.forEach(([p, sol, conf], j) => {
+      detalles.push({
+        id: `${id}-l${j + 1}`, pedido_id: id, linea: j + 1, producto_id: productos[p % productos.length].id, unidades_solicitadas: sol, unidades_confirmadas: conf,
+        unidades_pendientes: Math.max(sol - (conf ?? 0), 0), motivo_ajuste: conf != null && conf < sol ? 'quiebre_stock_drogueria' : 'sin_quiebre',
+      });
+    });
+  });
+  return { pedidos, detalles };
 }

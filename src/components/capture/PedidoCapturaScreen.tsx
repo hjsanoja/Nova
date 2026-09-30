@@ -16,6 +16,7 @@ import { ClienteSheet } from './ClienteSheet';
 import { PlantillasSheet } from './PlantillasSheet';
 import { Sheet } from './Sheet';
 import { useCarrito } from './useCarrito';
+import { consumirClienteDePedido } from '../../vistas/navegacion';
 
 const ScannerSheet = React.lazy(() => import('./ScannerSheet').then((m) => ({ default: m.ScannerSheet })));
 
@@ -61,6 +62,13 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
   const reglas = useLive(() => db.reglas.toArray(), [], [] as ReglaComercial[]);
   const cliente = useLive(() => (carrito.cliente_id ? db.clientes.get(carrito.cliente_id) : undefined), [carrito.cliente_id], undefined as LocalCliente | undefined);
   const comprados = useLive(() => productosComprados(db, carrito.cliente_id), [carrito.cliente_id], [] as LocalProducto[]);
+
+  // Llegó desde "Clientes" o "Inicio" con una farmacia ya elegida.
+  useEffect(() => {
+    if (!cargado) return;
+    const id = consumirClienteDePedido();
+    if (id) dispatch({ tipo: 'cliente', id });
+  }, [cargado, dispatch]);
 
   // Droguería por defecto: la primera disponible.
   useEffect(() => {

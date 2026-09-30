@@ -6,7 +6,7 @@ import { useEstadoSync } from '../offline/syncStore';
  *   verde = conectado · ámbar = sin conexión (N cambios guardados en el dispositivo) · azul = sincronizando.
  * Solo depende del store liviano; Dexie y el motor se cargan aparte.
  */
-export const SyncStatusChip: React.FC = () => {
+export const SyncStatusChip: React.FC<{ onAbrirConfig?: () => void }> = ({ onAbrirConfig }) => {
   const s = useEstadoSync();
 
   let color = 'bg-emerald-500';
@@ -23,7 +23,7 @@ export const SyncStatusChip: React.FC = () => {
     tono = 'text-amber-900 bg-amber-50 border-amber-200 dark:text-amber-300 dark:bg-amber-950 dark:border-amber-900';
   } else if (s.necesitaLogin) {
     color = 'bg-amber-500';
-    texto = 'Inicia sesión para sincronizar';
+    texto = 'Sesión vencida';
     tono = 'text-amber-900 bg-amber-50 border-amber-200 dark:text-amber-300 dark:bg-amber-950 dark:border-amber-900';
   } else if (!s.remotoConfigurado) {
     color = 'bg-slate-400';
@@ -35,17 +35,19 @@ export const SyncStatusChip: React.FC = () => {
 
   const detalle = [texto, s.errores > 0 ? `${s.errores} con error` : null].filter(Boolean).join(' · ');
 
+  // Toda la información y las acciones (reintentar, volver a entrar) viven en Configuración > Sincronización.
   return (
-    <span
-      role="status"
+    <button
+      type="button"
+      onClick={onAbrirConfig}
       aria-live="polite"
-      title={detalle}
-      className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-2.5 text-xs font-semibold ${tono}`}
+      title={`${detalle} — toca para ver el detalle`}
+      className={`inline-flex h-9 items-center gap-2 rounded-xl border px-2.5 text-xs font-semibold ${tono}`}
     >
       <span className={`h-2.5 w-2.5 rounded-full ${color}`} aria-hidden />
       <span className="hidden sm:inline">{texto}</span>
       {s.pendientes > 0 && <span className="sm:hidden font-mono">{s.pendientes}</span>}
       {s.errores > 0 && <span className="rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white">{s.errores}</span>}
-    </span>
+    </button>
   );
 };
