@@ -127,11 +127,11 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
                 const espera = diasDesde(p.created_at);
                 return (
                   <li key={p.id}>
-                    <button type="button" onClick={() => setAbierto(p.id)} className={`flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 ${abierto === p.id ? 'bg-teal-50 dark:bg-teal-950/30' : ''}`}>
+                    <button type="button" onClick={() => setAbierto(p.id)} className={`flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 ${abierto === p.id ? 'bg-marca-50 dark:bg-marca-950/30' : ''}`}>
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold">{cliente(p.cliente_id)?.nombre_comercial ?? 'Farmacia'}</p>
                         <p className="truncate text-xs text-slate-500">{p.correlativo} · {droguerias.find((d) => d.id === p.drogueria_id)?.nombre ?? ''} · {u.solicitadas} uds</p>
-                        <p className="truncate text-[11px] text-slate-400">{vendedor(p.vendedor_id) || 'Vendedor'} · {espera === 0 ? 'hoy' : `hace ${espera} d`}</p>
+                        <p className="truncate text-xs text-slate-400">{vendedor(p.vendedor_id) || 'Vendedor'} · {espera === 0 ? 'hoy' : `hace ${espera} d`}</p>
                       </div>
                       <Etiqueta tono={e.tono}>{e.texto}</Etiqueta>
                     </button>
@@ -276,9 +276,9 @@ function Procesar({
                 <tr key={l.id}>
                   <td className="px-2.5 py-1.5">
                     <span className="font-semibold">{nombreProducto(l.producto_id)?.nombre_comercial ?? 'Producto'}</span>
-                    <span className="block text-[11px] text-slate-400">{nombreProducto(l.producto_id)?.sku}</span>
+                    <span className="block text-xs text-slate-400">{nombreProducto(l.producto_id)?.sku}</span>
                     {puedeEditar && menos && valor !== '' && (
-                      <select value={motivos[l.id] ?? 'quiebre_stock_drogueria'} onChange={(e) => setMotivos((m) => ({ ...m, [l.id]: e.target.value as MotivoAjuste }))} aria-label="Motivo" className="mt-1 rounded-lg border border-slate-300 bg-white px-1.5 py-1 text-[11px] dark:border-slate-700 dark:bg-slate-900">
+                      <select value={motivos[l.id] ?? 'quiebre_stock_drogueria'} onChange={(e) => setMotivos((m) => ({ ...m, [l.id]: e.target.value as MotivoAjuste }))} aria-label="Motivo" className="mt-1 rounded-lg border border-slate-300 bg-white px-1.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">
                         {MOTIVOS.map((m) => <option key={m.id} value={m.id}>{m.texto}</option>)}
                       </select>
                     )}

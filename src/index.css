@@ -4,32 +4,37 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
- * Tokens de diseño de NOVA. Punto único para aplicar cambios del sistema visual
- * (tipografías, radios, alturas táctiles) sin tocar cada componente.
+ * SISTEMA DE DISEÑO DE NOVA — punto único de verdad.
+ *
+ *  Color      · marca (acciones, selección, enlaces) + neutros slate para todo lo demás.
+ *               Semánticos SOLO para estados: exito (emerald), aviso (amber), peligro (rose).
+ *               No se usan otros tonos (índigo, morado, celeste...) ni degradados.
+ *  Tipografía · Inter en toda la app. Escala: 12 (detalle) · 14 (texto) · 16 (destacado) · 20 (título) · 24 (cifra).
+ *               Pesos: 400 texto, 500 rótulos, 600 títulos y botones, 700 solo cifras.
+ *  Forma      · radio 8px (controles: botones, campos, chips de filtro) y 12px (tarjetas, hojas, diálogos).
+ *               Redondo completo solo en avatares, contadores y etiquetas.
+ *  Elevación  · tarjetas planas con borde. Sombra solo en lo que flota: hojas, diálogos y menús (shadow-xl).
+ *  Tamaños    · control 40px (36px compacto); objetivo táctil mínimo 44px en móvil.
  */
 @theme {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-display: 'Plus Jakarta Sans', 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --animate-nova-in: nova-in 0.18s ease-out;
+  --animate-nova-in: nova-in 0.16s ease-out;
 
-  /* Paleta "Stitch" del dashboard (design.md): disponible como bg-primary, text-on-surface, etc. */
-  --color-primary: #001428;
-  --color-primary-container: #0f2942;
-  --color-on-primary: #ffffff;
-  --color-secondary: #006398;
-  --color-tertiary: #059669;
-  --color-surface: #f8f9ff;
-  --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low: #eff4ff;
-  --color-surface-container: #e5eeff;
-  --color-surface-container-high: #dce9ff;
-  --color-on-surface: #0b1c30;
-  --color-on-surface-variant: #43474d;
-  --color-outline: #74777e;
-  --color-outline-variant: #c3c6ce;
+  /* Marca: verde azulado. marca-700 es el color de acción (contraste AA con texto blanco). */
+  --color-marca-50: #f0fdfa;
+  --color-marca-100: #ccfbf1;
+  --color-marca-200: #99f6e4;
+  --color-marca-300: #5eead4;
+  --color-marca-400: #2dd4bf;
+  --color-marca-500: #14b8a6;
+  --color-marca-600: #0d9488;
+  --color-marca-700: #0f766e;
+  --color-marca-800: #115e59;
+  --color-marca-900: #134e4a;
+  --color-marca-950: #042f2e;
 
   @keyframes nova-in {
-    from { opacity: 0; transform: translateY(-6px); }
+    from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
   }
 }
@@ -47,7 +52,8 @@
   }
 
   h1, h2, h3, h4, h5, h6 {
-    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.01em;
   }
 
   button, [role="button"], a, select, summary {
@@ -55,7 +61,7 @@
   }
 
   :where(button, a, input, select, textarea, summary):focus-visible {
-    outline: 2px solid #0d9488;
+    outline: 2px solid var(--color-marca-600);
     outline-offset: 2px;
   }
 

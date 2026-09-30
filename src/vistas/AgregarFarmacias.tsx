@@ -83,13 +83,13 @@ export function AgregarFarmacias({ abierto, vendedorId, onCerrar, onAgregadas }:
             {lista.map((f) => (
               <li key={f.codigo_interno}>
                 <label className="flex cursor-pointer items-start gap-3 px-3 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <input type="checkbox" checked={marcadas.has(f.codigo_interno)} onChange={() => alternar(f.codigo_interno)} className="mt-1 h-4 w-4 accent-teal-600" />
+                  <input type="checkbox" checked={marcadas.has(f.codigo_interno)} onChange={() => alternar(f.codigo_interno)} className="mt-1 h-4 w-4 accent-marca-600" />
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-semibold">{f.nombre_comercial}</span>
                     <span className="block truncate text-xs text-slate-500">
                       {[f.codigo_interno, f.rif, f.municipio ?? f.estado_geografico, f.bandera].filter(Boolean).join(' · ')}
                     </span>
-                    {f.vendedores > 0 && <span className="block text-[11px] text-slate-400">La atiende{f.vendedores > 1 ? `n ${f.vendedores} vendedores` : ' 1 vendedor'} más</span>}
+                    {f.vendedores > 0 && <span className="block text-xs text-slate-400">La atiende{f.vendedores > 1 ? `n ${f.vendedores} vendedores` : ' 1 vendedor'} más</span>}
                   </span>
                 </label>
               </li>

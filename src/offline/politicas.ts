@@ -185,3 +185,46 @@ export function bonificaciones(reglas: ReglaComercial[], ctx: ContextoPedido): {
   }
   return salida;
 }
+
+export interface CondicionPedido {
+  /** La condición de pedido con mayor descuento que ya se cumple (si hay). */
+  aplicada: { regla: ReglaComercial; pct: number } | null;
+  /** La siguiente condición de mayor descuento que aún no se cumple, con lo que falta. */
+  siguiente: { regla: ReglaComercial; faltantes: Faltantes } | null;
+}
+
+/**
+ * Descuento automático del pedido según las condiciones comerciales (alcance "pedido"): se aplica la de mayor % que se
+ * cumple (mínimo de SKU distintos, de unidades, o ambos) y se informa la siguiente para motivar a completar el pedido.
+ */
+export function condicionDelPedido(reglas: ReglaComercial[], ctx: ContextoPedido): CondicionPedido {
+  const enAlcance = reglas.filter((r) => r.alcance === 'pedido' && reglaEnAlcance(r, ctx));
+  let aplicada: CondicionPedido['aplicada'] = null;
+  let siguiente: CondicionPedido['siguiente'] = null;
+  for (const r of enAlcance) {
+    const f = faltantesRegla(r, ctx);
+    const cumple = f.skus === 0 && f.unidades === 0 && f.unidades_categoria === 0;
+    if (cumple) {
+      if (!aplicada || r.descuento_max_pct > aplicada.pct) aplicada = { regla: r, pct: r.descuento_max_pct };
+    }
+  }
+  for (const r of enAlcance) {
+    if (r.descuento_max_pct <= (aplicada?.pct ?? 0)) continue;
+    const f = faltantesRegla(r, ctx);
+    if (f.skus === 0 && f.unidades === 0 && f.unidades_categoria === 0) continue;
+    const esfuerzo = (x: Faltantes) => x.skus * 10 + x.unidades;
+    // La más cercana de alcanzar; a igual esfuerzo, la de mayor descuento.
+    if (!siguiente || esfuerzo(f) < esfuerzo(siguiente.faltantes) || (esfuerzo(f) === esfuerzo(siguiente.faltantes) && r.descuento_max_pct > siguiente.regla.descuento_max_pct)) {
+      siguiente = { regla: r, faltantes: f };
+    }
+  }
+  return { aplicada, siguiente };
+}
+
+/** "5 productos distintos y 100 unidades" / "Sin mínimo". */
+export function describirRequisitos(r: Pick<ReglaComercial, 'min_skus_distintos' | 'min_unidades_totales'>): string {
+  const partes: string[] = [];
+  if (r.min_skus_distintos) partes.push(`${r.min_skus_distintos} producto${r.min_skus_distintos === 1 ? '' : 's'} distinto${r.min_skus_distintos === 1 ? '' : 's'}`);
+  if (r.min_unidades_totales) partes.push(`${r.min_unidades_totales} unidades`);
+  return partes.length ? `Desde ${partes.join(' y ')}` : 'Sin mínimo';
+}

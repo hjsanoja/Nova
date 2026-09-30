@@ -1,4 +1,4 @@
-import { BarChart3, ClipboardPlus, CheckCircle2, Database, LayoutDashboard, Pill, Settings, ShoppingBag, Users } from 'lucide-react';
+import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, Pill, Settings, ShoppingBag, ShoppingCart, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { RolUsuario } from '../../types/pharmacy';
 
@@ -13,24 +13,38 @@ export interface TabDef {
   principal?: boolean;
 }
 
-const INICIO = (label: string): TabDef => ({ id: 'inicio', label, corto: 'Inicio', icon: LayoutDashboard, grupo: 'Operación', principal: true });
-const CAPTURA: TabDef = { id: 'captura', label: 'Tomar pedido', corto: 'Pedido', icon: ClipboardPlus, grupo: 'Operación', principal: true };
-const POR_PROCESAR: TabDef = { id: 'por_procesar', label: 'Por procesar', corto: 'Procesar', icon: CheckCircle2, grupo: 'Operación', principal: true };
-const PEDIDOS = (label: string, principal = false): TabDef => ({ id: 'pedidos', label, corto: 'Pedidos', icon: ShoppingBag, grupo: 'Operación', principal });
-const CLIENTES = (label: string, principal = false): TabDef => ({ id: 'clientes', label, corto: 'Clientes', icon: Users, grupo: 'Consulta', principal });
-const CATALOGO: TabDef = { id: 'catalogo', label: 'Catálogo', corto: 'Catálogo', icon: Pill, grupo: 'Consulta' };
-const REPORTES = (principal = false): TabDef => ({ id: 'reportes', label: 'Reportes', corto: 'Reportes', icon: BarChart3, grupo: 'Consulta', principal });
-const DATOS: TabDef = { id: 'datos', label: 'Cargar y editar datos', corto: 'Datos', icon: Database, grupo: 'Administración', principal: true };
-const CONFIG: TabDef = { id: 'config', label: 'Configuración', corto: 'Ajustes', icon: Settings, grupo: 'Administración' };
+/*
+ * Menú por rol, en cuatro grupos fijos (el mismo orden para todos):
+ *   Ventas              · lo del día: resumen, pedir, pedidos, mesa de transferencias
+ *   Clientes y productos · consulta
+ *   Gestión              · reportes, condiciones comerciales y datos maestros (solo quien administra)
+ *   Cuenta               · configuración personal y del sistema
+ * En el móvil la barra inferior muestra hasta 4 módulos principales + "Más".
+ */
+const T = {
+  inicio: (label = 'Resumen'): TabDef => ({ id: 'inicio', label, corto: 'Inicio', icon: LayoutDashboard, grupo: 'Ventas' }),
+  pedir: { id: 'captura', label: 'Nuevo pedido', corto: 'Pedir', icon: ShoppingCart, grupo: 'Ventas' } as TabDef,
+  pedidos: (label = 'Pedidos'): TabDef => ({ id: 'pedidos', label, corto: 'Pedidos', icon: ShoppingBag, grupo: 'Ventas' }),
+  porProcesar: { id: 'por_procesar', label: 'Por procesar', corto: 'Procesar', icon: CheckCircle2, grupo: 'Ventas' } as TabDef,
+  clientes: (label = 'Clientes'): TabDef => ({ id: 'clientes', label, corto: 'Clientes', icon: Users, grupo: 'Clientes y productos' }),
+  catalogo: { id: 'catalogo', label: 'Catálogo', corto: 'Catálogo', icon: Pill, grupo: 'Clientes y productos' } as TabDef,
+  reportes: { id: 'reportes', label: 'Reportes', corto: 'Reportes', icon: BarChart3, grupo: 'Gestión' } as TabDef,
+  condiciones: { id: 'condiciones', label: 'Condiciones comerciales', corto: 'Condiciones', icon: BadgePercent, grupo: 'Gestión' } as TabDef,
+  datos: { id: 'datos', label: 'Datos maestros', corto: 'Datos', icon: Database, grupo: 'Gestión' } as TabDef,
+  config: { id: 'config', label: 'Configuración', corto: 'Ajustes', icon: Settings, grupo: 'Cuenta' } as TabDef,
+};
+
+const principales = (tabs: TabDef[], ids: string[]) => tabs.map((t) => ({ ...t, principal: ids.includes(t.id) }));
 
 /** Módulos permitidos por rol. La seguridad real está en la base de datos (RLS); esto solo ordena lo que cada persona ve. */
 export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
-  vendedor: [INICIO('Inicio'), CAPTURA, CLIENTES('Mis clientes', true), PEDIDOS('Mis pedidos', true), CATALOGO, CONFIG],
-  teletransferencista: [POR_PROCESAR, PEDIDOS('Pedidos', true), CLIENTES('Clientes', true), { ...CATALOGO, principal: true }, CONFIG],
-  gerente: [INICIO('Resumen'), REPORTES(true), PEDIDOS('Pedidos', true), CLIENTES('Clientes', true), CATALOGO, CONFIG],
-  admin: [INICIO('Resumen'), CAPTURA, POR_PROCESAR, PEDIDOS('Pedidos'), CLIENTES('Clientes', true), CATALOGO, REPORTES(), DATOS, CONFIG].map((t) =>
-    // En móvil: Resumen, Por procesar, Clientes y Datos; lo demás en "Más".
-    ['inicio', 'por_procesar', 'clientes', 'datos'].includes(t.id) ? { ...t, principal: true } : { ...t, principal: false }
+  // El vendedor pide desde el catálogo de "Nuevo pedido": no necesita un catálogo aparte.
+  vendedor: principales([T.inicio('Inicio'), T.pedir, T.pedidos('Mis pedidos'), T.clientes('Mis clientes'), T.config], ['inicio', 'captura', 'pedidos', 'clientes']),
+  teletransferencista: principales([T.porProcesar, T.pedidos(), T.clientes(), T.catalogo, T.config], ['por_procesar', 'pedidos', 'clientes', 'catalogo']),
+  gerente: principales([T.inicio(), T.pedidos(), T.clientes(), T.catalogo, T.reportes, T.condiciones, T.config], ['inicio', 'reportes', 'pedidos', 'clientes']),
+  admin: principales(
+    [T.inicio(), T.pedir, T.pedidos(), T.porProcesar, T.clientes(), T.catalogo, T.reportes, T.condiciones, T.datos, T.config],
+    ['inicio', 'por_procesar', 'pedidos', 'datos']
   ),
 };
 

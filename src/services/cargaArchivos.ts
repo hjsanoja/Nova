@@ -1,7 +1,8 @@
 // Lectura y validación de los archivos que carga el administrador (droguerías, farmacias, productos).
 // Regla: NUNCA se inventan datos. Si falta un dato obligatorio la fila se descarta y se dice por qué; si falta uno
 // opcional queda vacío (antes se rellenaban RIF, GPS, correos, páginas web y códigos de barras de ejemplo).
-import type { Cliente, Drogueria, Producto } from '../types/pharmacy';
+import type { Cliente, ClienteDrogueriaAlias, Drogueria, Producto, ProductoDrogueriaMapeo } from '../types/pharmacy';
+import type { VentaArchivo } from './nubeV3';
 import { crearLectorColumnas } from './importUtils';
 
 export type FilaCsv = Record<string, string>;
@@ -256,4 +257,67 @@ export function fechaVenta(raw: string, mesDelArchivo?: string): string | null {
   const iso = `${a}-${m!.padStart(2, '0')}-${d!.padStart(2, '0')}`;
   const f = new Date(`${iso}T00:00:00Z`);
   return Number.isNaN(f.getTime()) || f.toISOString().slice(0, 10) !== iso ? null : iso;
+}
+
+/** Reporte de ventas de una droguería. Obligatorios: droguería, código de producto (o Cod SAP), fecha y unidades. */
+export function prepararVentas(leido: CsvLeido, opciones: { archivo: string; mesDelArchivo?: string }): Preparacion<VentaArchivo> {
+  const col = crearLectorColumnas(leido.filas[0]);
+  const registros: VentaArchivo[] = [];
+  const descartes: Descarte[] = [];
+  leido.filas.forEach((f, i) => {
+    const linea = leido.lineas[i] ?? i + 2;
+    const drogueria = col(f, ['Drogueria', 'DROGUERIA', 'Droguería', 'NOMBRE_DROGUERIA']).trim();
+    const codigoProducto = col(f, ['Codigo Producto', 'Codigo_Producto', 'CODIGO_PRODUCTO', 'COD PRODUCTO', 'COD_ARTICULO']).trim();
+    const codSap = col(f, ['Cod Sap', 'Cod_Sap', 'COD_SAP', 'COD SAP', 'CodSap']).trim();
+    const fechaRaw = col(f, ['Fecha', 'FECHA', 'FECHA_PEDIDO', 'PERIODO', 'MES', 'DIA']).trim();
+    const unidadesRaw = col(f, ['Unidades', 'UNIDADES', 'Cantidad', 'CANTIDAD']).trim();
+    if (!drogueria) return descartes.push({ linea, motivo: 'Falta la droguería' });
+    if (!codigoProducto && !codSap) return descartes.push({ linea, motivo: 'Falta el código del producto' });
+    const fecha = fechaRaw ? fechaVenta(fechaRaw, opciones.mesDelArchivo) : opciones.mesDelArchivo ? `${opciones.mesDelArchivo}-15` : null;
+    if (!fecha) return descartes.push({ linea, motivo: fechaRaw ? `Fecha no válida: "${fechaRaw}"` : 'Falta la fecha (y el nombre del archivo no indica el mes)' });
+    const unidades = numero(unidadesRaw);
+    if (unidades === null) return descartes.push({ linea, motivo: unidadesRaw ? `Unidades no numéricas: "${unidadesRaw}"` : 'Faltan las unidades' });
+    registros.push({
+      archivo_origen: opciones.archivo,
+      fecha_pedido: fecha,
+      nombre_drogueria: drogueria,
+      cod_cliente_drogueria: col(f, ['Cod Cliente', 'Cod_Cliente', 'COD_CLIENTE', 'CODIGO_CLIENTE']).trim() || undefined,
+      nombre_cliente: col(f, ['Nombre_cliente', 'Nombre Cliente', 'NOMBRE_CLIENTE', 'CLIENTE', 'Farmacia']).trim() || undefined,
+      codigo_producto_drogueria: codigoProducto || undefined,
+      nombre_producto: col(f, ['Nombre Producto', 'Nombre_Producto', 'NOMBRE_PRODUCTO', 'PRODUCTO', 'Descripcion']).trim() || undefined,
+      cod_sap: codSap || undefined,
+      cantidad_facturada: Math.round(unidades),
+    });
+  });
+  return { registros, descartes, repetidas: 0 };
+}
+
+/**
+ * Homologación de productos: Drogueria; Cod SAP; Codigo en la drogueria; Descripcion en la drogueria.
+ * (Mismas columnas que el CSV que se descarga en Homologación: se puede descargar, corregir y volver a cargar.)
+ */
+export function prepararHomologacionProductos(leido: CsvLeido): Preparacion<ProductoDrogueriaMapeo> {
+  return preparar<ProductoDrogueriaMapeo>(leido, (m) => `${m.drogueria}|${m.codigo_producto_drogueria}`, (f, col) => {
+    const drogueria = col(f, ['Drogueria', 'Droguería', 'DROGUERIA']).trim();
+    const sku = col(f, ['Cod SAP', 'Cod Sap', 'COD_SAP', 'SKU']).trim();
+    const codigo = col(f, ['Codigo en la drogueria', 'Código en la droguería', 'Codigo Producto', 'CODIGO_PRODUCTO', 'Codigo drogueria']).trim();
+    if (!drogueria) return 'Falta la droguería';
+    if (!sku) return 'Falta el Cod SAP';
+    if (!codigo) return `Falta el código de ${drogueria} para ${sku}`;
+    return { id: `${drogueria}|${codigo}`, drogueria, cod_sap: sku, codigo_producto_drogueria: codigo, nombre_producto_drogueria: col(f, ['Descripcion en la drogueria', 'Descripción en la droguería', 'Nombre Producto', 'Descripcion']).trim() || undefined };
+  });
+}
+
+/** Homologación de farmacias: Drogueria; Codigo interno; Cuenta en la drogueria; Nombre en la drogueria. */
+export function prepararHomologacionFarmacias(leido: CsvLeido): Preparacion<ClienteDrogueriaAlias> {
+  return preparar<ClienteDrogueriaAlias>(leido, (a) => `${a.drogueria}|${a.cod_cliente_drogueria || a.nombre_cliente_drogueria}`, (f, col) => {
+    const drogueria = col(f, ['Drogueria', 'Droguería', 'DROGUERIA']).trim();
+    const ident01 = col(f, ['Codigo interno', 'Código interno', 'ident01', 'IDENT01']).trim();
+    const cuenta = col(f, ['Cuenta en la drogueria', 'Cuenta en la droguería', 'Cod Cliente', 'COD_CLIENTE']).trim();
+    const nombre = col(f, ['Nombre en la drogueria', 'Nombre en la droguería', 'Nombre_cliente', 'Nombre Cliente']).trim();
+    if (!drogueria) return 'Falta la droguería';
+    if (!ident01) return 'Falta el código interno de la farmacia';
+    if (!cuenta && !nombre) return `Falta la cuenta o el nombre en ${drogueria} para ${ident01}`;
+    return { id: `${drogueria}|${cuenta || nombre}`, cliente_ident01: ident01, drogueria, cod_cliente_drogueria: cuenta, nombre_cliente_drogueria: nombre || cuenta, verificado: true };
+  });
 }

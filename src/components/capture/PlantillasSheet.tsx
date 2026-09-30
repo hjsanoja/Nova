@@ -39,8 +39,8 @@ export const PlantillasSheet: React.FC<Props> = ({ abierto, clienteId, onCerrar,
       <ul className="space-y-2">
         {ultimo && (
           <li>
-            <button type="button" onClick={() => onAplicar(ultimo.items, `Último pedido ${ultimo.pedido.correlativo}`)} className="flex min-h-14 w-full items-center gap-3 rounded-xl bg-teal-50 px-3 text-left dark:bg-teal-950/40">
-              <History className="h-5 w-5 shrink-0 text-teal-700 dark:text-teal-300" />
+            <button type="button" onClick={() => onAplicar(ultimo.items, `Último pedido ${ultimo.pedido.correlativo}`)} className="flex min-h-14 w-full items-center gap-3 rounded-xl bg-marca-50 px-3 text-left dark:bg-marca-950/40">
+              <History className="h-5 w-5 shrink-0 text-marca-700 dark:text-marca-300" />
               <span className="min-w-0">
                 <span className="block font-semibold text-slate-900 dark:text-white">Repetir el último pedido</span>
                 <span className="block truncate text-xs text-slate-500">{ultimo.pedido.correlativo} · {ultimo.items.length} productos</span>

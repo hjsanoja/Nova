@@ -15,7 +15,7 @@ interface Props {
 }
 
 const campo =
-  'min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white';
+  'min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-marca-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white';
 
 /** Selector de farmacia + alta de prospecto en campo (regla 4). */
 export const ClienteSheet: React.FC<Props> = ({ abierto, onCerrar, onElegir }) => {
@@ -65,7 +65,7 @@ export const ClienteSheet: React.FC<Props> = ({ abierto, onCerrar, onElegir }) =
           {error && <p role="alert" className="text-sm text-rose-600">{error}</p>}
           <div className="grid grid-cols-2 gap-2">
             <button type="button" onClick={() => setNueva(false)} className="min-h-12 rounded-xl bg-slate-100 font-bold text-slate-800 dark:bg-slate-800 dark:text-slate-100">Cancelar</button>
-            <button type="submit" className="min-h-12 rounded-xl bg-teal-600 font-bold text-white">Guardar</button>
+            <button type="submit" className="min-h-12 rounded-xl bg-marca-700 font-bold text-white">Guardar</button>
           </div>
         </form>
       ) : (
@@ -82,14 +82,14 @@ export const ClienteSheet: React.FC<Props> = ({ abierto, onCerrar, onElegir }) =
                     <span className="block truncate font-semibold text-slate-900 dark:text-white">{c.nombre_comercial}</span>
                     <span className="block truncate text-xs text-slate-500">{[c.rif, c.brick].filter(Boolean).join(' · ')}</span>
                   </span>
-                  {c.estado_validacion === 'prospecto_pendiente' && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">Prospecto</span>}
-                  {c.segmento === 'vip' && <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-bold text-violet-800 dark:bg-violet-950 dark:text-violet-300">VIP</span>}
+                  {c.estado_validacion === 'prospecto_pendiente' && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-300">Prospecto</span>}
+                  {c.segmento === 'vip' && <span className="shrink-0 rounded-full bg-marca-100 px-2 py-0.5 text-xs font-bold text-marca-800 dark:bg-marca-950 dark:text-marca-300">VIP</span>}
                 </button>
               </li>
             ))}
             {clientes.length === 0 && <li className="py-6 text-center text-sm text-slate-500">Sin resultados.</li>}
           </ul>
-          <button type="button" onClick={() => setNueva(true)} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-teal-500 font-bold text-teal-700 dark:text-teal-300">
+          <button type="button" onClick={() => setNueva(true)} className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dashed border-marca-500 font-bold text-marca-700 dark:text-marca-300">
             <Plus className="h-4 w-4" /> Nueva farmacia (prospecto)
           </button>
         </div>

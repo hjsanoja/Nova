@@ -22,6 +22,7 @@ const PorProcesarVista = lazy(() => import('./vistas/PorProcesarVista').then((m)
 const CatalogoVista = lazy(() => import('./vistas/CatalogoVista').then((m) => ({ default: m.CatalogoVista })));
 const ReportesVista = lazy(() => import('./vistas/ReportesVista').then((m) => ({ default: m.ReportesVista })));
 const DatosVista = lazy(() => import('./vistas/DatosVista').then((m) => ({ default: m.DatosVista })));
+const CondicionesVista = lazy(() => import('./vistas/CondicionesVista').then((m) => ({ default: m.CondicionesVista })));
 const ConfigVista = lazy(() => import('./vistas/config/ConfigVista').then((m) => ({ default: m.ConfigVista })));
 
 const leerTabDelHash = () => window.location.hash.replace(/^#\/?/, '');
@@ -31,10 +32,10 @@ const Cargando = () => (
     <div className="h-7 w-56 rounded-lg bg-slate-200 dark:bg-slate-800" />
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="h-20 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+        <div key={i} className="h-20 rounded-xl bg-slate-200 dark:bg-slate-800" />
       ))}
     </div>
-    <div className="h-56 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+    <div className="h-56 rounded-xl bg-slate-200 dark:bg-slate-800" />
   </div>
 );
 
@@ -150,6 +151,7 @@ function AppContent() {
               {tabActiva === 'por_procesar' && <PorProcesarVista usuario={usuarioActual} irATab={irATab} />}
               {tabActiva === 'catalogo' && <CatalogoVista usuario={usuarioActual} />}
               {tabActiva === 'reportes' && <ReportesVista usuario={usuarioActual} />}
+              {tabActiva === 'condiciones' && <CondicionesVista usuario={usuarioActual} />}
               {tabActiva === 'datos' && <DatosVista usuario={usuarioActual} esDemo={esDemo} />}
               {tabActiva === 'config' && (
                 <ConfigVista usuario={usuarioActual} irATab={irATab} esDemo={esDemo} onCerrarSesion={handleCerrarSesion} onConexionCambiada={() => setConectado(getStoredSupabaseConfig().isConnected)} onUsuarioActualizado={setUsuarioActual} />

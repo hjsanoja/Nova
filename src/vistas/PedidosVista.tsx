@@ -175,7 +175,7 @@ function Detalle({
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {lineas.map((l) => (
               <tr key={l.id}>
-                <td className="px-2.5 py-1.5"><span className="font-semibold">{l.nombre}</span><span className="block text-[11px] text-slate-400">{l.sku}{l.unidades_pendientes > 0 && l.unidades_confirmadas != null ? ` · ${MOTIVOS[l.motivo_ajuste] ?? ''}` : ''}</span></td>
+                <td className="px-2.5 py-1.5"><span className="font-semibold">{l.nombre}</span><span className="block text-xs text-slate-400">{l.sku}{l.unidades_pendientes > 0 && l.unidades_confirmadas != null ? ` · ${MOTIVOS[l.motivo_ajuste] ?? ''}` : ''}</span></td>
                 <td className="px-2 text-right">{l.unidades_solicitadas}</td>
                 <td className={`px-2 text-right ${l.unidades_confirmadas != null && l.unidades_pendientes > 0 ? 'font-semibold text-amber-600' : ''}`}>{l.unidades_confirmadas ?? '—'}</td>
               </tr>
@@ -187,8 +187,8 @@ function Detalle({
       {p.observaciones && <p className="text-xs text-slate-500">Nota: {p.observaciones}</p>}
 
       {puedeDerivar && (
-        <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 dark:border-teal-900 dark:bg-teal-950/30">
-          <p className="mb-2 flex items-center gap-1.5 text-xs font-bold text-teal-900 dark:text-teal-200"><CornerDownRight className="h-4 w-4" />Quedaron {pendientes.reduce((a, l) => a + l.unidades_pendientes, 0)} unidades sin despachar</p>
+        <div className="rounded-xl border border-marca-200 bg-marca-50 p-3 dark:border-marca-900 dark:bg-marca-950/30">
+          <p className="mb-2 flex items-center gap-1.5 text-xs font-bold text-marca-900 dark:text-marca-200"><CornerDownRight className="h-4 w-4" />Quedaron {pendientes.reduce((a, l) => a + l.unidades_pendientes, 0)} unidades sin despachar</p>
           <div className="flex flex-wrap gap-2">
             <select value={destino} onChange={(e) => setDestino(e.target.value)} aria-label="Droguería destino" className={`${estiloInput} flex-1`}>
               <option value="">Enviar lo pendiente a…</option>

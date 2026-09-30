@@ -210,9 +210,9 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
         <section className="min-w-0 space-y-3">
           {/* Farmacia y droguería */}
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,14rem)]">
-            <button type="button" onClick={() => setHojaCliente(true)} className="flex min-h-14 items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-left dark:border-slate-700 dark:bg-slate-900">
+            <button type="button" onClick={() => setHojaCliente(true)} className="flex min-h-14 items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 text-left dark:border-slate-700 dark:bg-slate-900">
               <span className="min-w-0">
-                <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Farmacia</span>
+                <span className="block text-xs font-bold uppercase tracking-wider text-slate-400">Farmacia</span>
                 <span className="block truncate font-bold text-slate-900 dark:text-white">{cliente?.nombre_comercial ?? 'Elegir farmacia'}</span>
                 {cliente && (
                   <span className="block truncate text-xs text-slate-500">
@@ -227,7 +227,7 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
               <select
                 value={carrito.drogueria_id ?? ''}
                 onChange={(e) => dispatch({ tipo: 'drogueria', id: e.target.value || null })}
-                className="min-h-14 w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 pr-10 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                className="min-h-14 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-10 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-marca-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
               >
                 {droguerias.length === 0 && <option value="">Sin droguerías</option>}
                 {droguerias.map((d) => (
@@ -252,22 +252,22 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
                   onChange={(e) => setConsulta(e.target.value)}
                   placeholder="Nombre, molécula, SKU o código de barras"
                   aria-label="Buscar producto"
-                  className="min-h-14 w-full rounded-2xl border border-slate-200 bg-white pl-12 pr-4 text-base text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                  className="min-h-14 w-full rounded-xl border border-slate-200 bg-white pl-12 pr-4 text-base text-slate-900 focus:outline-none focus:ring-2 focus:ring-marca-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
                 />
               </div>
-              <button type="button" onClick={() => setHojaScanner(true)} aria-label="Escanear código de barras" className="inline-flex min-h-14 w-14 items-center justify-center rounded-2xl bg-teal-600 text-white shadow-sm active:scale-95">
+              <button type="button" onClick={() => setHojaScanner(true)} aria-label="Escanear código de barras" className="inline-flex min-h-14 w-14 items-center justify-center rounded-xl bg-marca-700 text-white active:scale-95">
                 <ScanLine className="h-6 w-6" />
               </button>
             </div>
             <div className="mt-2 flex gap-2 overflow-x-auto scrollbar-none">
               <button type="button" onClick={() => void sugerir()} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl bg-white px-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700">
-                <Sparkles className="h-4 w-4 text-teal-600" /> Sugerido
+                <Sparkles className="h-4 w-4 text-marca-600" /> Sugerido
               </button>
               <button type="button" onClick={() => setHojaPlantillas(true)} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl bg-white px-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700">
-                <Bookmark className="h-4 w-4 text-teal-600" /> Plantillas
+                <Bookmark className="h-4 w-4 text-marca-600" /> Plantillas
               </button>
               <button type="button" onClick={hacerCheckin} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl bg-white px-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-200 dark:ring-slate-700">
-                <LocateFixed className="h-4 w-4 text-teal-600" /> Check-in
+                <LocateFixed className="h-4 w-4 text-marca-600" /> Check-in
               </button>
             </div>
           </div>
@@ -279,11 +279,11 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
               const unidades = enCarrito.get(p.id);
               const paso = Math.max(1, p.empaque_minimo);
               return (
-                <li key={p.id} className="cv-auto flex min-h-[4.5rem] items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                <li key={p.id} className="cv-auto flex min-h-[4.5rem] items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                   <button type="button" onClick={() => dispatch({ tipo: 'agregar', producto: p })} className="min-w-0 flex-1 text-left">
                     <span className="block truncate font-semibold text-slate-900 dark:text-white">
                       {p.nombre_comercial}
-                      {p.es_prioritario && <span className="ml-1.5 align-middle text-[10px] font-bold uppercase text-amber-600">Prioritario</span>}
+                      {p.es_prioritario && <span className="ml-1.5 align-middle text-xs font-bold uppercase text-amber-600">Prioritario</span>}
                     </span>
                     <span className="block truncate text-xs text-slate-500">
                       {[p.presentacion, p.sku].filter(Boolean).join(' · ')} · empaque x{paso}
@@ -294,22 +294,22 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
                       <button type="button" aria-label="Restar" onClick={() => dispatch({ tipo: 'unidades', productoId: p.id, unidades: unidades - paso })} className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800">
                         <Minus className="h-4 w-4" />
                       </button>
-                      <span className="w-10 text-center font-mono text-lg font-bold text-teal-700 dark:text-teal-300">{unidades}</span>
-                      <button type="button" aria-label="Sumar" onClick={() => dispatch({ tipo: 'unidades', productoId: p.id, unidades: unidades + paso })} className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-teal-600 text-white">
+                      <span className="w-10 text-center font-mono text-lg font-bold text-marca-700 dark:text-marca-300">{unidades}</span>
+                      <button type="button" aria-label="Sumar" onClick={() => dispatch({ tipo: 'unidades', productoId: p.id, unidades: unidades + paso })} className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-marca-700 text-white">
                         <Plus className="h-4 w-4" />
                       </button>
                     </div>
                   ) : (
-                    <button type="button" aria-label={`Agregar ${p.nombre_comercial}`} onClick={() => dispatch({ tipo: 'agregar', producto: p })} className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-teal-600 text-white active:scale-95">
+                    <button type="button" aria-label={`Agregar ${p.nombre_comercial}`} onClick={() => dispatch({ tipo: 'agregar', producto: p })} className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-marca-700 text-white active:scale-95">
                       <Plus className="h-5 w-5" />
                     </button>
                   )}
                 </li>
               );
             })}
-            {consultaDiferida.trim() && resultados.length === 0 && <li className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700">Sin resultados para “{consultaDiferida}”.</li>}
+            {consultaDiferida.trim() && resultados.length === 0 && <li className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700">Sin resultados para “{consultaDiferida}”.</li>}
             {!consultaDiferida.trim() && comprados.length === 0 && (
-              <li className="flex items-center gap-3 rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-500 dark:border-slate-700">
+              <li className="flex items-center gap-3 rounded-xl border border-dashed border-slate-300 p-6 text-sm text-slate-500 dark:border-slate-700">
                 <MapPinCheck className="h-5 w-5 shrink-0 text-slate-400" />
                 Escribe para buscar en el catálogo. Funciona sin conexión.
               </li>
@@ -319,8 +319,8 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
 
         {/* Carrito fijo en tablet y PC */}
         {esTablet && (
-          <aside aria-label="Carrito" className="sticky top-[4.5rem] max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <h2 className="mb-3 font-display text-lg font-bold text-slate-900 dark:text-white">Carrito</h2>
+          <aside aria-label="Carrito" className="sticky top-[4.5rem] max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            <h2 className="mb-3 text-lg font-bold text-slate-900 dark:text-white">Carrito</h2>
             {panelCarrito}
           </aside>
         )}
@@ -331,7 +331,7 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
         <button
           type="button"
           onClick={() => setHojaCarrito(true)}
-          className="fixed inset-x-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-30 flex min-h-14 items-center justify-between rounded-2xl bg-teal-600 px-4 text-white shadow-xl active:scale-[0.99]"
+          className="fixed inset-x-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-30 flex min-h-14 items-center justify-between rounded-xl bg-marca-700 px-4 text-white shadow-xl active:scale-[0.99]"
         >
           <span className="flex items-center gap-2 font-bold">
             <ShoppingBasket className="h-5 w-5" />
@@ -356,8 +356,8 @@ export const PedidoCapturaScreen: React.FC<Props> = ({ vendedorId, equipoId }) =
       <PlantillasSheet abierto={hojaPlantillas} clienteId={carrito.cliente_id} onCerrar={() => setHojaPlantillas(false)} onAplicar={(items, nombre) => void aplicarItems(items, nombre)} />
       <Sheet abierto={hojaNombrePlantilla} titulo="Guardar como plantilla" onCerrar={() => setHojaNombrePlantilla(false)}>
         <form onSubmit={guardarPlantilla} className="space-y-3">
-          <input autoFocus required value={nombrePlantilla} onChange={(e) => setNombrePlantilla(e.target.value)} placeholder="Ej. Reposición semanal" aria-label="Nombre de la plantilla" className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
-          <button type="submit" className="min-h-12 w-full rounded-xl bg-teal-600 font-bold text-white">Guardar</button>
+          <input autoFocus required value={nombrePlantilla} onChange={(e) => setNombrePlantilla(e.target.value)} placeholder="Ej. Reposición semanal" aria-label="Nombre de la plantilla" className="min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-marca-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white" />
+          <button type="submit" className="min-h-12 w-full rounded-xl bg-marca-700 font-bold text-white">Guardar</button>
         </form>
       </Sheet>
       {hojaScanner && (

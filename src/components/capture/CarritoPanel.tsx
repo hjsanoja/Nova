@@ -43,7 +43,7 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
       </div>
 
       {vacio ? (
-        <p className="rounded-2xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700">
+        <p className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500 dark:border-slate-700">
           Busca un producto, escanea un empaque o usa el sugerido para empezar.
         </p>
       ) : (
@@ -77,7 +77,7 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
                       value={l.unidades}
                       onFocus={(e) => e.currentTarget.select()}
                       onChange={(e) => dispatch({ tipo: 'unidades', productoId: l.producto.id, unidades: parseInt(e.target.value, 10) || 0 })}
-                      className="h-11 w-16 rounded-xl border border-slate-200 bg-white text-center font-mono text-lg font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                      className="h-11 w-16 rounded-xl border border-slate-200 bg-white text-center font-mono text-lg font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-marca-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                     />
                     <button type="button" aria-label="Sumar" className={boton} onClick={() => dispatch({ tipo: 'unidades', productoId: l.producto.id, unidades: l.unidades + paso })}>
                       <Plus className="h-4 w-4" />
@@ -97,7 +97,7 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
                       onFocus={(e) => e.currentTarget.select()}
                       onChange={(e) => dispatch({ tipo: 'descuento', productoId: l.producto.id, pct: parseFloat(e.target.value) || 0 })}
                       className={`h-11 w-16 rounded-xl border bg-white text-center font-mono font-bold focus:outline-none focus:ring-2 dark:bg-slate-800 ${
-                        fuera ? 'border-amber-400 text-amber-700 focus:ring-amber-400 dark:text-amber-300' : 'border-slate-200 text-slate-900 focus:ring-teal-500 dark:border-slate-700 dark:text-white'
+                        fuera ? 'border-amber-400 text-amber-700 focus:ring-amber-400 dark:text-amber-300' : 'border-slate-200 text-slate-900 focus:ring-marca-500 dark:border-slate-700 dark:text-white'
                       }`}
                     />
                     %
@@ -117,16 +117,16 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
       {!vacio && (
         <fieldset className="space-y-2">
           <legend className="mb-1 text-xs font-bold uppercase tracking-wider text-slate-400">Condición comercial</legend>
-          <label className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border px-3 ${carrito.condicion_id === null ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30' : 'border-slate-200 dark:border-slate-700'}`}>
-            <input type="radio" name="condicion" className="h-4 w-4 accent-teal-600" checked={carrito.condicion_id === null} onChange={() => dispatch({ tipo: 'condicion', id: null })} />
+          <label className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border px-3 ${carrito.condicion_id === null ? 'border-marca-500 bg-marca-50 dark:bg-marca-950/30' : 'border-slate-200 dark:border-slate-700'}`}>
+            <input type="radio" name="condicion" className="h-4 w-4 accent-marca-600" checked={carrito.condicion_id === null} onChange={() => dispatch({ tipo: 'condicion', id: null })} />
             <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">Sin condición especial</span>
           </label>
           {condiciones.map(({ regla, aplica, faltantes }) => (
-            <label key={regla.id} className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 ${carrito.condicion_id === regla.id ? 'border-teal-500 bg-teal-50 dark:bg-teal-950/30' : 'border-slate-200 dark:border-slate-700'}`}>
+            <label key={regla.id} className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 ${carrito.condicion_id === regla.id ? 'border-marca-500 bg-marca-50 dark:bg-marca-950/30' : 'border-slate-200 dark:border-slate-700'}`}>
               <input
                 type="radio"
                 name="condicion"
-                className="h-4 w-4 accent-teal-600"
+                className="h-4 w-4 accent-marca-600"
                 checked={carrito.condicion_id === regla.id}
                 onChange={() => {
                   dispatch({ tipo: 'condicion', id: regla.id });
@@ -136,7 +136,7 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
               />
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-semibold text-slate-800 dark:text-slate-100">
-                  {regla.nombre} <span className="font-mono text-teal-700 dark:text-teal-300">· hasta {regla.descuento_max_pct}%</span>
+                  {regla.nombre} <span className="font-mono text-marca-700 dark:text-marca-300">· hasta {regla.descuento_max_pct}%</span>
                 </span>
                 <span className={`block text-xs ${aplica ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-300'}`}>{describirFaltantes(faltantes)}</span>
               </span>
@@ -152,7 +152,7 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
           value={carrito.observaciones}
           onChange={(e) => dispatch({ tipo: 'observaciones', texto: e.target.value })}
           placeholder="Notas para el transferencista"
-          className="w-full rounded-xl border border-slate-200 bg-white p-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          className="w-full rounded-xl border border-slate-200 bg-white p-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-marca-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
         />
       </label>
 
@@ -172,7 +172,7 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
         </div>
       )}
       {cliente && cliente.estado_validacion !== 'activo' && (
-        <div className="flex gap-2 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-200">
+        <div className="flex gap-2 rounded-xl border border-marca-200 bg-marca-50 p-3 text-sm text-marca-900 dark:border-marca-900 dark:bg-marca-950/40 dark:text-marca-200">
           <Info className="mt-0.5 h-4 w-4 shrink-0" />
           <p>Farmacia pendiente de validación: el pedido queda retenido hasta que se verifique su RIF y se homologue con una droguería.</p>
         </div>
@@ -180,7 +180,7 @@ export const CarritoPanel: React.FC<Props> = ({ carrito, dispatch, cliente, regl
 
       {/* Acciones siempre a la vista: quedan pegadas al fondo de la hoja / del panel al hacer scroll. */}
       <div className="sticky bottom-0 -mx-4 -mb-4 space-y-2 border-t border-slate-100 bg-white px-4 pb-4 pt-3 dark:border-slate-800 dark:bg-slate-900">
-        <button type="button" disabled={vacio || guardando} onClick={onEnviar} className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-teal-600 text-base font-bold text-white shadow-sm active:scale-[0.99] disabled:opacity-40">
+        <button type="button" disabled={vacio || guardando} onClick={onEnviar} className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-xl bg-marca-700 text-base font-bold text-white active:scale-[0.99] disabled:opacity-40">
           <Send className="h-5 w-5" /> Enviar pedido
         </button>
         <div className="grid grid-cols-2 gap-2">

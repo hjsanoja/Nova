@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Download } from 'lucide-react';
+import { CheckCircle2, Download, Upload } from 'lucide-react';
 import { getSupabaseClient } from '../../services/supabaseClient';
 import { Boton, Etiqueta, Tarjeta, Vacio, useAviso } from '../../components/ui/kit';
-import { descargarHomologacionesCsv } from '../../services/nubeV3';
+import { descargarHomologacionesCsv, importarHomologacion } from '../../services/nubeV3';
+import { leerCsv, prepararHomologacionFarmacias, prepararHomologacionProductos } from '../../services/cargaArchivos';
+import type { Preparacion } from '../../services/cargaArchivos';
+import { descargarCsv, elegirArchivo, useCargaArchivo } from '../../components/import/useCargaArchivo';
 
 interface PendCliente { drogueria_id: string; drogueria: string; cod_cliente_drogueria: string | null; nombre_cliente_drogueria: string; filas: number; unidades: number }
 interface PendProducto { drogueria_id: string; drogueria: string; cod_producto_drogueria: string; nombre_producto_drogueria: string | null; cod_sap_reportado: string | null; filas: number; unidades: number }
@@ -20,6 +23,7 @@ export function Pendientes() {
   const [estados, setEstados] = useState<Estado[]>([]);
   const [error, setError] = useState('');
   const { mostrar, nodo } = useAviso();
+  const carga = useCargaArchivo();
 
   const cargar = useCallback(async () => {
     if (!sb) return;
@@ -44,27 +48,51 @@ export function Pendientes() {
   const descargar = async (tipo: 'productos' | 'farmacias') => {
     try {
       const { csv, filas } = await descargarHomologacionesCsv(sb, tipo);
-      const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }));
-      const a = Object.assign(document.createElement('a'), { href: url, download: `homologacion_${tipo}_${new Date().toISOString().slice(0, 10)}.csv` });
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      descargarCsv(`homologacion_${tipo}_${new Date().toISOString().slice(0, 10)}.csv`, csv);
       mostrar({ tipo: 'ok', texto: `Descargadas ${filas.toLocaleString()} homologaciones de ${tipo}.` });
     } catch (e: unknown) {
       mostrar({ tipo: 'error', texto: e instanceof Error ? e.message : String(e) });
     }
   };
 
+  // Mismo formato que la descarga: se puede descargar, completar en Excel y volver a cargar.
+  const cargarArchivo = async (tipo: 'productos' | 'farmacias') => {
+    const archivo = await elegirArchivo();
+    if (!archivo) return;
+    const leido = leerCsv(archivo.texto);
+    const prep: Preparacion<unknown> = tipo === 'productos' ? prepararHomologacionProductos(leido) : prepararHomologacionFarmacias(leido);
+    carga.pedir(
+      { titulo: `Cargar homologación de ${tipo}`, archivo: archivo.nombre, unidad: 'códigos', leidas: leido.filas.length, prep },
+      async (avance) => {
+        const r = await importarHomologacion(sb, tipo === 'productos' ? { mapeos: prep.registros as never } : { alias: prep.registros as never }, avance);
+        const guardadas = tipo === 'productos' ? r.productos : r.clientes;
+        const omitidas = r.omitidos.map((o) => Object.values(o).filter(Boolean).join(' · '));
+        return {
+          ok: omitidas.length === 0,
+          lineas: [
+            `Guardados: ${guardadas.toLocaleString()} códigos nuevos (los que ya estaban no se duplican).`,
+            ...(prep.descartes.length ? [`Descartados por datos incompletos: ${prep.descartes.length}.`] : []),
+            ...(omitidas.length ? [`Rechazados: ${omitidas.length} (droguería, ${tipo === 'productos' ? 'Cod SAP' : 'farmacia'} inexistente o código ya asignado a otro).`] : []),
+          ],
+          detalle: omitidas.slice(0, 100),
+        };
+      },
+      () => void cargar()
+    );
+  };
+
   return (
     <div className="space-y-3">
       {nodo}
+      {carga.nodo}
       <Tarjeta>
-        <p className="mb-1 text-sm font-bold">Tabla de homologación</p>
-        <p className="mb-2 text-xs text-slate-500">Tu código (Cod SAP o código interno) y el código que usa cada droguería. Un producto o farmacia puede tener varios códigos en una droguería; uno es el principal.</p>
+        <p className="mb-1 text-sm font-semibold">Tabla de homologación</p>
+        <p className="mb-3 text-sm text-slate-500">Se relaciona por <b>código</b>: tu Cod SAP (o código interno de la farmacia) y el código que usa cada droguería. Un producto puede tener varios códigos en una droguería. Descarga la tabla, complétala en Excel y vuelve a cargarla.</p>
         <div className="flex flex-wrap gap-2">
-          <Boton icono={Download} onClick={() => void descargar('productos')}>Productos por droguería</Boton>
-          <Boton icono={Download} onClick={() => void descargar('farmacias')}>Farmacias por droguería</Boton>
+          <Boton icono={Download} onClick={() => void descargar('productos')}>Descargar productos</Boton>
+          <Boton icono={Download} onClick={() => void descargar('farmacias')}>Descargar farmacias</Boton>
+          <Boton icono={Upload} onClick={() => void cargarArchivo('productos')}>Cargar productos</Boton>
+          <Boton icono={Upload} onClick={() => void cargarArchivo('farmacias')}>Cargar farmacias</Boton>
         </div>
       </Tarjeta>
       {estados.length > 0 && (
@@ -144,7 +172,7 @@ function Fila({ titulo, sub, buscar, asignar, alError }: { titulo: string; sub: 
       </div>
       {candidatos && (
         <ul className="mt-2 space-y-1">
-          {candidatos.length === 0 && <li className="text-xs text-slate-500">Sin candidatos parecidos: cárgalo primero en Cargar y editar datos.</li>}
+          {candidatos.length === 0 && <li className="text-xs text-slate-500">Sin candidatos parecidos: créalo primero en Datos maestros.</li>}
           {candidatos.map((c) => (
             <li key={c.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5 dark:bg-slate-800/60">
               <span className="min-w-0 truncate text-xs"><b>{c.nombre}</b> <span className="text-slate-500">{c.detalle}</span> <Etiqueta tono={c.score >= 0.6 ? 'verde' : 'gris'}>{Math.round(c.score * 100)}%</Etiqueta></span>

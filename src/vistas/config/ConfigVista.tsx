@@ -80,7 +80,7 @@ function Cuenta({ usuario, esDemo, onCerrarSesion }: { usuario: Usuario; esDemo:
       {nodo}
       <Tarjeta>
         <div className="flex items-center gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-teal-600 text-lg font-bold text-white">{usuario.nombre_completo.charAt(0).toUpperCase()}</span>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-marca-700 text-lg font-bold text-white">{usuario.nombre_completo.charAt(0).toUpperCase()}</span>
           <div className="min-w-0">
             <p className="truncate font-bold">{usuario.nombre_completo}</p>
             <p className="truncate text-xs text-slate-500">{usuario.email}</p>

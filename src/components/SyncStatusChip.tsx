@@ -14,9 +14,9 @@ export const SyncStatusChip: React.FC<{ onAbrirConfig?: () => void }> = ({ onAbr
   let tono = 'text-emerald-800 bg-emerald-50 border-emerald-200 dark:text-emerald-300 dark:bg-emerald-950 dark:border-emerald-900';
 
   if (s.sincronizando) {
-    color = 'bg-sky-500 animate-pulse';
+    color = 'bg-marca-500 animate-pulse';
     texto = 'Sincronizando…';
-    tono = 'text-sky-800 bg-sky-50 border-sky-200 dark:text-sky-300 dark:bg-sky-950 dark:border-sky-900';
+    tono = 'text-marca-800 bg-marca-50 border-marca-200 dark:text-marca-300 dark:bg-marca-950 dark:border-marca-900';
   } else if (!s.online) {
     color = 'bg-amber-500';
     texto = s.pendientes > 0 ? `Sin conexión · ${s.pendientes} guardado${s.pendientes === 1 ? '' : 's'}` : 'Sin conexión';
@@ -47,7 +47,7 @@ export const SyncStatusChip: React.FC<{ onAbrirConfig?: () => void }> = ({ onAbr
       <span className={`h-2.5 w-2.5 rounded-full ${color}`} aria-hidden />
       <span className="hidden sm:inline">{texto}</span>
       {s.pendientes > 0 && <span className="sm:hidden font-mono">{s.pendientes}</span>}
-      {s.errores > 0 && <span className="rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white">{s.errores}</span>}
+      {s.errores > 0 && <span className="rounded-full bg-rose-600 px-1.5 text-xs font-bold text-white">{s.errores}</span>}
     </button>
   );
 };

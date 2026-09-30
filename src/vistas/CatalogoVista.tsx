@@ -78,7 +78,7 @@ function Productos() {
             ))}
           </ul>
         )}
-        {lista.length > limite && <div className="border-t border-slate-100 p-2 text-center dark:border-slate-800"><button type="button" className="text-sm font-semibold text-teal-700 dark:text-teal-300" onClick={() => setLimite((l) => l + POR_PAGINA)}>Ver más ({lista.length - limite})</button></div>}
+        {lista.length > limite && <div className="border-t border-slate-100 p-2 text-center dark:border-slate-800"><button type="button" className="text-sm font-semibold text-marca-700 dark:text-marca-300" onClick={() => setLimite((l) => l + POR_PAGINA)}>Ver más ({lista.length - limite})</button></div>}
       </Tarjeta>
 
       <Sheet abierto={!!actual} titulo={actual?.nombre_comercial ?? ''} onCerrar={() => setAbierto(null)}>

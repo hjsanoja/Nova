@@ -262,6 +262,10 @@ CREATE TABLE IF NOT EXISTS dim_productos (
   deleted_at           timestamptz
 );
 CREATE INDEX IF NOT EXISTS idx_productos_ean ON dim_productos (ean13) WHERE ean13 IS NOT NULL;
+-- Fotos (URL pública en Supabase Storage u otra dirección). Opcionales: sin foto se muestran las iniciales.
+ALTER TABLE dim_productos ADD COLUMN IF NOT EXISTS foto_url text;
+ALTER TABLE dim_clientes  ADD COLUMN IF NOT EXISTS foto_url text;
+ALTER TABLE dim_usuarios  ADD COLUMN IF NOT EXISTS foto_url text;
 CREATE INDEX IF NOT EXISTS idx_productos_nombre_trgm ON dim_productos USING gin (nombre_comercial gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_productos_molecula_trgm ON dim_productos USING gin (principio_activo gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_productos_categoria ON dim_productos (categoria);
@@ -803,6 +807,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
       OR EXISTS (SELECT 1 FROM rel_cliente_vendedor r
                  WHERE r.cliente_id = p_cliente AND r.vendedor_id = auth.uid() AND r.activo AND r.deleted_at IS NULL)
       OR EXISTS (SELECT 1 FROM dim_clientes c WHERE c.id = p_cliente AND c.creado_por = auth.uid())
+$$;
+
+-- Farmacias visibles para un vendedor (su fichero + las que él creó), como conjunto: las políticas lo usan con
+-- `x IN (SELECT app.mis_clientes())`, que se calcula una vez por consulta y no una vez por fila.
+CREATE OR REPLACE FUNCTION app.mis_clientes() RETURNS SETOF uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT r.cliente_id FROM rel_cliente_vendedor r WHERE r.vendedor_id = auth.uid() AND r.activo AND r.deleted_at IS NULL
+  UNION
+  SELECT c.id FROM dim_clientes c WHERE c.creado_por = auth.uid()
 $$;
 
 CREATE OR REPLACE FUNCTION app.cfg_num(p_clave text, p_defecto numeric) RETURNS numeric
@@ -1803,18 +1816,19 @@ BEGIN
   IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
   WITH ins AS (
     INSERT INTO dim_productos (sku, ean13, nombre_comercial, presentacion, principio_activo, clase_terapeutica, categoria,
-                               laboratorio, equipo_id, empaque_minimo, es_prioritario, activo)
+                               laboratorio, equipo_id, empaque_minimo, es_prioritario, activo, foto_url)
     SELECT btrim(r->>'sku'), nullif(r->>'ean13', ''), coalesce(nullif(r->>'nombre_comercial', ''), r->>'sku'), nullif(r->>'presentacion', ''),
            nullif(r->>'principio_activo', ''), nullif(r->>'clase_terapeutica', ''), nullif(r->>'categoria', ''),
            nullif(r->>'laboratorio', ''), (SELECT e.id FROM dim_equipos e WHERE e.codigo = r->>'equipo'),
            greatest(coalesce((r->>'empaque_minimo')::integer, 1), 1), coalesce((r->>'es_prioritario')::boolean, false),
-           coalesce((r->>'activo')::boolean, true)
+           coalesce((r->>'activo')::boolean, true), nullif(btrim(r->>'foto_url'), '')
       FROM jsonb_array_elements(p) r WHERE coalesce(btrim(r->>'sku'), '') <> ''
     ON CONFLICT (sku) DO UPDATE SET ean13 = excluded.ean13, nombre_comercial = excluded.nombre_comercial,
         presentacion = excluded.presentacion, principio_activo = excluded.principio_activo,
         clase_terapeutica = excluded.clase_terapeutica, categoria = excluded.categoria, laboratorio = excluded.laboratorio,
         equipo_id = coalesce(excluded.equipo_id, dim_productos.equipo_id), empaque_minimo = excluded.empaque_minimo,
-        es_prioritario = excluded.es_prioritario, activo = excluded.activo, deleted_at = NULL
+        es_prioritario = excluded.es_prioritario, activo = excluded.activo, deleted_at = NULL,
+        foto_url = coalesce(excluded.foto_url, dim_productos.foto_url)
     RETURNING 1)
   SELECT count(*) INTO v_n FROM ins;
   RETURN v_n;
@@ -1866,6 +1880,11 @@ BEGIN
         dias_entrega = coalesce(excluded.dias_entrega, dim_droguerias.dias_entrega), activo = excluded.activo, deleted_at = NULL
     RETURNING 1)
   SELECT count(*) INTO v_n FROM ins;
+  -- Separador del archivo de pedidos (formulario de la droguería): solo si viene y es válido.
+  UPDATE dim_droguerias d SET formato_export = jsonb_set(d.formato_export, '{delimitador}', to_jsonb(r->>'delimitador'))
+    FROM jsonb_array_elements(p) r
+   WHERE d.codigo = upper(btrim(r->>'codigo')) AND r->>'delimitador' IN (';', ',', '|', E'\t')
+     AND d.formato_export->>'delimitador' IS DISTINCT FROM r->>'delimitador';
   RETURN v_n;
 END $$;
 
@@ -2123,7 +2142,7 @@ CREATE POLICY usuarios_admin ON dim_usuarios FOR ALL TO authenticated
 DROP POLICY IF EXISTS clientes_lectura ON dim_clientes;
 -- creado_por se evalúa sobre la propia fila: INSERT ... ON CONFLICT exige poder "leer" la fila nueva.
 CREATE POLICY clientes_lectura ON dim_clientes FOR SELECT TO authenticated
-  USING (creado_por = (SELECT auth.uid()) OR app.puede_ver_cliente(id));
+  USING ((SELECT app.es_staff()) OR creado_por = (SELECT auth.uid()) OR id IN (SELECT app.mis_clientes()));
 DROP POLICY IF EXISTS clientes_alta_campo ON dim_clientes;
 CREATE POLICY clientes_alta_campo ON dim_clientes FOR INSERT TO authenticated
   WITH CHECK ((SELECT app.rol()) = 'vendedor' OR (SELECT app.es_mesa()));
@@ -2148,7 +2167,7 @@ CREATE POLICY relcv_propio ON rel_cliente_vendedor FOR INSERT TO authenticated
 -- Pedidos: lectura cruzada entre equipos por farmacia asignada (regla 5); edición del vendedor solo mientras es editable.
 DROP POLICY IF EXISTS pedidos_lectura ON fact_pedidos;
 CREATE POLICY pedidos_lectura ON fact_pedidos FOR SELECT TO authenticated
-  USING (vendedor_id = (SELECT auth.uid()) OR app.puede_ver_cliente(cliente_id));
+  USING (vendedor_id = (SELECT auth.uid()) OR (SELECT app.es_staff()) OR cliente_id IN (SELECT app.mis_clientes()));
 DROP POLICY IF EXISTS pedidos_alta ON fact_pedidos;
 CREATE POLICY pedidos_alta ON fact_pedidos FOR INSERT TO authenticated
   WITH CHECK (vendedor_id = (SELECT auth.uid()) OR (SELECT app.es_admin()));
@@ -2199,7 +2218,7 @@ CREATE POLICY notif_leer ON notificaciones FOR UPDATE TO authenticated
 DROP POLICY IF EXISTS alertas_lectura ON alertas_comerciales;
 CREATE POLICY alertas_lectura ON alertas_comerciales FOR SELECT TO authenticated
   USING ((SELECT app.es_staff())
-         OR equipo_id IS NULL AND cliente_id IS NOT NULL AND app.puede_ver_cliente(cliente_id)
+         OR equipo_id IS NULL AND cliente_id IS NOT NULL AND cliente_id IN (SELECT app.mis_clientes())
          OR equipo_id = (SELECT equipo_id FROM dim_usuarios WHERE id = (SELECT auth.uid())));
 
 -- Ventas reportadas por las droguerías: solo lectura para el personal (se escriben con importar_ventas_drogueria).
@@ -2210,7 +2229,7 @@ CREATE POLICY ventas_lectura ON fact_ventas_drogueria FOR SELECT TO authenticate
 -- El consolidado mensual baja al dispositivo del vendedor solo para las farmacias que atiende (todos los equipos).
 DROP POLICY IF EXISTS compras_lectura ON fact_compras_mensual;
 CREATE POLICY compras_lectura ON fact_compras_mensual FOR SELECT TO authenticated
-  USING ((SELECT app.es_staff()) OR app.puede_ver_cliente(cliente_id));
+  USING ((SELECT app.es_staff()) OR cliente_id IN (SELECT app.mis_clientes()));
 
 DROP POLICY IF EXISTS audit_admin ON audit_log;
 CREATE POLICY audit_admin ON audit_log FOR SELECT TO authenticated USING ((SELECT app.es_admin()));
@@ -2306,7 +2325,8 @@ BEGIN
   IF p_usuario = auth.uid() AND (p_rol <> 'admin' OR NOT p_activo) THEN
     RAISE EXCEPTION 'No puedes quitarte a ti mismo el rol de administrador' USING ERRCODE = '42501';
   END IF;
-  UPDATE dim_usuarios SET rol = p_rol, equipo_id = v_equipo, activo = p_activo,
+  -- Activar a alguien dado de baja lo restaura.
+  UPDATE dim_usuarios SET rol = p_rol, equipo_id = v_equipo, activo = p_activo, deleted_at = CASE WHEN p_activo THEN NULL ELSE deleted_at END,
          nombre_completo = coalesce(nullif(btrim(p_nombre), ''), nombre_completo), telefono = coalesce(p_telefono, telefono)
    WHERE id = p_usuario;
   IF NOT FOUND THEN RAISE EXCEPTION 'El usuario no existe' USING ERRCODE = 'P0002'; END IF;
@@ -2392,6 +2412,56 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION farmacias_disponibles(text, integer) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION farmacias_disponibles(text, integer) TO authenticated;
+
+-- ------------------------------------------------------------------------------
+-- 14D. BAJA DE VARIOS REGISTROS A LA VEZ (selección múltiple en las pantallas del administrador)
+-- Baja lógica (deleted_at): los pedidos e historial que los mencionan se conservan y los dispositivos los retiran al
+-- sincronizar. Volver a cargar el mismo código (archivo o formulario) lo reactiva.
+-- ------------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION eliminar_registros(p_tipo text, p_claves text[]) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer := 0;
+        v_claves text[] := ARRAY(SELECT DISTINCT btrim(c) FROM unnest(coalesce(p_claves, ARRAY[]::text[])) c WHERE btrim(c) <> '');
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  IF p_tipo = 'clientes' THEN
+    UPDATE dim_clientes SET deleted_at = now() WHERE deleted_at IS NULL AND codigo_interno = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    UPDATE rel_cliente_vendedor r SET activo = false, deleted_at = now()
+      FROM dim_clientes c WHERE c.id = r.cliente_id AND c.codigo_interno = ANY (v_claves) AND r.deleted_at IS NULL;
+  ELSIF p_tipo = 'productos' THEN
+    UPDATE dim_productos SET deleted_at = now() WHERE deleted_at IS NULL AND sku = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSIF p_tipo = 'droguerias' THEN
+    UPDATE dim_droguerias SET deleted_at = now() WHERE deleted_at IS NULL AND codigo = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSIF p_tipo = 'reglas' THEN
+    UPDATE config_reglas_comerciales SET deleted_at = now(), activo = false WHERE deleted_at IS NULL AND id::text = ANY (v_claves);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSE
+    RAISE EXCEPTION 'Tipo inválido: %', p_tipo USING ERRCODE = '22023';
+  END IF;
+  INSERT INTO audit_log (usuario_id, accion, detalle)
+  VALUES (auth.uid(), 'registros_eliminados', jsonb_build_object('tipo', p_tipo, 'cantidad', v_n, 'claves', to_jsonb(v_claves[1:50])));
+  RETURN v_n;
+END $$;
+
+-- Usuarios: se desactivan y dan de baja (no pueden entrar ni ven datos). La cuenta de Supabase Auth se conserva: se borra,
+-- si hace falta, desde Authentication → Users. Nadie puede darse de baja a sí mismo.
+CREATE OR REPLACE FUNCTION admin_eliminar_usuarios(p_ids uuid[]) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer;
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  IF auth.uid() = ANY (p_ids) THEN RAISE EXCEPTION 'No puedes eliminar tu propia cuenta' USING ERRCODE = '42501'; END IF;
+  UPDATE dim_usuarios SET activo = false, deleted_at = now() WHERE id = ANY (p_ids) AND deleted_at IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  UPDATE rel_cliente_vendedor SET activo = false, deleted_at = now() WHERE vendedor_id = ANY (p_ids) AND deleted_at IS NULL;
+  INSERT INTO audit_log (usuario_id, accion, detalle) VALUES (auth.uid(), 'usuarios_eliminados', jsonb_build_object('cantidad', v_n));
+  RETURN v_n;
+END $$;
+REVOKE ALL ON FUNCTION eliminar_registros(text, text[]), admin_eliminar_usuarios(uuid[]) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION eliminar_registros(text, text[]), admin_eliminar_usuarios(uuid[]) TO authenticated;
 
 -- ------------------------------------------------------------------------------
 -- 15. MANTENIMIENTO: BORRADO DE DATOS CON CLAVE

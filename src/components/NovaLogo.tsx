@@ -19,7 +19,7 @@ export const NovaLogo: React.FC<NovaLogoProps> = ({
     <div className={`flex items-center gap-2.5 select-none ${className}`}>
       {/* Símbolo Nova: Estrella geométrica médica con destello estelar y cruz clínica */}
       <div 
-        className="relative shrink-0 flex items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 via-sky-600 to-indigo-700 shadow-md shadow-teal-600/20 text-white"
+        className="relative shrink-0 flex items-center justify-center rounded-xl bg-marca-700 text-white"
         style={{ width: iconSize, height: iconSize }}
       >
         <svg
@@ -52,17 +52,17 @@ export const NovaLogo: React.FC<NovaLogoProps> = ({
       <div className="flex flex-col min-w-0">
         <div className="flex items-center gap-1.5">
           <span 
-            className={`font-display font-extrabold tracking-tight leading-none ${
+            className={` font-bold tracking-tight leading-none ${
               size === 'sm' ? 'text-lg' : size === 'lg' ? 'text-2xl' : 'text-xl'
             } ${esClaro ? 'text-[#001428]' : 'text-white'}`}
           >
             NOVA
           </span>
-          <span className="w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse"></span>
+          <span className="w-1.5 h-1.5 rounded-full bg-marca-500 animate-pulse"></span>
         </div>
         {showTagline && (
           <span 
-            className={`text-[10px] font-medium tracking-wide truncate ${
+            className={`text-xs font-medium tracking-wide truncate ${
               esClaro ? 'text-slate-500' : 'text-slate-400'
             }`}
           >

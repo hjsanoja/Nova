@@ -6,7 +6,6 @@ import type {
   ColumnaCsvConfig,
   Drogueria,
   FormatoCsvConfig,
-  HistoricoPedidoPrevio,
   Producto,
   EquipoVentas,
   ProductoDrogueriaMapeo,
@@ -375,7 +374,8 @@ export interface ResultadoHomologacion {
 /** Homologación por clave natural: farmacias (alias por droguería) y productos (Cod SAP <-> código de la droguería). */
 export async function importarHomologacion(
   sb: SupabaseClient,
-  entrada: { alias?: ClienteDrogueriaAlias[]; mapeos?: ProductoDrogueriaMapeo[] }
+  entrada: { alias?: ClienteDrogueriaAlias[]; mapeos?: ProductoDrogueriaMapeo[] },
+  onProgreso?: Progreso
 ): Promise<ResultadoHomologacion> {
   const clientes = (entrada.alias ?? [])
     .filter((a) => a.verificado)
@@ -392,6 +392,7 @@ export async function importarHomologacion(
     total.clientes += r.clientes;
     total.productos += r.productos;
     total.omitidos.push(...r.omitidos);
+    onProgreso?.(Math.min((i + 1) * LOTE_CATALOGO, clientes.length + productos.length), clientes.length + productos.length);
   }
   return total;
 }
@@ -415,12 +416,25 @@ export function checksumLote(archivo: string, filas: Array<{ fecha: string; unid
  * (y deja lo demás como pendiente de homologar). Cada trozo solo inserta y enlaza sus filas; el consolidado mensual se
  * calcula una vez por archivo al final (finalizar_lote_ventas), así el tiempo crece en línea recta con el tamaño.
  */
+/** Una fila de un reporte de ventas, con los códigos y nombres tal como los escribió la droguería. */
+export interface VentaArchivo {
+  archivo_origen?: string;
+  fecha_pedido: string;
+  nombre_drogueria?: string;
+  cod_cliente_drogueria?: string;
+  nombre_cliente?: string;
+  codigo_producto_drogueria?: string;
+  nombre_producto?: string;
+  cod_sap?: string;
+  cantidad_facturada: number;
+}
+
 export async function importarVentas(
   sb: SupabaseClient,
-  historico: HistoricoPedidoPrevio[],
+  historico: VentaArchivo[],
   onProgreso?: Progreso
 ): Promise<ResumenImportacionVentas> {
-  const porArchivo = new Map<string, HistoricoPedidoPrevio[]>();
+  const porArchivo = new Map<string, VentaArchivo[]>();
   for (const h of historico) {
     const archivo = h.archivo_origen || 'historico_acumulado.csv';
     const lista = porArchivo.get(archivo);
@@ -438,10 +452,10 @@ export async function importarVentas(
     const filas = filasArchivo.map((h, i) => ({
       n: i + 1,
       fecha: h.fecha_pedido,
-      drogueria: h.nombre_drogueria || h.drogueria_id,
+      drogueria: h.nombre_drogueria,
       cod_cliente: h.cod_cliente_drogueria || null,
       nombre_cliente: h.nombre_cliente || null,
-      cod_producto: h.codigo_producto_drogueria || h.cod_sap || h.producto_id,
+      cod_producto: h.codigo_producto_drogueria || h.cod_sap,
       nombre_producto: h.nombre_producto || null,
       cod_sap: h.cod_sap || null,
       unidades: Number.isFinite(Number(h.cantidad_facturada)) ? Math.round(Number(h.cantidad_facturada)) : 0,
