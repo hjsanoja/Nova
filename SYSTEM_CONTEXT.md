@@ -14,7 +14,7 @@
 3. **Mapeo B2B de Clientes:** Cada droguería exige su propio código de cliente en los pedidos B2B. NOVA almacena la relación en `rel_cliente_drogueria_codigos` para inyectarlo en caliente al exportar teletransferencias.
 4. **Motor de Sugerido Global:** Algoritmo que analiza el histórico acumulado de ventas a 30, 60 y 90 días (sumando compras de los equipos A La Santé y B Comercial/OTC), ponderando productos estratégicos, empaque mínimo y límites de descuento por droguería.
 5. **Exportación Dinámica de Teletransferencias CSV:** Cada droguería (Cobeca, Nena, Drobienca, BLV, etc.) exige un formato CSV completamente distinto (delimitadores `;`, `,`, `|`, orden de columnas, entrecomillado, formato decimal). NOVA compila estos layouts dinámicamente en el navegador sin backend intermedio.
-6. **Movilidad en Campo para Vendedores:** Toma de pedidos optimizada para tablets y smartphones mediante dictado por voz (Web Speech API con parser semántico en español) y escaneo de códigos de barra/QR con cámara trasera.
+6. **Movilidad en Campo para Vendedores:** Toma de pedidos optimizada para tablets y smartphones, sin conexión, con búsqueda rápida y escaneo de códigos de barra/QR con cámara trasera. Cada vendedor ve solo su fichero de farmacias.
 
 ---
 
@@ -35,8 +35,7 @@
 
 ## 3. Estructura de la Base de Datos (PostgreSQL / Supabase)
 
-El esquema vigente es **v3**: `src/sql/nova_produccion_v3.sql` (24 tablas, 4 vistas, RLS, RPC). Si el proyecto aún tiene el esquema de fase 1,
-se migra con `src/sql/migracion/` (ver `docs/ARQUITECTURA_OFFLINE_FIRST.md`, secciones 1B y 6). El detalle completo del modelo, del flujo de
+El esquema vigente es **v3**: `src/sql/nova_produccion_v3.sql` (24 tablas, 4 vistas, RLS, RPC). No existe migración desde esquemas anteriores: el script se ejecuta sobre un proyecto vacío. El detalle completo del modelo, del flujo de
 homologación y de la seguridad está en ese documento; aquí van las reglas que no deben romperse.
 
 ### 3.1. Dimensiones (los "quién / qué / dónde")
@@ -92,41 +91,39 @@ Cada droguería tiene **sus propios** códigos y nombres para cada producto y ca
     │   ├── nubeV3.ts                  # Puente pantallas clásicas ↔ esquema v3 (catálogos, homologación, ventas, usuarios)
     │   ├── storageMigrations.ts       # Saneado de datos guardados (productos, clientes, droguerías) y CSV por defecto
     │   ├── importUtils.ts             # Similitud de nombres, detección de mes, lector de columnas indexado
-    │   ├── suggestedOrderEngine.ts    # Motor de pedido sugerido 30/60/90
-    │   ├── csvExportEngine.ts         # Exportación CSV dinámica por droguería
-    │   └── voiceParserEngine.ts       # Parser semántico del dictado por voz
+    │   ├── sesion.ts                  # Inicio/cierre de sesión (Supabase Auth), rol leído de dim_usuarios
+    │   ├── exportacionDrogueria.ts    # Archivo de pedido por droguería con los códigos principales
+    │   └── nubeV3.ts                  # Carga masiva, catálogos, usuarios y borrado contra el esquema v3
+    ├── offline/                       # Dexie, Outbox, pull incremental, motor de sync, aislamiento por usuario
     ├── sql/
-    │   ├── nova_produccion_v3.sql     # Esquema vigente: DDL, RLS, triggers, RPC
-    │   └── migracion/                 # Archivar el esquema de fase 1 y migrar sus datos a v3
+    │   └── nova_produccion_v3.sql     # Esquema vigente: DDL, RLS, triggers, RPC
     ├── types/
-    │   └── pharmacy.ts                # Interfaces TypeScript de todo el dominio farmacéutico
+    │   └── pharmacy.ts                # Interfaces TypeScript de dominio
+    ├── vistas/                        # Un archivo por menú (cargados con React.lazy) + lógica pura testeada
+    │   ├── Inicio.tsx                 # Resumen del rol (KPIs reales, pedidos recientes)
+    │   ├── ClientesVista.tsx          # Fichero: vendedor = sus farmacias; teletransferencista/gerente/admin = todas
+    │   ├── PedidosVista.tsx           # Listado y detalle (re-ruteo del remanente)
+    │   ├── PorProcesarVista.tsx       # Mesa del teletransferencista: tomar, descargar archivo, confirmar
+    │   ├── CatalogoVista.tsx          # Productos y droguerías (consulta)
+    │   ├── ReportesVista.tsx          # Pedidos (CSV), cumplimiento por droguería, alertas
+    │   ├── DatosVista.tsx             # Cargar y editar datos · Fichero de vendedores · Pendientes de homologar
+    │   ├── config/                    # Mi cuenta, Sincronización, Usuarios, Base de datos (borrado), Ayuda
+    │   └── datos/                     # Fichero.tsx, Pendientes.tsx
     └── components/
-        ├── Header.tsx                 # Barra superior compacta: estado Supabase, tema y menú de perfil
-        ├── shell/
-        │   ├── navConfig.ts           # Pestañas por rol (vendedor, teletransferencista, gerente, admin)
-        │   └── Navigation.tsx         # SideNav (riel/barra lateral) y BottomNav (móvil)
-        ├── import/
-        │   └── HomologationPanels.tsx # Paneles "Homologar Farmacias" y "Diccionario Cod SAP"
-        ├── RepDashboardTab.tsx        # Dashboard del representante (KPIs, pedidos del día, visitas)
-        ├── SuggestedOrderTab.tsx      # Motor analítico de pedido sugerido 30/60/90 días
-        ├── OrderTakingTab.tsx         # Toma de pedidos en mostrador (catálogo, carrito, voz, escáner)
-        ├── MyOrdersTab.tsx            # Historial de pedidos tomados por el vendedor
-        ├── TeletransferQueueTab.tsx   # Cola del transferencista: lista + conciliación de unidades facturadas
-        ├── DrugstoreCsvTab.tsx        # Generador dinámico de CSV según layout de cada droguería
-        ├── DrugstoreInventoryUploadTab.tsx # Carga de inventario y precios actualizados por droguería
-        ├── InventoryCatalogTab.tsx    # Vademécum de productos con empaques y prioridades
-        ├── DataImportStudioTab.tsx    # Centro de importación masiva, homologador de farmacias y Cod SAP
-        ├── SqlStudioTab.tsx           # Visor y descargador del esquema SQL de Supabase
-        ├── AdminUsersTab.tsx          # Gestión de usuarios y roles
-        ├── UserGuideTab.tsx           # Manual operativo paso a paso para el usuario
-        ├── VoiceDictationModal.tsx    # Modal de dictado por voz con Web Speech API y NLP
-        ├── BarcodeScannerModal.tsx    # Escáner de código de barras/QR con cámara trasera
-        ├── AuthModal.tsx              # Modal de login/registro de Supabase Auth
-        ├── SupabaseConfigModal.tsx    # Modal de conexión directa con URL y Anon Key
-        ├── AboutModal.tsx             # Modal informativo de créditos y versión
-        ├── ErrorBoundary.tsx          # Captura errores (global y por pestaña, incluye fallo de descarga de chunk)
-        └── NovaLogo.tsx               # Logotipo
+        ├── Header.tsx                 # Barra superior mínima: estado de sincronización, tema, menú de usuario
+        ├── acceso/                    # LoginGate (inicio de sesión obligatorio) y ConexionForm (URL/anon key)
+        ├── shell/                     # navConfig.ts (menús por rol) y Navigation.tsx (lateral / inferior)
+        ├── ui/kit.tsx                 # Encabezado, tarjetas, botones compactos, avisos
+        ├── capture/                   # Pantalla de toma de pedido offline
+        ├── import/HomologationPanels.tsx
+        ├── DataImportStudioTab.tsx    # Carga masiva de catálogos, ventas y homologaciones
+        ├── SyncStatusChip.tsx         # Estado de sincronización (abre Configuración)
+        ├── ErrorBoundary.tsx
+        └── NovaLogo.tsx
 ```
+
+**Menús por rol:** vendedor (Resumen, Tomar pedido, Pedidos, Clientes, Catálogo, Configuración) · teletransferencista (Resumen, Por procesar, Pedidos, Clientes, Catálogo, Reportes, Configuración) ·
+gerente (consulta y reportes) · admin (todo, más *Cargar y editar datos*). Sin sesión no hay datos: no existe usuario por defecto; el modo demostración solo está disponible cuando Supabase no está configurado.
 
 ---
 
@@ -173,7 +170,7 @@ Esquema de producción: `src/sql/nova_produccion_v3.sql` (PostGIS, RLS, RPC idem
 Cualquier IA o ingeniero que trabaje en fases subsiguientes debe considerar las siguientes características planificadas:
 
 1. **Pruebas con Junio, Julio y Agosto:** Carga consecutiva de los tres meses históricos para validar la serie trimestral completa del motor de sugeridos.
-2. **Conectores SFTP / API Directa con Droguerías:** Automatizar la transmisión de los CSV generados por `DrugstoreCsvTab` directamente hacia los buzones SFTP o endpoints B2B de Cobeca, Nena y Drobienca.
+2. **Conectores SFTP / API Directa con Droguerías:** Automatizar la transmisión de los archivos generados por `exportacionDrogueria.ts` directamente hacia los buzones SFTP o endpoints B2B de Cobeca, Nena y Drobienca.
 3. **PWA y Sincronización en Segundo Plano:** Implementar Service Worker e IndexedDB para permitir navegación y toma de pedidos en zonas rurales o sótanos hospitalarios sin cobertura, con sincronización automática al recuperar señal.
 4. **Optimización de Rutas GPS:** Aprovechar las coordenadas `local_gps_lat` y `local_gps_lon` de `dim_clientes` para calcular la ruta de visitas diaria óptima del vendedor mediante algoritmo del viajero (TSP).
 

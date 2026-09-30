@@ -1,6 +1,7 @@
 import { liveQuery } from 'dexie';
 import { obtenerDb } from './db';
 import { arrancarMotor, detenerMotor } from './motor';
+import { prepararDispositivoPara } from './aislamiento';
 import { sembrarDatosDemo } from './seedDemo';
 import { actualizarEstadoSync } from './syncStore';
 import type { SyncRemote } from './remoto';
@@ -11,10 +12,14 @@ import type { SyncRemote } from './remoto';
  *
  * Con Supabase configurado descarga y envía datos; sin él, siembra datos de demostración y trabaja en local.
  */
-export async function iniciarOffline(crearRemoto: (() => Promise<SyncRemote | null>) | null): Promise<() => void> {
+export async function iniciarOffline(crearRemoto: (() => Promise<SyncRemote | null>) | null, usuarioId = 'anonimo'): Promise<() => void> {
   const db = obtenerDb();
   const remoto = crearRemoto ? await crearRemoto() : null;
+  // Otra persona en el mismo dispositivo: se vacía lo local para que no vea el fichero de la anterior.
+  await prepararDispositivoPara(db, usuarioId);
   if (!remoto) await sembrarDatosDemo(db);
+  // Cada sesión refresca por completo la lista de farmacias: si le quitaron una del fichero, deja de aparecer.
+  else await db.meta.delete('cursor:dim_clientes');
 
   // Contadores en vivo para el indicador del encabezado (sin polling).
   const sub = liveQuery(() => db.outbox.toArray()).subscribe({

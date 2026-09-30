@@ -155,3 +155,8 @@ export function detenerMotor(): void {
   motorActual?.detener();
   motorActual = null;
 }
+
+/** Sincroniza ya (envío + descarga) y devuelve cuando termina. Para botones "Actualizar". */
+export async function sincronizarYa(): Promise<void> {
+  await motorActual?.sincronizarAhora();
+}

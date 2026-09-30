@@ -1,24 +1,5 @@
 export type RolUsuario = 'vendedor' | 'teletransferencista' | 'gerente' | 'admin';
 export type EquipoVentas = 'La Sante' | 'Comercial' | 'OTC' | 'TODOS' | 'A' | 'B' | 'AMBOS';
-export type EstadoPedido = 
-  | 'borrador' 
-  | 'enviado_teletransferencia' 
-  | 'en_proceso' 
-  | 'facturado'
-  | 'procesado_total' 
-  | 'procesado_parcial' 
-  | 'rechazado';
-
-export type MotivoAjuste = 
-  | 'sin_quiebre' 
-  | 'quiebre_stock_drogueria' 
-  | 'limite_credito' 
-  | 'producto_descontinuado' 
-  | 'ajuste_comercial' 
-  | 'otro';
-
-export type ClasificacionCliente = 'A' | 'B' | 'C';
-
 export interface Usuario {
   id: string; // UUID auth.users
   email: string;
@@ -47,7 +28,7 @@ export interface Cliente {
   bandera?: string; // Cadena o grupo (ej: Farmatodo, Locatel, Farmahorro, Independiente)
   local_gps_lat?: number; // Latitud GPS
   local_gps_lon?: number; // Longitud GPS
-  clasificacion_abc: ClasificacionCliente;
+  clasificacion_abc: 'A' | 'B' | 'C';
   cupo_credito: number;
   dias_credito: number;
   telefono: string;
@@ -139,25 +120,6 @@ export interface Producto {
   estado_texto?: string;
 }
 
-export interface RelClienteVendedor {
-  id: string;
-  cliente_id: string;
-  vendedor_id: string;
-  equipo: EquipoVentas;
-  rol_asignacion: 'titular' | 'suplente' | 'compartido';
-  activo: boolean;
-  created_at: string;
-}
-
-export interface RelClienteDrogueriaCodigo {
-  id: string;
-  cliente_id: string; // ID de la farmacia en dim_clientes
-  drogueria_id: string; // ID de la droguería en dim_droguerias
-  codigo_cliente_drogueria: string; // Código B2B oficial que esa droguería exige (ej: 10452, 87410)
-  activo: boolean;
-  created_at?: string;
-}
-
 // Homologación de alias y nombres de clientes que pone cada droguería
 export interface ClienteDrogueriaAlias {
   id: string;
@@ -177,22 +139,6 @@ export interface ProductoDrogueriaMapeo {
   drogueria: string; // Nombre de la droguería
   codigo_producto_drogueria: string; // Código que la droguería utiliza para el producto
   nombre_producto_drogueria?: string; // Nombre que la droguería utiliza
-  created_at?: string;
-}
-
-export interface FactHistoricoVentas {
-  id: string;
-  fecha: string; // Formato YYYY-MM-DD
-  mes_periodo?: string; // Formato YYYY-MM inferido (ej: '2026-01')
-  archivo_origen?: string; // Nombre del archivo cargado (ej: 'ventas_enero.csv')
-  cod_cliente: string; // Código del cliente asignado por la droguería
-  nombre_cliente: string; // Nombre que cada droguería le da a la farmacia
-  drogueria: string; // Droguería distribuidora
-  codigo_producto: string; // Código del producto en esa droguería
-  nombre_producto: string; // Nombre del producto según la droguería
-  unidades: number;
-  cod_sap?: string; // Código de producto interno SAP / SKU (opcional en archivo)
-  cliente_ident01?: string; // ID único homologado de la farmacia en dim_clientes
   created_at?: string;
 }
 
@@ -220,103 +166,3 @@ export interface HistoricoPedidoPrevio {
   archivo_origen?: string;            // Archivo de donde provino
   cliente_ident01?: string;           // Identificador de farmacia homologada
 }
-
-export interface PedidoCabecera {
-  id: string;
-  numero_pedido: string;
-  cliente_id: string;
-  vendedor_id: string;
-  drogueria_id: string;
-  fecha_pedido: string;
-  equipo_origen: EquipoVentas;
-  estado: EstadoPedido;
-  observaciones?: string;
-  total_solicitado: number;
-  total_confirmado: number;
-  fill_rate: number; // Porcentaje confirmado/solicitado
-  transferencista_id?: string;
-  numero_factura?: string; // Factura emitida por la droguería al conciliar
-  fecha_procesamiento?: string;
-  created_at: string;
-  updated_at: string;
-  
-  // Relaciones anidadas para frontend
-  cliente?: Cliente;
-  vendedor?: Usuario;
-  drogueria?: Drogueria;
-  transferencista?: Usuario;
-  detalles?: PedidoDetalle[];
-}
-
-export interface PedidoDetalle {
-  id: string;
-  pedido_id: string;
-  producto_id: string;
-  cantidad_solicitada: number;
-  cantidad_confirmada: number;
-  precio_unitario: number;
-  descuento_porcentaje: number;
-  subtotal_solicitado: number;
-  subtotal_confirmado: number;
-  motivo_ajuste: MotivoAjuste;
-  observaciones_linea?: string;
-  created_at: string;
-
-  // Relación anidada
-  producto?: Producto;
-}
-
-export interface SugeridoItem {
-  producto_id: string;
-  sku: string;
-  codigo_barras: string;
-  nombre_comercial: string;
-  principio_activo: string;
-  laboratorio: string;
-  precio_lista: number;
-  descuento_maximo_porc: number;
-  es_prioritario: boolean;
-  factor_prioridad: number;
-  empaque_minimo: number;
-  stock_disponible: number;
-  
-  // Métricas del análisis de sugerido
-  total_unidades_historicas: number;
-  frecuencia_pedidos: number; // Cuántos pedidos distintos en el período
-  compras_equipo_a: number;
-  compras_equipo_b: number;
-  promedio_mensual: number;
-  sugerido_calculado: number; // Unidades recomendadas
-  descuento_sugerido: number;
-  explicacion_algoritmo: string;
-}
-
-export interface ParametrosSugerido {
-  cliente_id: string;
-  dias_analisis: 30 | 60 | 90;
-  factor_crecimiento: number; // e.g. 1.0 = 100%, 1.15 = 115% de reposición esperada
-  solo_con_historia: boolean;
-  incluir_prioritarios_sin_historia: boolean;
-}
-
-export interface InventarioDrogueria {
-  id: string;
-  drogueria_id: string;
-  producto_id: string;
-  stock_disponible: number;
-  precio_drogueria?: number;
-  codigo_articulo_drogueria?: string;
-  updated_at: string;
-  // Campos auxiliares para la UI
-  producto?: Producto;
-  drogueria?: Drogueria;
-}
-
-export interface ItemDictadoReconocido {
-  producto: Producto;
-  cantidad: number;
-  descuento: number;
-  confianza: number;
-  textoOriginal: string;
-}
-

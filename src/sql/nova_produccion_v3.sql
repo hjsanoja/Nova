@@ -12,9 +12,22 @@
 --   * Seguridad: RLS en todas las tablas; las operaciones críticas viven en funciones RPC.
 --
 -- Uso: ejecutar completo en el SQL Editor de Supabase. Es re-ejecutable (IF NOT EXISTS).
--- Si el proyecto ya tiene el esquema de fase 1 (mismos nombres de tabla, otra estructura), ejecutar ANTES
--- src/sql/migracion/1_archivar_esquema_anterior.sql y DESPUÉS 2_migrar_datos_anteriores.sql.
+-- Si el proyecto tiene tablas de una versión anterior con los mismos nombres pero otra estructura, el script se
+-- detiene con un aviso claro antes de tocar nada.
 -- ==============================================================================
+
+-- ------------------------------------------------------------------------------
+-- 00. GUARDA: tablas de una versión anterior con los mismos nombres
+-- ------------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF to_regclass('public.dim_clientes') IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_clientes' AND column_name = 'codigo_interno') THEN
+    RAISE EXCEPTION 'Este proyecto tiene tablas de una version anterior de NOVA (dim_clientes sin codigo_interno). Elimina esas tablas o usa un proyecto nuevo antes de ejecutar este script.'
+      USING ERRCODE = '55000';
+  END IF;
+END $$;
 
 -- ------------------------------------------------------------------------------
 -- 0. EXTENSIONES Y ESQUEMA DE APOYO
@@ -2176,65 +2189,138 @@ REVOKE ALL ON FUNCTION admin_configurar_usuario(uuid, rol_usuario, text, boolean
 GRANT EXECUTE ON FUNCTION admin_configurar_usuario(uuid, rol_usuario, text, boolean, text, text) TO authenticated;
 
 -- ------------------------------------------------------------------------------
--- 15. MANTENIMIENTO Y PRUEBAS: PURGA SEGURA DE DATOS DE PRUEBA
+-- 14C. FICHERO: qué farmacias atiende cada vendedor
+-- Un vendedor solo ve las farmacias que tiene asignadas (RLS); la mesa y la gerencia ven todas.
 -- ------------------------------------------------------------------------------
--- Define o cambia la clave de purga (solo administrador). Se guarda cifrada con bcrypt.
+--   p_modo = 'agregar'    -> suma las farmacias indicadas al fichero del vendedor
+--            'quitar'     -> retira esas farmacias de su fichero
+--            'reemplazar' -> su fichero pasa a ser exactamente esa lista
+-- Las farmacias se indican por código interno (ident01). Devuelve cuántas se asignaron/retiraron y cuáles no existen.
+CREATE OR REPLACE FUNCTION asignar_clientes_vendedor(p_vendedor uuid, p_codigos text[], p_modo text DEFAULT 'agregar')
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_equipo uuid; v_rol rol_usuario; v_asig integer := 0; v_quit integer := 0; v_faltan jsonb;
+        v_codigos text[] := ARRAY(SELECT DISTINCT btrim(c) FROM unnest(coalesce(p_codigos, ARRAY[]::text[])) c WHERE btrim(c) <> '');
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  IF p_modo NOT IN ('agregar', 'quitar', 'reemplazar') THEN RAISE EXCEPTION 'Modo inválido: %', p_modo USING ERRCODE = '22023'; END IF;
+  SELECT rol, equipo_id INTO v_rol, v_equipo FROM dim_usuarios WHERE id = p_vendedor AND deleted_at IS NULL;
+  IF NOT FOUND THEN RAISE EXCEPTION 'El usuario no existe' USING ERRCODE = 'P0002'; END IF;
+  IF v_rol <> 'vendedor' THEN RAISE EXCEPTION 'Solo se asigna fichero a usuarios con rol vendedor' USING ERRCODE = '22023'; END IF;
+
+  SELECT coalesce(jsonb_agg(c), '[]'::jsonb) INTO v_faltan
+    FROM unnest(v_codigos) c WHERE NOT EXISTS (SELECT 1 FROM dim_clientes d WHERE d.codigo_interno = c AND d.deleted_at IS NULL);
+
+  IF p_modo = 'reemplazar' THEN
+    UPDATE rel_cliente_vendedor r SET activo = false, deleted_at = now()
+     WHERE r.vendedor_id = p_vendedor AND r.deleted_at IS NULL
+       AND r.cliente_id NOT IN (SELECT d.id FROM dim_clientes d WHERE d.codigo_interno = ANY (v_codigos));
+    GET DIAGNOSTICS v_quit = ROW_COUNT;
+  END IF;
+
+  IF p_modo IN ('agregar', 'reemplazar') THEN
+    INSERT INTO rel_cliente_vendedor (cliente_id, vendedor_id, equipo_id, es_titular, activo)
+    SELECT d.id, p_vendedor, v_equipo, true, true FROM dim_clientes d WHERE d.codigo_interno = ANY (v_codigos) AND d.deleted_at IS NULL
+    ON CONFLICT (cliente_id, vendedor_id) DO UPDATE SET activo = true, deleted_at = NULL, equipo_id = excluded.equipo_id
+      WHERE NOT rel_cliente_vendedor.activo OR rel_cliente_vendedor.deleted_at IS NOT NULL OR rel_cliente_vendedor.equipo_id IS DISTINCT FROM excluded.equipo_id;
+    GET DIAGNOSTICS v_asig = ROW_COUNT;
+  ELSE
+    UPDATE rel_cliente_vendedor r SET activo = false, deleted_at = now()
+     WHERE r.vendedor_id = p_vendedor AND r.deleted_at IS NULL
+       AND r.cliente_id IN (SELECT d.id FROM dim_clientes d WHERE d.codigo_interno = ANY (v_codigos));
+    GET DIAGNOSTICS v_quit = ROW_COUNT;
+  END IF;
+
+  INSERT INTO audit_log (usuario_id, accion, detalle)
+  VALUES (auth.uid(), 'fichero_asignado', jsonb_build_object('vendedor', p_vendedor, 'modo', p_modo, 'asignados', v_asig, 'retirados', v_quit));
+  RETURN jsonb_build_object('asignados', v_asig, 'retirados', v_quit, 'no_encontrados', v_faltan);
+END $$;
+REVOKE ALL ON FUNCTION asignar_clientes_vendedor(uuid, text[], text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION asignar_clientes_vendedor(uuid, text[], text) TO authenticated;
+
+-- ------------------------------------------------------------------------------
+-- 15. MANTENIMIENTO: BORRADO DE DATOS CON CLAVE
+-- ------------------------------------------------------------------------------
+-- Protecciones: rol administrador + "borrado habilitado" (interruptor de config_sistema) + clave propia (bcrypt, distinta de
+-- la de inicio de sesión) + máximo 5 intentos fallidos cada 15 minutos. Cada uso queda en audit_log.
+-- Nunca se tocan usuarios, equipos, configuración, secretos ni auditoría.
+--   alcance 'historial' -> ventas reportadas por las droguerías, sus lotes y el consolidado mensual
+--   alcance 'pedidos'   -> pedidos, detalles, visitas, plantillas, notificaciones y alertas (el correlativo reinicia)
+--   alcance 'todo'      -> lo anterior + farmacias, productos, droguerías, homologaciones, fichero y reglas comerciales
 CREATE OR REPLACE FUNCTION configurar_password_purga(p_nueva text) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
 BEGIN
   IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
-  IF length(coalesce(p_nueva, '')) < 12 THEN RAISE EXCEPTION 'La clave debe tener al menos 12 caracteres' USING ERRCODE = '22023'; END IF;
+  IF length(coalesce(p_nueva, '')) < 6 THEN RAISE EXCEPTION 'La clave debe tener al menos 6 caracteres' USING ERRCODE = '22023'; END IF;
   INSERT INTO secretos_sistema (clave, hash) VALUES ('purga_admin', crypt(p_nueva, gen_salt('bf', 10)))
   ON CONFLICT (clave) DO UPDATE SET hash = excluded.hash, updated_at = now();
   INSERT INTO audit_log (usuario_id, accion) VALUES (auth.uid(), 'purga_password_configurada');
 END $$;
 
--- Borra datos de prueba. Requiere: rol admin + purga_habilitada=true (solo entornos de prueba) +
--- clave correcta + máximo 5 intentos fallidos cada 15 minutos. Cada uso queda en audit_log.
---   solo_transaccional = true  -> pedidos, detalles, visitas, plantillas, notificaciones y alertas.
---   solo_transaccional = false -> además catálogos, homologaciones, reglas y clientes.
--- Nunca se tocan usuarios, equipos, configuración, secretos ni auditoría.
-CREATE OR REPLACE FUNCTION purgar_base_datos_pruebas(admin_pass text, solo_transaccional boolean DEFAULT true)
-RETURNS jsonb
+-- Interruptor: el borrado solo funciona con esto activo (déjalo apagado en producción).
+CREATE OR REPLACE FUNCTION habilitar_borrado(p_habilitar boolean) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  UPDATE config_sistema SET valor = to_jsonb(p_habilitar), updated_at = clock_timestamp() WHERE clave = 'purga_habilitada';
+  INSERT INTO audit_log (usuario_id, accion, detalle) VALUES (auth.uid(), 'borrado_habilitado', jsonb_build_object('habilitado', p_habilitar));
+END $$;
+
+CREATE OR REPLACE FUNCTION estado_borrado() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  RETURN jsonb_build_object(
+    'clave_definida', EXISTS (SELECT 1 FROM secretos_sistema WHERE clave = 'purga_admin'),
+    'habilitado', coalesce((SELECT (valor #>> '{}')::boolean FROM config_sistema WHERE clave = 'purga_habilitada'), false));
+END $$;
+
+CREATE OR REPLACE FUNCTION borrar_datos(p_clave text, p_alcance text) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
 DECLARE v_hash text; v_fallos integer;
 BEGIN
-  IF NOT app.es_admin() THEN
-    RAISE EXCEPTION 'Permiso denegado' USING ERRCODE = '42501';
-  END IF;
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Permiso denegado' USING ERRCODE = '42501'; END IF;
+  IF p_alcance NOT IN ('historial', 'pedidos', 'todo') THEN RAISE EXCEPTION 'Alcance inválido: %', p_alcance USING ERRCODE = '22023'; END IF;
   IF coalesce((SELECT (valor #>> '{}')::boolean FROM config_sistema WHERE clave = 'purga_habilitada'), false) IS NOT TRUE THEN
-    RAISE EXCEPTION 'La purga está deshabilitada en este entorno' USING ERRCODE = '42501';
+    RAISE EXCEPTION 'El borrado está deshabilitado: actívalo primero en Configuración' USING ERRCODE = '42501';
   END IF;
 
   SELECT count(*) INTO v_fallos FROM audit_log
    WHERE usuario_id = auth.uid() AND accion = 'purga_intento_fallido' AND created_at > now() - interval '15 minutes';
-  IF v_fallos >= 5 THEN
-    RETURN jsonb_build_object('ok', false, 'error', 'demasiados_intentos');
-  END IF;
+  IF v_fallos >= 5 THEN RETURN jsonb_build_object('ok', false, 'error', 'demasiados_intentos'); END IF;
 
   SELECT hash INTO v_hash FROM secretos_sistema WHERE clave = 'purga_admin';
-  IF v_hash IS NULL OR admin_pass IS NULL OR crypt(admin_pass, v_hash) <> v_hash THEN
+  IF v_hash IS NULL OR p_clave IS NULL OR crypt(p_clave, v_hash) <> v_hash THEN
     INSERT INTO audit_log (usuario_id, accion) VALUES (auth.uid(), 'purga_intento_fallido');
     RETURN jsonb_build_object('ok', false, 'error', 'credenciales_invalidas');
   END IF;
 
-  TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, plantilla_items,
-           plantillas_reposicion, alertas_comerciales, fact_pedidos RESTART IDENTITY CASCADE;
-  PERFORM setval('seq_correlativo_pedido', 1001, false);
-
-  IF NOT solo_transaccional THEN
-    TRUNCATE fact_compras_mensual, fact_ventas_drogueria, import_lotes,
-             map_producto_drogueria, map_cliente_drogueria, precios_drogueria_producto, rel_cliente_vendedor,
+  IF p_alcance IN ('historial', 'todo') THEN
+    TRUNCATE fact_compras_mensual, fact_ventas_drogueria, import_lotes RESTART IDENTITY CASCADE;
+  END IF;
+  IF p_alcance IN ('pedidos', 'todo') THEN
+    TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, plantilla_items,
+             plantillas_reposicion, alertas_comerciales, fact_pedidos RESTART IDENTITY CASCADE;
+    PERFORM setval('seq_correlativo_pedido', 1001, false);
+  END IF;
+  IF p_alcance = 'todo' THEN
+    TRUNCATE map_producto_drogueria, map_cliente_drogueria, precios_drogueria_producto, rel_cliente_vendedor,
              config_reglas_comerciales, dim_clientes, dim_productos, dim_droguerias RESTART IDENTITY CASCADE;
   END IF;
 
-  INSERT INTO audit_log (usuario_id, accion, detalle)
-  VALUES (auth.uid(), 'purga_ejecutada', jsonb_build_object('solo_transaccional', solo_transaccional));
-  RETURN jsonb_build_object('ok', true, 'solo_transaccional', solo_transaccional);
+  INSERT INTO audit_log (usuario_id, accion, detalle) VALUES (auth.uid(), 'purga_ejecutada', jsonb_build_object('alcance', p_alcance));
+  RETURN jsonb_build_object('ok', true, 'alcance', p_alcance);
 END $$;
 
-REVOKE ALL ON FUNCTION purgar_base_datos_pruebas(text, boolean) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION purgar_base_datos_pruebas(text, boolean) TO authenticated;
+-- Firma original (solo_transaccional): se conserva y usa el mismo mecanismo.
+CREATE OR REPLACE FUNCTION purgar_base_datos_pruebas(admin_pass text, solo_transaccional boolean DEFAULT true)
+RETURNS jsonb
+LANGUAGE sql SECURITY DEFINER SET search_path = public, extensions AS $$
+  SELECT borrar_datos(admin_pass, CASE WHEN solo_transaccional THEN 'pedidos' ELSE 'todo' END)
+$$;
+
+REVOKE ALL ON FUNCTION purgar_base_datos_pruebas(text, boolean), borrar_datos(text, text), habilitar_borrado(boolean), estado_borrado() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION purgar_base_datos_pruebas(text, boolean), borrar_datos(text, text), habilitar_borrado(boolean), estado_borrado() TO authenticated;
 REVOKE ALL ON FUNCTION configurar_password_purga(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION configurar_password_purga(text) TO authenticated;
 REVOKE ALL ON FUNCTION importar_ventas_drogueria(jsonb, jsonb), borrar_lote_ventas(uuid), refrescar_compras_mensual(date),

@@ -1,4 +1,17 @@
-# NOVA v2.1 · Revisión, limpieza y mejoras
+# NOVA v3.2 · Interfaz simplificada, acceso obligatorio y gestión de datos
+
+- **Acceso**: inicio de sesión obligatorio (Supabase Auth). Ya no hay usuario administrador por defecto; el modo demostración solo aparece si no hay Supabase configurado.
+- **Menús**: de 12 pestañas a 9 según el rol. *Resumen* (consulta), *Reportes* y *Cargar y editar datos* (administración). Los errores de sincronización se resuelven en **Configuración → Sincronización**.
+- **Fichero**: cada vendedor ve solo sus farmacias (RLS + limpieza local al cambiar de usuario); el teletransferencista, gerente y admin ven todas. El administrador asigna el fichero desde *Cargar y editar datos → Fichero de vendedores*.
+- **Mesa del teletransferencista** (*Por procesar*): tomar pedido con bloqueo, descargar el archivo para la droguería y confirmar lo despachado (genera el remanente).
+- **Borrado**: *Configuración → Base de datos*, solo admin, con clave, por alcance (historial o todo).
+- **Retirado**: Script SQL, Generador SQL, Vademécum aparte, Carga masiva de inventario, Auditoría como pestaña, dictado por voz, toma clásica, dashboards con cifras de ejemplo, scripts de migración.
+- **UI**: botones y tarjetas compactos (`components/ui/kit.tsx`), listas en tarjeta en móvil.
+
+---
+
+# Historial · NOVA v2.1 (pantallas ya retiradas; se conserva como registro)
+
 
 Revisión completa del proyecto (`SYSTEM_CONTEXT.md` como referencia). Foco: menos consumo de recursos, menos código muerto y una interfaz que se adapta a móvil, iPad/tablet y PC.
 

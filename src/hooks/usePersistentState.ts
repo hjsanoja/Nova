@@ -138,3 +138,38 @@ export function usePersistentState<T>(
 
   return [valor, setValor];
 }
+
+/** Claves de los datos de trabajo guardados en el navegador (catálogos, histórico y homologación cargados en "Datos"). */
+export const CLAVES_DATOS_LOCALES = [
+  'PHARMA_CLIENTES', 'PHARMA_PRODUCTOS', 'PHARMA_DROGUERIAS_V2', 'PHARMA_HISTORICO', 'PHARMA_CLIENTE_ALIAS',
+  'PHARMA_PRODUCTO_MAPEO', 'PHARMA_PEDIDOS_CAB', 'PHARMA_PEDIDOS_DET', 'PHARMA_USUARIOS', 'PHARMA_BORRADOR_LOCAL',
+];
+
+/** Elimina claves de localStorage Y de su respaldo en IndexedDB (si no, el respaldo las "resucita" al recargar). */
+export async function borrarClavesLocales(claves: string[] = CLAVES_DATOS_LOCALES): Promise<void> {
+  claves.forEach((k) => {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      /* ignore */
+    }
+  });
+  if (typeof window === 'undefined' || !window.indexedDB) return;
+  await new Promise<void>((resolve) => {
+    try {
+      const req = window.indexedDB.open('nova_storage_v1', 1);
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains('kv')) req.result.createObjectStore('kv');
+      };
+      req.onsuccess = () => {
+        const tx = req.result.transaction('kv', 'readwrite');
+        claves.forEach((k) => tx.objectStore('kv').delete(k));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      };
+      req.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}

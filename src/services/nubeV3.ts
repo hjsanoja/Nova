@@ -258,8 +258,9 @@ export function equipoDesdeV3(codigo: string | null | undefined): EquipoVentas {
 }
 
 /** Valor de las pantallas clásicas -> código de equipo de la base (null = sin equipo). */
-export function equipoAV3(equipo: EquipoVentas): string | null {
-  return equipo === 'TODOS' || equipo === 'AMBOS' ? null : equipo.toUpperCase();
+export function equipoAV3(equipo: string | null | undefined): string | null {
+  const e = (equipo ?? '').trim();
+  return e === '' || ['TODOS', 'AMBOS'].includes(e.toUpperCase()) ? null : e.toUpperCase();
 }
 
 export interface PerfilUsuario {
@@ -293,7 +294,7 @@ export async function cargarPerfilUsuario(sb: SupabaseClient, id: string): Promi
 export async function crearUsuarioNube(
   admin: SupabaseClient,
   registro: SupabaseClient,
-  u: { email: string; password: string; nombre_completo: string; rol: RolUsuario; equipo: EquipoVentas; telefono?: string; activo: boolean }
+  u: { email: string; password: string; nombre_completo: string; rol: RolUsuario; equipo: string; telefono?: string; activo: boolean }
 ): Promise<{ id: string }> {
   // Los metadatos son solo informativos (el nombre): rol y equipo se fijan en la base, no aquí.
   const { data, error } = await registro.auth.signUp({ email: u.email, password: u.password, options: { data: { nombre_completo: u.nombre_completo } } });
@@ -476,3 +477,13 @@ export async function descargarCatalogosNube(sb: SupabaseClient): Promise<Catalo
   ]);
   return { clientes: clientes.map(clienteDesdeV3), productos: productos.map(productoDesdeV3), droguerias: droguerias.map(drogueriaDesdeV3) };
 }
+
+// ---------------------------------------------------------------------------- bajas desde las pantallas de edición
+
+async function bajaLogica(sb: SupabaseClient, tabla: 'dim_clientes' | 'dim_productos' | 'dim_droguerias', columna: string, valor: string): Promise<void> {
+  const { error } = await sb.from(tabla).update({ deleted_at: new Date().toISOString() }).eq(columna, valor);
+  if (error) throw new Error(`${tabla}: ${error.message}`);
+}
+export const eliminarClienteNube = (sb: SupabaseClient, codigoInterno: string) => bajaLogica(sb, 'dim_clientes', 'codigo_interno', codigoInterno);
+export const eliminarProductoNube = (sb: SupabaseClient, sku: string) => bajaLogica(sb, 'dim_productos', 'sku', sku);
+export const eliminarDrogueriaNube = (sb: SupabaseClient, codigo: string) => bajaLogica(sb, 'dim_droguerias', 'codigo', codigo);
