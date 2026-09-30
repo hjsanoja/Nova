@@ -2,12 +2,12 @@ import { useMemo } from 'react';
 import { BadgePercent, BookmarkPlus, Plus, Send, ShoppingCart, Trash2, X } from 'lucide-react';
 import { CodigoFarmacia } from './CodigoFarmacia';
 import { Avatar, Boton, BotonIcono, Campo, Etiqueta, PasoUnidades, Vacio, estiloInput } from '../components/ui/kit';
-import { condicionDelPedido, descuentosPorProducto } from '../offline/politicas';
+import { condicionDelPedido, descuentosPorProducto, topeDescuentoLinea } from '../offline/politicas';
 import type { ReglaComercial } from '../offline/politicas';
 import type { LocalCliente, LocalDrogueria, LocalProducto } from '../offline/types';
 import { faltaParaEnviar, totales } from './carritos';
 import type { AccionCarritos, Carrito, EstadoCarritos } from './carritos';
-import { contextoCarrito } from './useCarritos';
+import { contextoCarrito, descuentoDeLinea } from './useCarritos';
 
 interface Props {
   estado: EstadoCarritos;
@@ -139,18 +139,42 @@ function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, 
         <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
           {c.lineas.map((l) => {
             const p = productos.get(l.producto_id);
-            const paso = Math.max(1, p?.empaque_minimo ?? 1);
+            const auto = porProducto.get(l.producto_id)?.pct;
+            const pct = descuentoDeLinea(l, auto);
+            const tope = topeDescuentoLinea(reglas, contexto, { producto_id: l.producto_id, categoria: p?.categoria ?? null, unidades: l.unidades });
+            const excede = l.descuento_pct != null && (pct ?? 0) > Math.max(tope, auto ?? 0);
+            const nombre = p?.nombre_comercial ?? 'producto';
             return (
-              <li key={l.producto_id} className="flex items-center gap-2 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{p?.nombre_comercial ?? 'Producto'}</p>
-                  <p className="flex items-center gap-1.5 truncate text-xs text-slate-500">
-                    {porProducto.get(l.producto_id) && <Etiqueta tono="exito">−{porProducto.get(l.producto_id)!.pct}%</Etiqueta>}
-                    <span className="truncate">{p?.presentacion ?? p?.sku}</span>
-                  </p>
+              <li key={l.producto_id} className="flex flex-col gap-1.5 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{p?.nombre_comercial ?? 'Producto'}</p>
+                    <p className="truncate text-xs text-slate-500">{p?.presentacion ?? p?.sku}</p>
+                  </div>
+                  <PasoUnidades valor={l.unidades} onChange={(n) => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: n })} paso={1} min={0} compacto etiqueta={`Unidades de ${nombre}`} />
+                  <BotonIcono icono={X} etiqueta={`Quitar ${nombre}`} onClick={() => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: 0 })} className="!h-8 !w-8" />
                 </div>
-                <PasoUnidades valor={l.unidades} onChange={(n) => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: n })} paso={paso} min={0} compacto etiqueta={`Unidades de ${p?.nombre_comercial ?? 'producto'}`} />
-                <BotonIcono icono={X} etiqueta={`Quitar ${p?.nombre_comercial ?? 'producto'}`} onClick={() => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: 0 })} className="!h-8 !w-8" />
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <label className="inline-flex items-center gap-1.5">
+                    Descuento
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      max={100}
+                      step="0.5"
+                      value={l.descuento_pct ?? ''}
+                      placeholder={auto ? String(auto) : '0'}
+                      onChange={(e) => dispatch({ tipo: 'descuento', carrito_id: c.id, producto_id: l.producto_id, pct: e.target.value === '' ? null : Number(e.target.value) })}
+                      aria-label={`Descuento % de ${nombre}`}
+                      className="h-8 w-16 rounded-lg border border-slate-300 bg-white px-2 text-right text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                    />
+                    %
+                  </label>
+                  {pct ? <Etiqueta tono="exito">−{pct}%</Etiqueta> : null}
+                  {l.descuento_pct == null && auto ? <span>automático</span> : null}
+                  {excede && <span className="text-amber-700 dark:text-amber-300">Mayor al autorizado ({Math.max(tope, auto ?? 0)}%): la mesa lo revisará.</span>}
+                </div>
               </li>
             );
           })}

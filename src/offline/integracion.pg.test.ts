@@ -77,12 +77,15 @@ function remotoPostgres(uid: string): SyncRemote & { caido: boolean } {
         throw new ErrorRemoto('permanente', err.message, err.code);
       }
     },
-    async traer(tabla: string, desde: string | null, limite: number, opciones: { creadoDesde?: string; seleccion?: string; filtro?: Record<string, string>; minimo?: Record<string, string> } = {}) {
+    async traer(tabla: string, desde: string | null, limite: number, opciones: { creadoDesde?: string; seleccion?: string; filtro?: Record<string, string>; minimo?: Record<string, string>; despuesDe?: { updated_at: string; id: string } } = {}) {
       if (!TABLAS.has(tabla)) throw new Error(`tabla no permitida: ${tabla}`);
       return comoUsuario(uid, async (c) => {
         const params: unknown[] = [];
         const donde: string[] = ['1=1'];
-        if (desde) (params.push(desde), donde.push(`t.updated_at > $${params.length}`));
+        if (opciones.despuesDe) {
+          params.push(opciones.despuesDe.updated_at, opciones.despuesDe.id);
+          donde.push(`(t.updated_at, t.id) > ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+        } else if (desde) (params.push(desde), donde.push(`t.updated_at > $${params.length}`));
         else if (opciones.creadoDesde) (params.push(opciones.creadoDesde), donde.push(`t.created_at >= $${params.length}`));
         for (const [col, v] of Object.entries(opciones.filtro ?? {})) {
           if (!COLUMNAS_FILTRO.has(col)) throw new Error('columna no permitida');
@@ -98,7 +101,7 @@ function remotoPostgres(uid: string): SyncRemote & { caido: boolean } {
         // Columna calculada de PostgREST (select=*,para_mi): aquí se llama a la función con la fila.
         const extra = opciones.seleccion === '*,para_mi' ? ', para_mi(t) AS para_mi' : '';
         // row_to_json imita a PostgREST: fechas ISO, numéricos como números, jsonb anidado.
-        const r = await c.query(`SELECT row_to_json(x) AS f FROM (SELECT t.*${extra} FROM ${tabla} t WHERE ${donde.join(' AND ')} ORDER BY t.updated_at LIMIT $${params.length}) x`, params);
+        const r = await c.query(`SELECT row_to_json(x) AS f FROM (SELECT t.*${extra} FROM ${tabla} t WHERE ${donde.join(' AND ')} ORDER BY t.updated_at, t.id LIMIT $${params.length}) x`, params);
         return r.rows.map((row) => row.f as FilaRemota);
       });
     },

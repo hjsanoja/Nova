@@ -278,7 +278,7 @@ export function interpretarDictado<C extends ClienteDictable, P extends Producto
     const producto = mejor && mejor.s >= UMBRAL ? mejor.p : null;
     return {
       texto: l.palabras.join(' '),
-      unidades: l.unidades ?? Math.max(1, producto?.empaque_minimo ?? 1),
+      unidades: l.unidades ?? 1,
       producto,
       alternativas: puntuados.filter((x) => x.p !== producto).map((x) => x.p),
       confianza: mejor ? Math.min(1, mejor.s) : 0,

@@ -14,10 +14,14 @@ const ORIGENES: { id: OrigenColumnaExport; texto: string }[] = [
   { id: 'nombre_cliente', texto: 'Nombre de la farmacia' },
   { id: 'codigo_producto_drogueria', texto: 'Código del producto en la droguería' },
   { id: 'descripcion_producto_drogueria', texto: 'Descripción del producto' },
+  { id: 'presentacion_producto', texto: 'Presentación del producto (NOVA)' },
   { id: 'ean', texto: 'Código de barras (EAN)' },
   { id: 'sku_interno', texto: 'Código interno (Cod SAP)' },
   { id: 'unidades_solicitadas', texto: 'Unidades pedidas' },
   { id: 'unidades_confirmadas', texto: 'Unidades confirmadas (o pedidas si aún no se procesa)' },
+  { id: 'descuento_linea', texto: 'Descuento del producto (%)' },
+  { id: 'descuento_pedido', texto: 'Descuento del pedido (%)' },
+  { id: 'descuento_total', texto: 'Descuento total de la línea (producto + pedido, %)' },
   { id: 'correlativo', texto: 'Número de pedido NOVA' },
   { id: 'fecha_pedido', texto: 'Fecha del pedido' },
   { id: 'observaciones', texto: 'Nota del vendedor' },
@@ -31,14 +35,14 @@ const SEPARADORES: { v: FormatoExport['delimitador']; t: string }[] = [
 
 // Pedido de ejemplo para la vista previa.
 const EJEMPLO = {
-  pedido: { correlativo: 'PED-1045', created_at: '2026-09-30T14:00:00Z', observaciones: 'Entregar en la mañana', estado: 'enviado_teletransferencia' as const },
+  pedido: { correlativo: 'PED-1045', created_at: '2026-09-30T14:00:00Z', observaciones: 'Entregar en la mañana', estado: 'enviado_teletransferencia' as const, descuento_pedido_pct: 5 },
   cliente: { id: 'c', codigo_interno: 'CLI-001', rif: 'J-30489218-4', nombre_comercial: 'Farmacia La Paz', razon_social: 'Farmacia La Paz C.A.', estado_validacion: 'activo' } as LocalCliente,
   productos: [
-    { id: 'p1', sku: '100234', ean13: '7591234567890', nombre_comercial: 'Losartán 50 mg', activo: true } as LocalProducto,
-    { id: 'p2', sku: '100567', ean13: '7599876543210', nombre_comercial: 'Omeprazol 20 mg', activo: true } as LocalProducto,
+    { id: 'p1', sku: '100234', ean13: '7591234567890', nombre_comercial: 'Losartán', presentacion: 'Losartán 50 mg x 30 tab', activo: true } as LocalProducto,
+    { id: 'p2', sku: '100567', ean13: '7599876543210', nombre_comercial: 'Omeprazol', presentacion: 'Omeprazol 20 mg x 28 cáps', activo: true } as LocalProducto,
   ],
   detalles: [
-    { id: 'd1', pedido_id: 'x', linea: 1, producto_id: 'p1', unidades_solicitadas: 10, unidades_confirmadas: null, unidades_pendientes: 10, motivo_ajuste: 'sin_quiebre' },
+    { id: 'd1', pedido_id: 'x', linea: 1, producto_id: 'p1', unidades_solicitadas: 10, unidades_confirmadas: null, unidades_pendientes: 10, motivo_ajuste: 'sin_quiebre', descuento_pct: 10 },
     { id: 'd2', pedido_id: 'x', linea: 2, producto_id: 'p2', unidades_solicitadas: 5, unidades_confirmadas: null, unidades_pendientes: 5, motivo_ajuste: 'sin_quiebre' },
   ] as LocalDetalle[],
 };
@@ -177,6 +181,12 @@ export function FormatoArchivo({ codigo, nombre, onCerrar, onGuardado }: { codig
                   <select value={c.origen} onChange={(e) => cambiarColumna(i, { origen: e.target.value as OrigenColumnaExport })} aria-label={`Dato de la columna ${i + 1}`} className={`${estiloInput} min-w-0 flex-1`}>
                     {ORIGENES.map((o) => <option key={o.id} value={o.id}>{o.texto}</option>)}
                   </select>
+                  {c.origen.startsWith('descuento_') && (
+                    <select value={c.formato === 'entero' ? 'entero' : 'decimal'} onChange={(e) => cambiarColumna(i, { formato: e.target.value as ColumnaExport['formato'] })} aria-label="Formato del descuento" className={`${estiloInput} w-24`}>
+                      <option value="decimal">7.5</option>
+                      <option value="entero">8 (entero)</option>
+                    </select>
+                  )}
                   {c.origen === 'constante' && <input value={c.valor ?? ''} onChange={(e) => cambiarColumna(i, { valor: e.target.value })} aria-label="Valor fijo" placeholder="Valor" className={`${estiloInput} w-24`} />}
                   {posicional && <input value={c.ancho ?? ''} onChange={(e) => cambiarColumna(i, { ancho: Number(e.target.value.replace(/\D/g, '')) || undefined })} inputMode="numeric" aria-label="Ancho" placeholder="Ancho" className={`${estiloInput} w-20`} />}
                 </div>
@@ -193,7 +203,7 @@ export function FormatoArchivo({ codigo, nombre, onCerrar, onGuardado }: { codig
         <div>
           <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-900 dark:text-white"><FileText className="h-4 w-4" aria-hidden /> Vista previa · {vista?.nombre_archivo}</h3>
           <pre className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">{vista?.texto.replace(/\t/g, '→') || '—'}</pre>
-          <p className="mt-1 text-xs text-slate-500">Ejemplo con dos productos de un pedido de Farmacia La Paz.</p>
+          <p className="mt-1 text-xs text-slate-500">Ejemplo con dos productos de un pedido de Farmacia La Paz (Losartán con 10% de descuento del producto y 5% de descuento del pedido).</p>
         </div>
 
         {(problemas.length > 0 || error) && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{[...problemas, error].filter(Boolean).join(' ')}</p>}

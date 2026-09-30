@@ -243,7 +243,13 @@ export function describirRequisitos(r: Pick<ReglaComercial, 'min_skus_distintos'
 
 // ---------------------------------------------------------------------------- descuentos por producto
 
-export const esDescuentoPorProducto = (r: Pick<ReglaComercial, 'alcance' | 'productos'>) => r.alcance === 'linea' && (r.productos?.length ?? 0) > 0;
+/**
+ * Descuento que se aplica solo a cada línea: a productos elegidos, o a TODOS los productos desde un mínimo de unidades de
+ * cada uno (p. ej. 5% a cada SKU que lleve 10 o más: el que lleva 5 queda sin descuento). Una regla de línea sin productos
+ * ni mínimo es solo un tope para descuentos manuales y no se aplica sola.
+ */
+export const esDescuentoPorProducto = (r: Pick<ReglaComercial, 'alcance' | 'productos' | 'min_unidades_producto'>) =>
+  r.alcance === 'linea' && ((r.productos?.length ?? 0) > 0 || (r.min_unidades_producto ?? 0) > 0);
 
 /**
  * Descuento automático de cada línea: el mayor de los "descuentos por producto" vigentes que alcanzan a ese producto
@@ -266,7 +272,7 @@ export function descuentosPorProducto(reglas: ReglaComercial[], ctx: ContextoPed
 export function ofertaDeProducto(reglas: ReglaComercial[], productoId: string, ctx: Pick<ContextoPedido, 'drogueria_id' | 'segmento' | 'equipo_id' | 'hoy'>): { pct: number; desde: number | null } | null {
   let mejor: { pct: number; desde: number | null } | null = null;
   for (const r of reglas) {
-    if (!esDescuentoPorProducto(r) || !r.productos!.includes(productoId)) continue;
+    if (!esDescuentoPorProducto(r) || (r.productos?.length && !r.productos.includes(productoId))) continue;
     if (!reglaEnAlcance(r, { ...ctx, cliente_validado: true, lineas: [] })) continue;
     if (!mejor || r.descuento_max_pct > mejor.pct) mejor = { pct: r.descuento_max_pct, desde: r.min_unidades_producto ?? null };
   }

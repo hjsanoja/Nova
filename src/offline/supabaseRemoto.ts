@@ -45,11 +45,14 @@ export function crearRemotoSupabase(client: SupabaseClient): SyncRemote {
 
     async traer(tabla: string, desde: string | null, limite: number, opciones: OpcionesTraer = {}) {
       let q = client.from(tabla).select(opciones.seleccion ?? '*');
-      if (desde) q = q.gt('updated_at', desde);
+      if (opciones.despuesDe) {
+        const { updated_at: u, id } = opciones.despuesDe;
+        q = q.or(`updated_at.gt."${u}",and(updated_at.eq."${u}",id.gt."${id}")`);
+      } else if (desde) q = q.gt('updated_at', desde);
       else if (opciones.creadoDesde) q = q.gte('created_at', opciones.creadoDesde);
       for (const [col, valor] of Object.entries(opciones.filtro ?? {})) q = q.eq(col, valor);
       for (const [col, valor] of Object.entries(opciones.minimo ?? {})) q = q.gte(col, valor);
-      const { data, error } = await q.order('updated_at', { ascending: true }).limit(limite);
+      const { data, error } = await q.order('updated_at', { ascending: true }).order('id', { ascending: true }).limit(limite);
       if (error) throw clasificarError(error as ErrorSupabase);
       return (data ?? []) as unknown as FilaRemota[];
     },

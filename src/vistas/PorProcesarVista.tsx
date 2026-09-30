@@ -11,7 +11,7 @@ import { CodigoFarmacia } from '../pedido/CodigoFarmacia';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { Sheet } from '../components/capture/Sheet';
 import { Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso } from '../components/ui/kit';
-import { descargarTexto, detallesPorPedido, diasDesde, ESTADOS_ETIQUETA, unidadesDePedido } from './logica';
+import { descargarTexto, detallesPorPedido, diasDesde, ESTADOS_ETIQUETA, fechaHoraCorta, nombreDeProducto, unidadesDePedido } from './logica';
 import { aplicarConfirmacionLocal, estadoTrasConfirmar, validarConfirmaciones } from './mesa';
 import type { Confirmacion } from './mesa';
 import { useClientes, useDetalles, useDroguerias, useMapClientes, useMapProductos, usePedidos, useProductos, useUsuariosNube } from './useDatos';
@@ -133,7 +133,7 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold">{cliente(p.cliente_id)?.nombre_comercial ?? 'Farmacia'}</p>
                         <p className="truncate text-xs text-slate-500">{p.correlativo} · {droguerias.find((d) => d.id === p.drogueria_id)?.nombre ?? ''} · {u.solicitadas} uds</p>
-                        <p className="truncate text-xs text-slate-400">{vendedor(p.vendedor_id) || 'Vendedor'} · {espera === 0 ? 'hoy' : `hace ${espera} d`}</p>
+                        <p className="truncate text-xs text-slate-400">{vendedor(p.vendedor_id) || 'Vendedor'} · {fechaHoraCorta(p.created_at)}{espera ? ` (hace ${espera} d)` : ''}</p>
                       </div>
                       <Etiqueta tono={e.tono}>{e.texto}</Etiqueta>
                     </button>
@@ -188,10 +188,13 @@ function Procesar({
   const [enviando, setEnviando] = useState(false);
   const nombreProducto = (id: string) => productos.find((x) => x.id === id);
 
+  // "Sin los que faltan": la mesa puede bajar el archivo omitiendo productos sin código en la droguería (se avisa cuáles).
+  const [omitirFaltantes, setOmitirFaltantes] = useState(false);
   const archivo = useMemo(
-    () => (cliente && drogueria ? generarArchivoDrogueria({ pedido: p, detalles: lineas, cliente, drogueria, productos, mapProductos, mapClientes }, { cantidad: 'auto' }) : null),
-    [p, lineas, cliente, drogueria, productos, mapProductos, mapClientes]
+    () => (cliente && drogueria ? generarArchivoDrogueria({ pedido: p, detalles: lineas, cliente, drogueria, productos, mapProductos, mapClientes }, { cantidad: 'auto', permitirFaltantes: omitirFaltantes }) : null),
+    [p, lineas, cliente, drogueria, productos, mapProductos, mapClientes, omitirFaltantes]
   );
+  const soloFaltanProductos = !!archivo && !archivo.ok && archivo.errores.length > 0 && archivo.errores.every((e) => e.codigo === 'producto_sin_homologar');
 
   const confirmaciones = (): Confirmacion[] =>
     lineas.map((l) => ({ detalle_id: l.id, unidades_confirmadas: Number(conf[l.id] === '' ? NaN : conf[l.id]), motivo: motivos[l.id] ?? 'quiebre_stock_drogueria' }));
@@ -247,6 +250,7 @@ function Procesar({
         <p className="text-xs text-slate-500">
           {p.correlativo} · {drogueria?.nombre ?? 'Droguería'} · {vendedor || 'Vendedor'} · {new Date(p.created_at).toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' })}
         </p>
+        {!!p.descuento_pedido_pct && <p className="mt-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300">Descuento del pedido: {p.descuento_pedido_pct}%</p>}
         {p.observaciones && <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">Nota del vendedor: {p.observaciones}</p>}
       </div>
 
@@ -267,11 +271,22 @@ function Procesar({
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Archivo para {drogueria?.nombre ?? 'la droguería'}</p>
           <Boton variante="primario" icono={Download} disabled={!archivo?.ok} onClick={descargar}>{archivo?.ok ? `Descargar ${archivo.nombre_archivo}` : 'Descargar'}</Boton>
         </div>
+        {!archivo && (
+          <p className="mt-2 text-xs text-rose-700 dark:text-rose-300">
+            {!cliente ? 'Esta farmacia aún no está en este equipo. Toca "Actualizar" arriba para descargarla.' : 'La droguería del pedido no está en este equipo. Toca "Actualizar" arriba.'}
+          </p>
+        )}
         {archivo && !archivo.ok && (
-          <ul className="mt-2 space-y-1 text-xs text-rose-700 dark:text-rose-300">
-            {archivo.errores.map((e, i) => <li key={i}>• {e.mensaje}</li>)}
-            {esAdmin && <li><button type="button" className="font-semibold underline" onClick={() => irATab('datos')}>Ir a Datos para completar la homologación</button></li>}
-          </ul>
+          <div className="mt-2 rounded-lg bg-rose-50 px-2.5 py-2 text-xs text-rose-800 dark:bg-rose-950/40 dark:text-rose-200">
+            <p className="font-semibold">No se puede descargar todavía:</p>
+            <ul className="mt-1 space-y-1">
+              {archivo.errores.map((e, i) => <li key={i}>• {e.mensaje}</li>)}
+            </ul>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {soloFaltanProductos && <Boton tamano="sm" onClick={() => setOmitirFaltantes(true)}>Descargar sin esos productos</Boton>}
+              {esAdmin && <Boton tamano="sm" variante="fantasma" onClick={() => irATab('datos')}>Ir a Datos para homologar</Boton>}
+            </div>
+          </div>
         )}
         {archivo?.ok && archivo.advertencias.map((a, i) => <p key={i} className="mt-1 text-xs text-amber-700 dark:text-amber-300">{a}</p>)}
       </div>
@@ -280,7 +295,7 @@ function Procesar({
       <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 text-left text-slate-500 dark:bg-slate-800/60">
-            <tr><th className="px-2.5 py-1.5">Producto</th><th className="px-2 text-right">Pedidas</th><th className="w-24 px-2 text-right">Confirmadas</th></tr>
+            <tr><th className="px-2.5 py-1.5">Presentación</th><th className="px-2 text-right">Desc.</th><th className="px-2 text-right">Pedidas</th><th className="w-24 px-2 text-right">Confirmadas</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {lineas.map((l) => {
@@ -289,18 +304,19 @@ function Procesar({
               return (
                 <tr key={l.id}>
                   <td className="px-2.5 py-1.5">
-                    <span className="font-semibold">{nombreProducto(l.producto_id)?.nombre_comercial ?? 'Producto'}</span>
-                    <span className="block text-xs text-slate-400">{nombreProducto(l.producto_id)?.sku}</span>
+                    <span className="font-semibold">{nombreDeProducto(nombreProducto(l.producto_id))}</span>
+                    <span className="block text-xs text-slate-400">{[nombreProducto(l.producto_id)?.presentacion ? nombreProducto(l.producto_id)?.nombre_comercial : null, nombreProducto(l.producto_id)?.sku].filter(Boolean).join(' · ')}</span>
                     {puedeEditar && menos && valor !== '' && (
                       <select value={motivos[l.id] ?? 'quiebre_stock_drogueria'} onChange={(e) => setMotivos((m) => ({ ...m, [l.id]: e.target.value as MotivoAjuste }))} aria-label="Motivo" className="mt-1 rounded-lg border border-slate-300 bg-white px-1.5 py-1 text-xs dark:border-slate-700 dark:bg-slate-900">
                         {MOTIVOS.map((m) => <option key={m.id} value={m.id}>{m.texto}</option>)}
                       </select>
                     )}
                   </td>
+                  <td className="px-2 text-right">{l.descuento_pct ? `${l.descuento_pct}%` : '—'}</td>
                   <td className="px-2 text-right">{l.unidades_solicitadas}</td>
                   <td className="px-2 text-right">
                     {puedeEditar ? (
-                      <input inputMode="numeric" value={valor} onChange={(e) => setConf((c) => ({ ...c, [l.id]: e.target.value.replace(/\D/g, '') }))} aria-label={`Confirmadas de ${nombreProducto(l.producto_id)?.nombre_comercial}`} className="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1 text-right text-sm dark:border-slate-700 dark:bg-slate-900" />
+                      <input inputMode="numeric" value={valor} onChange={(e) => setConf((c) => ({ ...c, [l.id]: e.target.value.replace(/\D/g, '') }))} aria-label={`Confirmadas de ${nombreDeProducto(nombreProducto(l.producto_id))}`} className="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1 text-right text-sm dark:border-slate-700 dark:bg-slate-900" />
                     ) : (
                       <span className={l.unidades_confirmadas != null && l.unidades_pendientes > 0 ? 'font-semibold text-amber-600' : ''}>{l.unidades_confirmadas ?? '—'}</span>
                     )}

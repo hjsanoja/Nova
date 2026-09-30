@@ -45,11 +45,27 @@ export function perteneceAGrupo(estado: EstadoPedido, grupo: GrupoEstado): boole
   }
 }
 
+/**
+ * Cómo se nombra un producto en las listas de pedidos: la Presentación distingue lo que el nombre no
+ * (Acetaminofén 500 mg vs 650 mg). Si no tiene presentación se usa el nombre comercial.
+ */
+export function nombreDeProducto(p: { nombre_comercial: string; presentacion?: string | null } | undefined): string {
+  if (!p) return 'Producto';
+  return p.presentacion?.trim() || p.nombre_comercial;
+}
+
+/** Fecha corta con hora del pedido: "30 sept · 3:17 p. m.". */
+export function fechaHoraCorta(iso: string): string {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('es', { day: '2-digit', month: 'short' })} · ${d.toLocaleTimeString('es', { hour: 'numeric', minute: '2-digit' })}`;
+}
+
 export interface FiltroPedidos {
   grupo: GrupoEstado;
   texto: string;
   vendedorId?: string | null;
   drogueriaId?: string | null;
+  clienteId?: string | null;
   desde?: number | null;
 }
 
@@ -59,6 +75,7 @@ export function filtrarPedidos(pedidos: LocalPedido[], f: FiltroPedidos, nombreC
     .filter((p) => perteneceAGrupo(p.estado, f.grupo))
     .filter((p) => !f.vendedorId || p.vendedor_id === f.vendedorId)
     .filter((p) => !f.drogueriaId || p.drogueria_id === f.drogueriaId)
+    .filter((p) => !f.clienteId || p.cliente_id === f.clienteId)
     .filter((p) => !f.desde || new Date(p.created_at).getTime() >= f.desde)
     .filter((p) => !q || p.correlativo.toLowerCase().includes(q) || nombreCliente(p.cliente_id).toLowerCase().includes(q))
     .sort((a, b) => b.created_at.localeCompare(a.created_at));

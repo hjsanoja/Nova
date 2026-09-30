@@ -99,7 +99,7 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
               <Vacio
                 icono={BadgePercent}
                 titulo={tipo === 'pedido' ? 'Todavía no hay descuentos por pedido' : 'Todavía no hay descuentos por producto'}
-                texto={tipo === 'pedido' ? 'Por ejemplo: 5% desde 3 productos distintos, o 8% desde 100 unidades.' : 'Por ejemplo: 10% en Losartán 50 mg, o 15% desde 20 unidades.'}
+                texto={tipo === 'pedido' ? 'Por ejemplo: 5% desde 3 productos distintos, o 8% desde 100 unidades.' : 'Por ejemplo: 10% en Losartán 50 mg, o 5% a cada producto que lleve 10 unidades o más.'}
                 accion={puedeEditar ? <Boton variante="primario" icono={Plus} onClick={() => setEdicion(nueva(tipo))}>Nuevo descuento</Boton> : undefined}
               />
             ) : (
@@ -138,6 +138,7 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
           <Tarjeta className="self-start">
             <Subtitulo>Cómo funciona</Subtitulo>
             <p className="text-sm text-slate-600 dark:text-slate-300">El vendedor ve la oferta en el catálogo (por ejemplo “−10%” o “−15% desde 20”). Al agregar el producto al carrito, el descuento se aplica solo a esa línea.</p>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Con <b>Todos los productos</b> y un mínimo (por ejemplo 10 unidades), cada producto que llegue a 10 recibe el descuento y el que lleve menos queda sin él.</p>
           </Tarjeta>
         )}
       </div>
@@ -185,8 +186,9 @@ function Simulador({ reglas }: { reglas: FilaRegla[] }) {
   );
 }
 
-/** "Losartán 50 mg, Omeprazol 20 mg y 3 más · desde 20 uds" */
+/** "Losartán 50 mg, Omeprazol 20 mg y 3 más · desde 20 uds" / "Todos los productos · desde 10 uds de cada uno" */
 function describirProductos(r: FilaRegla, nombre: (id: string) => string | undefined): string {
+  if (r.productos.length === 0) return `Todos los productos${r.min_unidades_producto ? ` · desde ${r.min_unidades_producto} uds de cada uno` : ''}`;
   const nombres = r.productos.map((id) => nombre(id) ?? 'Producto');
   const lista = nombres.length > 2 ? `${nombres.slice(0, 2).join(', ')} y ${nombres.length - 2} más` : nombres.join(' y ');
   return `${lista || 'Sin productos'}${r.min_unidades_producto ? ` · desde ${r.min_unidades_producto} uds` : ''}`;
@@ -238,6 +240,8 @@ function FormRegla({ inicial, droguerias, productos, onCerrar, onGuardada }: { i
   const porProducto = tipoDe(inicial) === 'producto' || (inicial.alcance === 'linea' && !inicial.id);
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
+  // Por producto: a unos productos elegidos, o a todos los que lleguen a un mínimo de unidades cada uno.
+  const [aTodos, setATodos] = useState(!!inicial.id && inicial.alcance === 'linea' && inicial.productos.length === 0);
   const numero = (v: string) => (v.trim() === '' ? null : Math.max(1, Math.round(Number(v)) || 1));
 
   const guardar = async (e: React.FormEvent) => {
@@ -246,11 +250,19 @@ function FormRegla({ inicial, droguerias, productos, onCerrar, onGuardada }: { i
     if (!sb) return;
     if (!(r.descuento_max_pct > 0 && r.descuento_max_pct <= 100)) return setError('El descuento debe estar entre 0,01% y 100%.');
     if (r.vigente_hasta && r.vigente_hasta < r.vigente_desde) return setError('La fecha final no puede ser anterior a la inicial.');
-    if (porProducto && r.productos.length === 0) return setError('Elige al menos un producto.');
-    const nombre = r.nombre.trim() || (porProducto ? `${r.descuento_max_pct}% en ${r.productos.length} producto${r.productos.length === 1 ? '' : 's'}` : `${r.descuento_max_pct}% ${describirRequisitos(r).toLowerCase()}`);
+    if (porProducto && aTodos && !r.min_unidades_producto) return setError('Indica desde cuántas unidades de cada producto aplica.');
+    if (porProducto && !aTodos && r.productos.length === 0) return setError('Elige al menos un producto.');
+    const productosFinal = porProducto && aTodos ? [] : r.productos;
+    const nombre =
+      r.nombre.trim() ||
+      (porProducto
+        ? aTodos
+          ? `${r.descuento_max_pct}% a cada producto desde ${r.min_unidades_producto} uds`
+          : `${r.descuento_max_pct}% en ${r.productos.length} producto${r.productos.length === 1 ? '' : 's'}`
+        : `${r.descuento_max_pct}% ${describirRequisitos(r).toLowerCase()}`);
     setGuardando(true);
     try {
-      await guardarRegla(sb, porProducto ? { ...r, nombre, alcance: 'linea', min_skus_distintos: null, min_unidades_totales: null } : { ...r, nombre, alcance: 'pedido', productos: [], min_unidades_producto: null });
+      await guardarRegla(sb, porProducto ? { ...r, nombre, productos: productosFinal, alcance: 'linea', min_skus_distintos: null, min_unidades_totales: null } : { ...r, nombre, alcance: 'pedido', productos: [], min_unidades_producto: null });
       onGuardada();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -266,8 +278,17 @@ function FormRegla({ inicial, droguerias, productos, onCerrar, onGuardada }: { i
         <Campo rotulo="Nombre" ayuda="Opcional: se arma solo."><input value={r.nombre} onChange={(e) => setR({ ...r, nombre: e.target.value })} placeholder={porProducto ? 'Ej. Promo Losartán' : 'Ej. Escala 5%'} className={estiloInput} /></Campo>
         {porProducto ? (
           <>
-            <Grupo rotulo="Productos con descuento" className="sm:col-span-2"><ElegirProductos productos={productos} valor={r.productos} onChange={(v) => setR({ ...r, productos: v })} /></Grupo>
-            <Campo rotulo="Desde cuántas unidades del producto" ayuda="Vacío = desde 1 unidad." className="sm:col-span-2"><input type="number" min={1} value={r.min_unidades_producto ?? ''} onChange={(e) => setR({ ...r, min_unidades_producto: numero(e.target.value) })} className={estiloInput} /></Campo>
+            <Grupo rotulo="Aplica a" className="sm:col-span-2">
+              <Segmentado valor={aTodos ? 'todos' : 'elegidos'} onChange={(v) => setATodos(v === 'todos')} opciones={[{ id: 'elegidos', texto: 'Productos elegidos' }, { id: 'todos', texto: 'Todos los productos' }]} />
+            </Grupo>
+            {!aTodos && <Grupo rotulo="Productos con descuento" className="sm:col-span-2"><ElegirProductos productos={productos} valor={r.productos} onChange={(v) => setR({ ...r, productos: v })} /></Grupo>}
+            <Campo
+              rotulo={aTodos ? 'Mínimo de unidades de cada producto' : 'Desde cuántas unidades del producto'}
+              ayuda={aTodos ? 'Obligatorio. Cada producto (SKU) que llegue a este mínimo recibe el descuento; los que no, quedan sin él.' : 'Vacío = desde 1 unidad.'}
+              className="sm:col-span-2"
+            >
+              <input type="number" min={1} value={r.min_unidades_producto ?? ''} onChange={(e) => setR({ ...r, min_unidades_producto: numero(e.target.value) })} className={estiloInput} />
+            </Campo>
           </>
         ) : (
           <>
@@ -286,7 +307,11 @@ function FormRegla({ inicial, droguerias, productos, onCerrar, onGuardada }: { i
         <label className="inline-flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={r.activo} onChange={(e) => setR({ ...r, activo: e.target.checked })} className="h-4 w-4 accent-marca-700" /> Activa</label>
         <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600 sm:col-span-2 dark:bg-slate-950 dark:text-slate-300">
           {porProducto ? (
-            <><b>{r.descuento_max_pct || 0}%</b> en {r.productos.length} producto{r.productos.length === 1 ? '' : 's'}{r.min_unidades_producto ? `, desde ${r.min_unidades_producto} unidades de cada uno` : ''}. Se aplica solo en esas líneas del pedido.</>
+            aTodos ? (
+              <><b>{r.descuento_max_pct || 0}%</b> a cada producto del pedido que lleve {r.min_unidades_producto || '…'} unidades o más. Ejemplo: 3 productos de {r.min_unidades_producto || 10} uds y 1 de {Math.max(1, Math.floor((r.min_unidades_producto || 10) / 2))} → el descuento va solo a los 3 primeros.</>
+            ) : (
+              <><b>{r.descuento_max_pct || 0}%</b> en {r.productos.length} producto{r.productos.length === 1 ? '' : 's'}{r.min_unidades_producto ? `, desde ${r.min_unidades_producto} unidades de cada uno` : ''}. Se aplica solo en esas líneas del pedido.</>
+            )
           ) : (
             <><b>{r.descuento_max_pct || 0}%</b> de descuento · {describirRequisitos(r).toLowerCase()}. Si defines los dos mínimos, el pedido debe cumplir ambos; para que baste uno solo, crea dos descuentos.</>
           )}

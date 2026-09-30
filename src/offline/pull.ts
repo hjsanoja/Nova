@@ -430,21 +430,24 @@ export async function traerTabla(db: NovaDB, remoto: SyncRemote, t: TablaPull): 
   const completa = cursor === null;
   const vistos = new Set<string>();
   let total = 0;
+  // La primera página repite un margen (SOLAPE_MS) por commits fuera de orden; las siguientes avanzan por (updated_at, id),
+  // así nunca se vuelve a pedir la misma página aunque miles de filas tengan la misma hora.
+  let despuesDe: { updated_at: string; id: string } | undefined;
   for (;;) {
     const desde = cursor ? new Date(new Date(cursor).getTime() - SOLAPE_MS).toISOString() : null;
-    const filas = await remoto.traer(t.remota, desde, PAGINA, { creadoDesde, seleccion: t.seleccion, minimo });
+    const filas = await remoto.traer(t.remota, desde, PAGINA, { creadoDesde, seleccion: t.seleccion, minimo, despuesDe });
     if (filas.length === 0) break;
     await t.aplicar(db, filas);
     if (t.podarNoVistos) filas.forEach((f) => vistos.add(str(f.id)));
     total += filas.length;
-    const ultimo = str(filas[filas.length - 1].updated_at);
-    // Si toda la página es anterior al cursor (solo el solape), no hay más novedades.
-    const avanzo = !cursor || ultimo > cursor;
-    if (avanzo) {
+    const final = filas[filas.length - 1];
+    const ultimo = str(final.updated_at);
+    despuesDe = { updated_at: ultimo, id: str(final.id) };
+    if (!cursor || ultimo > cursor) {
       cursor = ultimo;
       await db.guardarMeta(claveCursor(t.remota), cursor);
     }
-    if (filas.length < PAGINA || !avanzo) break;
+    if (filas.length < PAGINA) break;
   }
   if (t.podar && total > 0) await t.podar(db);
   if (t.podarNoVistos && completa) await t.podarNoVistos(db, vistos);

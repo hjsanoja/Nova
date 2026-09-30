@@ -52,7 +52,7 @@ export interface ErrorExportacion {
 }
 
 export interface EntradaExportacion {
-  pedido: Pick<LocalPedido, 'correlativo' | 'created_at' | 'observaciones' | 'estado'>;
+  pedido: Pick<LocalPedido, 'correlativo' | 'created_at' | 'observaciones' | 'estado'> & { descuento_pedido_pct?: number | null };
   detalles: LocalDetalle[];
   cliente: LocalCliente;
   drogueria: LocalDrogueria;
@@ -135,6 +135,11 @@ function formatearNumero(n: number, formato: ColumnaExport['formato'], decimal: 
   return decimal === 'coma' ? t.replace('.', ',') : t;
 }
 
+/** Descuento equivalente de aplicar uno tras otro: 1 − (1 − a)(1 − b), redondeado a 2 decimales. */
+export function descuentoCombinado(a: number, b: number): number {
+  return Math.round((1 - (1 - a / 100) * (1 - b / 100)) * 10000) / 100;
+}
+
 // Evita que Excel interprete texto libre como fórmula (=, +, -, @).
 const neutralizarFormula = (t: string) => (/^[=+\-@]/.test(t) ? `'${t}` : t);
 
@@ -179,6 +184,17 @@ function valorColumna(col: ColumnaExport, c: ContextoLinea): { texto: string; nu
       return { texto: neutralizarFormula((c.entrada.pedido.observaciones ?? '').replace(/[\r\n]+/g, ' ')), numerico: false };
     case 'linea':
       return { texto: String(c.numeroLinea), numerico: true };
+    case 'presentacion_producto':
+      return { texto: neutralizarFormula(c.producto?.presentacion || c.producto?.nombre_comercial || ''), numerico: false };
+    case 'descuento_linea':
+    case 'descuento_pedido':
+    case 'descuento_total': {
+      const linea = c.detalle.descuento_pct ?? 0;
+      const pedido = c.entrada.pedido.descuento_pedido_pct ?? 0;
+      // Total: los dos descuentos encadenados (10% + 5% = 14,5%), como los aplica una factura.
+      const n = col.origen === 'descuento_linea' ? linea : col.origen === 'descuento_pedido' ? pedido : descuentoCombinado(linea, pedido);
+      return { texto: formatearNumero(n, col.formato ?? 'decimal', f.decimal), numerico: true };
+    }
     case 'precio_base':
       return { texto: '', numerico: true }; // fase 2: se llenará desde precios_drogueria_producto
     case 'constante':

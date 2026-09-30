@@ -4,6 +4,8 @@
 export interface LineaCarrito {
   producto_id: string;
   unidades: number;
+  /** % de descuento que escribió el vendedor para esta línea (null/ausente = el automático de las condiciones). */
+  descuento_pct?: number | null;
 }
 
 export interface Carrito {
@@ -33,6 +35,8 @@ export type AccionCarritos =
   /** Suma varias líneas al carrito de una farmacia (lo abre si no existe): dictado, sugerido, repetir pedido. */
   | { tipo: 'agregar_varios'; cliente_id: string; lineas: LineaCarrito[]; drogueria_id?: string | null; id?: string; ahora?: string }
   | { tipo: 'unidades'; carrito_id: string; producto_id: string; unidades: number }
+  /** Descuento manual de una línea (null = volver al automático). */
+  | { tipo: 'descuento'; carrito_id: string; producto_id: string; pct: number | null }
   | { tipo: 'drogueria'; carrito_id: string; drogueria_id: string | null }
   | { tipo: 'observaciones'; carrito_id: string; texto: string }
   | { tipo: 'quitar'; carrito_id: string }
@@ -82,6 +86,10 @@ export function reductorCarritos(s: EstadoCarritos, a: AccionCarritos): EstadoCa
         ...c,
         lineas: a.unidades <= 0 ? c.lineas.filter((l) => l.producto_id !== a.producto_id) : c.lineas.map((l) => (l.producto_id === a.producto_id ? { ...l, unidades: Math.floor(a.unidades) } : l)),
       }));
+    case 'descuento': {
+      const pct = a.pct == null || Number.isNaN(a.pct) ? null : Math.min(100, Math.max(0, Math.round(a.pct * 100) / 100));
+      return actualizar(s, a.carrito_id, (c) => ({ ...c, lineas: c.lineas.map((l) => (l.producto_id === a.producto_id ? { ...l, descuento_pct: pct } : l)) }));
+    }
     case 'drogueria':
       return actualizar(s, a.carrito_id, (c) => ({ ...c, drogueria_id: a.drogueria_id }));
     case 'observaciones':
