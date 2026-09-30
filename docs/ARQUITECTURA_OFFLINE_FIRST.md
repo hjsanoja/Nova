@@ -158,10 +158,10 @@ comparten los mismos casos de prueba (`politicas.test.ts` y `db-tests/10_escenar
 
 ## 6. Puesta en marcha en Supabase
 
-1. SQL Editor: ejecutar `src/sql/nova_produccion_v3.sql` completo (re-ejecutable). Si el proyecto tiene tablas de una versión anterior con los mismos nombres, el script se detiene con un mensaje antes de tocar nada.
-2. Authentication → Users → **Add user** (correo + contraseña, marcar "Auto Confirm User"). Esa cuenta nace como vendedor inactivo.
-3. SQL Editor, una sola vez, para convertirla en administrador:
-   `UPDATE dim_usuarios SET rol = 'admin', activo = true, nombre_completo = 'Nombre Apellido' WHERE email = 'tu@correo.com';`
+1. SQL Editor: ejecutar `src/sql/nova_produccion_v3.sql` completo (re-ejecutable). Si el proyecto tiene tablas de una versión anterior con los mismos nombres, o triggers antiguos en `auth.users`, el script se detiene con un mensaje antes de tocar nada. En ese caso ejecutar antes `src/sql/00_reiniciar_esquema_anterior.sql`: quita los triggers de `auth.users` y mueve todo lo que había en `public` a un esquema de respaldo `nova_anterior_AAAAMMDD_HHMMSS` (no borra datos ni usuarios; se niega a actuar si `public` ya es v3). Cuando ya no se necesite: `DROP SCHEMA nova_anterior_… CASCADE;`.
+2. Authentication → Users → **Add user** (correo + contraseña, marcar "Auto Confirm User"). Esa cuenta nace como vendedor inactivo. El trigger de alta nunca bloquea la creación en Supabase Auth: si algo falla, deja un aviso y la fila se completa en el paso 3.
+3. SQL Editor, una sola vez, para convertirla en administrador (crea la fila de `dim_usuarios` si falta):
+   `SELECT app.promover_administrador('tu@correo.com', 'Nombre Apellido');`
 4. En la app: pegar URL y anon key en la pantalla de acceso, iniciar sesión. Ya con sesión de administrador:
    - **Configuración → Usuarios**: crear equipos y personas (vendedor, transferencista, gerente).
    - **Cargar y editar datos**: catálogos, droguerías, homologaciones y ventas; **Fichero de vendedores** para asignar farmacias.

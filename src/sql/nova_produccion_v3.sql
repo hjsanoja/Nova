@@ -12,20 +12,36 @@
 --   * Seguridad: RLS en todas las tablas; las operaciones críticas viven en funciones RPC.
 --
 -- Uso: ejecutar completo en el SQL Editor de Supabase. Es re-ejecutable (IF NOT EXISTS).
--- Si el proyecto tiene tablas de una versión anterior con los mismos nombres pero otra estructura, el script se
--- detiene con un aviso claro antes de tocar nada.
+-- Si el proyecto tiene tablas de una versión anterior con los mismos nombres pero otra estructura, o triggers
+-- antiguos sobre auth.users, el script se detiene con un aviso claro antes de tocar nada. En ese caso, ejecutar
+-- antes src/sql/00_reiniciar_esquema_anterior.sql (aparta lo anterior en un esquema de respaldo, sin borrarlo).
 -- ==============================================================================
 
 -- ------------------------------------------------------------------------------
 -- 00. GUARDA: tablas de una versión anterior con los mismos nombres
 -- ------------------------------------------------------------------------------
 DO $$
+DECLARE v_tablas text; v_triggers text;
 BEGIN
-  IF to_regclass('public.dim_clientes') IS NOT NULL AND NOT EXISTS (
-       SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'dim_clientes' AND column_name = 'codigo_interno') THEN
-    RAISE EXCEPTION 'Este proyecto tiene tablas de una version anterior de NOVA (dim_clientes sin codigo_interno). Elimina esas tablas o usa un proyecto nuevo antes de ejecutar este script.'
-      USING ERRCODE = '55000';
+  -- Tablas de v3 que ya existen en public pero sin la estructura de v3 (sin row_version, o dim_clientes sin codigo_interno).
+  SELECT string_agg(t.nombre, ', ' ORDER BY t.nombre) INTO v_tablas
+    FROM unnest(ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias','dim_productos',
+                      'map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto','config_reglas_comerciales',
+                      'fact_pedidos','fact_pedido_detalles','fact_compras_mensual','crm_visitas','plantillas_reposicion',
+                      'notificaciones','alertas_comerciales']) AS t(nombre)
+   WHERE to_regclass('public.' || t.nombre) IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns c
+                      WHERE c.table_schema = 'public' AND c.table_name = t.nombre
+                        AND c.column_name = CASE t.nombre WHEN 'dim_clientes' THEN 'codigo_interno' ELSE 'row_version' END);
+  -- Triggers de otras versiones sobre auth.users (hacen fallar "Add user": Database error creating new user).
+  SELECT string_agg(tgname, ', ') INTO v_triggers
+    FROM pg_trigger WHERE tgrelid = 'auth.users'::regclass AND NOT tgisinternal AND tgname <> 'on_auth_user_created';
+
+  IF v_tablas IS NOT NULL OR v_triggers IS NOT NULL THEN
+    RAISE EXCEPTION 'Este proyecto tiene restos de una version anterior de NOVA (tablas: %; triggers en auth.users: %). No se cambio nada. Ejecuta primero src/sql/00_reiniciar_esquema_anterior.sql (aparta lo anterior en un esquema de respaldo, sin borrarlo) y despues este script. Alternativa: usar un proyecto de Supabase nuevo.',
+      coalesce(v_tablas, 'ninguna'), coalesce(v_triggers, 'ninguno')
+      USING ERRCODE = '55000',
+            HINT = 'Para ver lo que hay: select table_name from information_schema.tables where table_schema = ''public'' order by 1;';
   END IF;
 END $$;
 
@@ -2143,11 +2159,17 @@ END $$;
 CREATE OR REPLACE FUNCTION app.nuevo_usuario_auth() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
-  INSERT INTO dim_usuarios (id, nombre_completo, email, rol, activo)
-  VALUES (NEW.id,
-          coalesce(nullif(btrim(NEW.raw_user_meta_data->>'nombre_completo'), ''), split_part(coalesce(NEW.email, 'usuario'), '@', 1)),
-          coalesce(NEW.email, NEW.id::text || '@sin-correo.local'), 'vendedor', false)
-  ON CONFLICT DO NOTHING;   -- cualquier choque (id o correo ya existente) no debe impedir el registro en Supabase Auth
+  BEGIN
+    INSERT INTO dim_usuarios (id, nombre_completo, email, rol, activo)
+    VALUES (NEW.id,
+            coalesce(nullif(btrim(NEW.raw_user_meta_data->>'nombre_completo'), ''), split_part(coalesce(NEW.email, 'usuario'), '@', 1)),
+            coalesce(NEW.email, NEW.id::text || '@sin-correo.local'), 'vendedor', false)
+    ON CONFLICT DO NOTHING;   -- cualquier choque (id o correo ya existente) no debe impedir el registro en Supabase Auth
+  EXCEPTION WHEN OTHERS THEN
+    -- Nunca bloquear el alta en Supabase Auth ("Database error creating new user"). Sin fila en dim_usuarios la cuenta
+    -- no ve datos; un administrador la completa con app.promover_administrador o desde Configuración → Usuarios.
+    RAISE WARNING 'NOVA: no se pudo crear dim_usuarios para % (%): %', NEW.id, NEW.email, SQLERRM;
+  END;
   RETURN NEW;
 END $$;
 
@@ -2159,6 +2181,27 @@ BEGIN
 EXCEPTION WHEN insufficient_privilege THEN
   RAISE NOTICE 'Sin permiso para crear el trigger en auth.users: créalo desde el SQL Editor con el rol postgres.';
 END $$;
+
+-- Primer administrador (o recuperación): se ejecuta desde el SQL Editor con el rol postgres. Crea la fila de
+-- dim_usuarios si falta (cuenta creada antes de instalar v3) y la deja activa como admin.
+--   SELECT app.promover_administrador('correo@ejemplo.com', 'Nombre Apellido');
+CREATE OR REPLACE FUNCTION app.promover_administrador(p_email text, p_nombre text DEFAULT NULL) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_id uuid; v_email text;
+BEGIN
+  SELECT id, email INTO v_id, v_email FROM auth.users WHERE lower(email) = lower(btrim(p_email));
+  IF v_id IS NULL THEN
+    RAISE EXCEPTION 'No existe una cuenta con el correo %. Créala primero en Authentication → Users → Add user.', p_email
+      USING ERRCODE = 'P0002';
+  END IF;
+  INSERT INTO dim_usuarios (id, nombre_completo, email, rol, activo)
+  VALUES (v_id, coalesce(nullif(btrim(p_nombre), ''), split_part(v_email, '@', 1)), v_email, 'admin', true)
+  ON CONFLICT (id) DO UPDATE
+    SET rol = 'admin', activo = true, deleted_at = NULL,
+        nombre_completo = coalesce(nullif(btrim(p_nombre), ''), dim_usuarios.nombre_completo);
+  RETURN 'Listo: ' || v_email || ' es administrador activo.';
+END $$;
+REVOKE ALL ON FUNCTION app.promover_administrador(text, text) FROM PUBLIC, anon, authenticated;
 
 CREATE OR REPLACE FUNCTION admin_configurar_usuario(p_usuario uuid, p_rol rol_usuario, p_equipo_codigo text DEFAULT NULL,
                                                     p_activo boolean DEFAULT true, p_nombre text DEFAULT NULL,
