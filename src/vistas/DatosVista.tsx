@@ -20,10 +20,14 @@ const SECCIONES = ['cargar', 'fichero', 'pendientes'] as const;
 
 const CLAVES_ANTIGUAS = ['PHARMA_PEDIDOS_CAB', 'PHARMA_PEDIDOS_DET', 'PHARMA_USUARIOS', 'PHARMA_BORRADOR_LOCAL'];
 
-/** ¿Este registro es uno de los datos de ejemplo que trae la aplicación? (mismo código y mismo nombre) */
-const esEjemploCliente = (c: Cliente) => MOCK_CLIENTES.some((m) => m.ident01 === c.ident01 && m.nombre_fantasia === c.nombre_fantasia);
-const esEjemploProducto = (p: Producto) => MOCK_PRODUCTOS.some((m) => m.sku === p.sku && m.nombre_comercial === p.nombre_comercial);
-const esEjemploDrogueria = (d: Drogueria) => MOCK_DROGUERIAS.some((m) => m.codigo_drogueria === d.codigo_drogueria && m.nombre_drogueria === d.nombre_drogueria);
+/**
+ * ¿Este registro es uno de los datos de ejemplo que trae la aplicación? Solo si viene de la semilla (mismo id y misma
+ * fecha de creación): una droguería real llamada igual que un ejemplo (COBECA, NENA...) cargada desde archivo NO lo es.
+ */
+const deSemilla = (a: { id: string; created_at: string }, b: { id: string; created_at: string }) => a.id === b.id && a.created_at === b.created_at;
+const esEjemploCliente = (c: Cliente) => MOCK_CLIENTES.some((m) => deSemilla(m, c));
+const esEjemploProducto = (p: Producto) => MOCK_PRODUCTOS.some((m) => deSemilla(m, p));
+const esEjemploDrogueria = (d: Drogueria) => MOCK_DROGUERIAS.some((m) => deSemilla(m, d));
 
 /** Administración de datos: cargar y editar catálogos/histórico, asignar el fichero de cada vendedor y resolver pendientes de homologación. */
 export function DatosVista({ usuario, esDemo }: { usuario: Usuario; esDemo: boolean }) {
@@ -57,7 +61,7 @@ export function DatosVista({ usuario, esDemo }: { usuario: Usuario; esDemo: bool
   }, [esDemo, setClientes, setProductos, setDroguerias]);
 
   /** Sube a la nube un cambio hecho en pantalla; si falla se avisa y el cambio queda guardado en este navegador. */
-  const aNube = useCallback(async (accion: (sb: NonNullable<ReturnType<typeof getSupabaseClient>>) => Promise<void>, ok: string) => {
+  const aNube = useCallback(async (accion: (sb: NonNullable<ReturnType<typeof getSupabaseClient>>) => Promise<unknown>, ok: string) => {
     const sb = getSupabaseClient();
     if (esDemo || !sb) return;
     try {

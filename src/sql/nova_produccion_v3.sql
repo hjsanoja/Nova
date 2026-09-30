@@ -1401,7 +1401,9 @@ END $$;
 -- (reprocesar_homologacion) y se completa sola cuando se agrega un mapeo (triggers de más abajo).
 
 -- Consolida fact_ventas_drogueria -> fact_compras_mensual desde un mes en adelante (NULL = todo).
-CREATE OR REPLACE FUNCTION app.refrescar_compras(p_desde date DEFAULT NULL) RETURNS integer
+-- Firma anterior (solo p_desde): se retira para que las llamadas de un argumento no sean ambiguas.
+DROP FUNCTION IF EXISTS app.refrescar_compras(date);
+CREATE OR REPLACE FUNCTION app.refrescar_compras(p_desde date DEFAULT NULL, p_hasta date DEFAULT NULL) RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_n integer; v_baja integer;
 BEGIN
@@ -1409,6 +1411,7 @@ BEGIN
     SELECT cliente_id, producto_id, periodo, sum(unidades)::integer AS unidades, count(*)::integer AS n, max(fecha) AS ultima
       FROM fact_ventas_drogueria
      WHERE cliente_id IS NOT NULL AND producto_id IS NOT NULL AND (p_desde IS NULL OR periodo >= p_desde)
+       AND (p_hasta IS NULL OR periodo <= p_hasta)
      GROUP BY cliente_id, producto_id, periodo
     HAVING sum(unidades) > 0)
   INSERT INTO fact_compras_mensual (cliente_id, producto_id, periodo, unidades, n_compras, ultima_compra)
@@ -1423,7 +1426,7 @@ BEGIN
 
   -- Combinaciones que dejaron de existir (lote borrado, homologación corregida): baja lógica para que el dispositivo las retire.
   UPDATE fact_compras_mensual c SET deleted_at = now()
-   WHERE c.deleted_at IS NULL AND (p_desde IS NULL OR c.periodo >= p_desde)
+   WHERE c.deleted_at IS NULL AND (p_desde IS NULL OR c.periodo >= p_desde) AND (p_hasta IS NULL OR c.periodo <= p_hasta)
      AND NOT EXISTS (SELECT 1 FROM fact_ventas_drogueria v
                       WHERE v.cliente_id = c.cliente_id AND v.producto_id = c.producto_id AND v.periodo = c.periodo
                      HAVING sum(v.unidades) > 0);
@@ -1436,10 +1439,15 @@ END $$;
 --   2) farmacia por código de cuenta; si el reporte no trae código, por nombre normalizado inequívoco;
 --   3) producto por código de la droguería;
 --   4) actualiza el consolidado mensual de los meses afectados.
-CREATE OR REPLACE FUNCTION app.homologar_ventas(p_drogueria uuid DEFAULT NULL, p_lote uuid DEFAULT NULL) RETURNS jsonb
+--   p_refrescar = false y un rango de filas: lo usa la importación por trozos (solo enlaza el trozo recién insertado; el
+--   consolidado se calcula una vez al final con finalizar_lote_ventas).
+DROP FUNCTION IF EXISTS app.homologar_ventas(uuid, uuid);
+CREATE OR REPLACE FUNCTION app.homologar_ventas(p_drogueria uuid DEFAULT NULL, p_lote uuid DEFAULT NULL,
+                                                p_refrescar boolean DEFAULT true,
+                                                p_fila_desde integer DEFAULT NULL, p_fila_hasta integer DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_aprendidos bigint := 0; v_cli bigint := 0; v_cli_n bigint := 0; v_prod bigint := 0; v_x bigint;
-        v_desde date; v_m date;
+        v_desde date; v_hasta date; v_m date; v_mx date;
 BEGIN
   IF current_setting('nova.homologando', true) = '1' THEN RETURN '{}'::jsonb; END IF;
   PERFORM set_config('nova.homologando', '1', true);
@@ -1453,6 +1461,7 @@ BEGIN
       JOIN dim_productos p ON p.sku = v.cod_sap_reportado AND p.deleted_at IS NULL
      WHERE v.producto_id IS NULL AND v.cod_sap_reportado IS NOT NULL
        AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+       AND (p_fila_desde IS NULL OR v.fila BETWEEN p_fila_desde AND p_fila_hasta)
      GROUP BY v.drogueria_id, v.cod_producto_drogueria),
   ins AS (
     INSERT INTO map_producto_drogueria (drogueria_id, producto_id, codigo_drogueria, descripcion_drogueria, es_principal, origen)
@@ -1467,9 +1476,10 @@ BEGIN
      WHERE v.cliente_id IS NULL AND m.deleted_at IS NULL AND m.drogueria_id = v.drogueria_id
        AND m.codigo_cuenta IS NOT NULL AND m.codigo_cuenta = v.cod_cliente_drogueria
        AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+       AND (p_fila_desde IS NULL OR v.fila BETWEEN p_fila_desde AND p_fila_hasta)
     RETURNING v.periodo)
-  SELECT count(*), min(periodo) INTO v_cli, v_m FROM u;
-  v_desde := v_m;
+  SELECT count(*), min(periodo), max(periodo) INTO v_cli, v_m, v_mx FROM u;
+  v_desde := v_m; v_hasta := v_mx;
 
   WITH unico AS (
     SELECT drogueria_id, nombre_normalizado, (array_agg(DISTINCT cliente_id))[1] AS cliente_id
@@ -1483,9 +1493,10 @@ BEGIN
      WHERE v.cliente_id IS NULL AND v.cod_cliente_drogueria IS NULL
        AND un.drogueria_id = v.drogueria_id AND un.nombre_normalizado = app.norm_texto(v.nombre_cliente_drogueria)
        AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+       AND (p_fila_desde IS NULL OR v.fila BETWEEN p_fila_desde AND p_fila_hasta)
     RETURNING v.periodo)
-  SELECT count(*), min(periodo) INTO v_cli_n, v_m FROM u;
-  v_desde := least(v_desde, v_m);
+  SELECT count(*), min(periodo), max(periodo) INTO v_cli_n, v_m, v_mx FROM u;
+  v_desde := least(v_desde, v_m); v_hasta := greatest(v_hasta, v_mx);
 
   WITH u AS (
     UPDATE fact_ventas_drogueria v SET producto_id = m.producto_id
@@ -1493,11 +1504,12 @@ BEGIN
      WHERE v.producto_id IS NULL AND m.deleted_at IS NULL AND m.drogueria_id = v.drogueria_id
        AND m.codigo_drogueria = v.cod_producto_drogueria
        AND (p_drogueria IS NULL OR v.drogueria_id = p_drogueria) AND (p_lote IS NULL OR v.lote_id = p_lote)
+       AND (p_fila_desde IS NULL OR v.fila BETWEEN p_fila_desde AND p_fila_hasta)
     RETURNING v.periodo)
-  SELECT count(*), min(periodo) INTO v_prod, v_m FROM u;
-  v_desde := least(v_desde, v_m);
+  SELECT count(*), min(periodo), max(periodo) INTO v_prod, v_m, v_mx FROM u;
+  v_desde := least(v_desde, v_m); v_hasta := greatest(v_hasta, v_mx);
 
-  IF v_desde IS NOT NULL THEN PERFORM app.refrescar_compras(v_desde); END IF;
+  IF p_refrescar AND v_desde IS NOT NULL THEN PERFORM app.refrescar_compras(v_desde, v_hasta); END IF;
   PERFORM set_config('nova.homologando', '', true);
   RETURN jsonb_build_object('clientes_enlazados', v_cli + v_cli_n, 'productos_enlazados', v_prod, 'codigos_aprendidos', v_aprendidos);
 EXCEPTION WHEN OTHERS THEN
@@ -1666,12 +1678,16 @@ SELECT upper(regexp_replace(rif, '[^0-9A-Za-z]', '', 'g')) AS rif_normalizado, c
 --               "cod_producto":"P-1","nombre_producto":"...","unidades":12,"cod_sap":"SKU-1"}, ...]
 CREATE OR REPLACE FUNCTION importar_ventas_drogueria(p_lote jsonb, p_filas jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
-DECLARE v_lote uuid; v_ins integer; v_desconocidas jsonb; v_homo jsonb;
+DECLARE v_lote uuid; v_ins integer; v_desconocidas jsonb; v_homo jsonb; v_diferir boolean;
+        v_fmin integer; v_fmax integer;
 BEGIN
   IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
   IF coalesce(p_lote->>'checksum', '') = '' OR jsonb_typeof(p_filas) <> 'array' THEN
     RAISE EXCEPTION 'Lote inválido: falta checksum o filas' USING ERRCODE = '22023';
   END IF;
+  -- diferir = true: el archivo llega en varios trozos; el consolidado mensual se calcula UNA vez al final
+  -- (finalizar_lote_ventas). Sin diferir, cada llamada deja todo al día (compatibilidad).
+  v_diferir := coalesce((p_lote->>'diferir')::boolean, false);
 
   INSERT INTO import_lotes (archivo, checksum, creado_por)
   VALUES (coalesce(p_lote->>'archivo', 'sin_nombre'), p_lote->>'checksum', auth.uid())
@@ -1684,33 +1700,79 @@ BEGIN
            btrim(r->>'cod_producto') AS cod_producto, r->>'nombre_producto' AS nombre_producto,
            nullif(btrim(r->>'cod_sap'), '') AS cod_sap, (r->>'unidades')::integer AS unidades
       FROM jsonb_array_elements(p_filas) r),
-  res AS (
-    SELECT s.*, d.id AS drogueria_id
-      FROM src s
+  -- La droguería se resuelve una vez por nombre distinto (no por fila).
+  drog AS (
+    SELECT x.drogueria, d.id AS drogueria_id
+      FROM (SELECT DISTINCT drogueria FROM src) x
       LEFT JOIN LATERAL (SELECT dd.id FROM dim_droguerias dd
                           WHERE dd.deleted_at IS NULL
-                            AND (app.norm_texto(dd.codigo) = app.norm_texto(s.drogueria) OR dd.nombre_normalizado = app.norm_texto(s.drogueria))
+                            AND (app.norm_texto(dd.codigo) = app.norm_texto(x.drogueria) OR dd.nombre_normalizado = app.norm_texto(x.drogueria))
                           ORDER BY dd.activo DESC LIMIT 1) d ON true),
+  res AS (
+    SELECT s.*, dr.drogueria_id FROM src s LEFT JOIN drog dr ON dr.drogueria IS NOT DISTINCT FROM s.drogueria),
   ins AS (
     INSERT INTO fact_ventas_drogueria (lote_id, fila, fecha, drogueria_id, cod_cliente_drogueria, nombre_cliente_drogueria,
                                        cod_producto_drogueria, nombre_producto_drogueria, cod_sap_reportado, unidades)
     SELECT v_lote, fila, fecha, drogueria_id, cod_cliente, nombre_cliente, cod_producto, nombre_producto, cod_sap, unidades
       FROM res WHERE drogueria_id IS NOT NULL AND cod_producto <> ''
     ON CONFLICT (lote_id, fila) DO NOTHING
-    RETURNING 1)
+    RETURNING fila, fecha)
   SELECT (SELECT count(*) FROM ins),
-         (SELECT coalesce(jsonb_agg(DISTINCT drogueria), '[]'::jsonb) FROM res WHERE drogueria_id IS NULL)
-    INTO v_ins, v_desconocidas;
+         (SELECT coalesce(jsonb_agg(DISTINCT drogueria), '[]'::jsonb) FROM drog WHERE drogueria_id IS NULL),
+         (SELECT min(fila) FROM ins), (SELECT max(fila) FROM ins)
+    INTO v_ins, v_desconocidas, v_fmin, v_fmax;
 
-  UPDATE import_lotes l SET filas = x.n, periodo_desde = x.d1, periodo_hasta = x.d2
-    FROM (SELECT count(*)::integer AS n, min(fecha) AS d1, max(fecha) AS d2 FROM fact_ventas_drogueria WHERE lote_id = v_lote) x
-   WHERE l.id = v_lote;
-
-  v_homo := app.homologar_ventas(NULL, v_lote);
-  INSERT INTO audit_log (usuario_id, accion, detalle)
-  VALUES (auth.uid(), 'importar_ventas', jsonb_build_object('lote', v_lote, 'insertadas', v_ins));
+  IF v_diferir THEN
+    -- Solo las filas de este trozo: el costo no crece con el tamaño del archivo ni del historial.
+    UPDATE import_lotes l SET filas = coalesce(l.filas, 0) + v_ins,
+           periodo_desde = least(l.periodo_desde, x.d1), periodo_hasta = greatest(l.periodo_hasta, x.d2)
+      FROM (SELECT min(fecha) AS d1, max(fecha) AS d2 FROM fact_ventas_drogueria
+             WHERE lote_id = v_lote AND fila BETWEEN v_fmin AND v_fmax) x
+     WHERE l.id = v_lote AND v_ins > 0;
+    v_homo := CASE WHEN v_ins > 0 THEN app.homologar_ventas(NULL, v_lote, false, v_fmin, v_fmax) ELSE '{}'::jsonb END;
+  ELSE
+    UPDATE import_lotes l SET filas = x.n, periodo_desde = x.d1, periodo_hasta = x.d2
+      FROM (SELECT count(*)::integer AS n, min(fecha) AS d1, max(fecha) AS d2 FROM fact_ventas_drogueria WHERE lote_id = v_lote) x
+     WHERE l.id = v_lote;
+    v_homo := app.homologar_ventas(NULL, v_lote);
+    INSERT INTO audit_log (usuario_id, accion, detalle)
+    VALUES (auth.uid(), 'importar_ventas', jsonb_build_object('lote', v_lote, 'insertadas', v_ins));
+  END IF;
   RETURN jsonb_build_object('lote_id', v_lote, 'insertadas', v_ins, 'recibidas', jsonb_array_length(p_filas),
                             'droguerias_desconocidas', v_desconocidas, 'homologacion', v_homo);
+END $$;
+
+-- Cierre de una importación por trozos: consolidado mensual de los meses del archivo y resumen del lote.
+CREATE OR REPLACE FUNCTION finalizar_lote_ventas(p_lote uuid) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE l import_lotes; v_sin_cli integer; v_sin_prod integer;
+BEGIN
+  IF NOT app.es_mesa() THEN RAISE EXCEPTION 'Solo administrador o transferencista' USING ERRCODE = '42501'; END IF;
+  SELECT * INTO l FROM import_lotes WHERE id = p_lote;
+  IF NOT FOUND THEN RAISE EXCEPTION 'El lote no existe' USING ERRCODE = 'P0002'; END IF;
+  IF l.periodo_desde IS NOT NULL THEN
+    PERFORM app.refrescar_compras(date_trunc('month', l.periodo_desde::timestamp)::date,
+                                  date_trunc('month', l.periodo_hasta::timestamp)::date);
+  END IF;
+  SELECT count(*) FILTER (WHERE cliente_id IS NULL), count(*) FILTER (WHERE producto_id IS NULL)
+    INTO v_sin_cli, v_sin_prod FROM fact_ventas_drogueria WHERE lote_id = p_lote;
+  INSERT INTO audit_log (usuario_id, accion, detalle)
+  VALUES (auth.uid(), 'importar_ventas', jsonb_build_object('lote', p_lote, 'filas', l.filas));
+  RETURN jsonb_build_object('lote_id', p_lote, 'filas', coalesce(l.filas, 0), 'sin_farmacia', v_sin_cli, 'sin_producto', v_sin_prod,
+                            'desde', l.periodo_desde, 'hasta', l.periodo_hasta);
+END $$;
+
+-- Resumen para "Verificar en Supabase": una sola consulta en el servidor (contar con la RLS fila a fila podía
+-- pasar el límite de tiempo de Supabase en tablas grandes).
+CREATE OR REPLACE FUNCTION resumen_ventas_nube() RETURNS jsonb
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT app.es_staff() THEN RAISE EXCEPTION 'Solo personal autorizado' USING ERRCODE = '42501'; END IF;
+  RETURN (SELECT jsonb_build_object('filas', count(*), 'sin_farmacia', count(*) FILTER (WHERE cliente_id IS NULL),
+                                    'sin_producto', count(*) FILTER (WHERE producto_id IS NULL),
+                                    'lotes', (SELECT count(*) FROM import_lotes),
+                                    'desde', min(fecha), 'hasta', max(fecha))
+            FROM fact_ventas_drogueria);
 END $$;
 
 CREATE OR REPLACE FUNCTION borrar_lote_ventas(p_lote uuid) RETURNS integer
@@ -1779,6 +1841,29 @@ BEGIN
         estado_geografico = excluded.estado_geografico, direccion = excluded.direccion, telefono = coalesce(excluded.telefono, dim_clientes.telefono),
         bandera = excluded.bandera, ubicacion = coalesce(excluded.ubicacion, dim_clientes.ubicacion),
         frecuencia_dias = coalesce(excluded.frecuencia_dias, dim_clientes.frecuencia_dias), deleted_at = NULL
+    RETURNING 1)
+  SELECT count(*) INTO v_n FROM ins;
+  RETURN v_n;
+END $$;
+
+-- Droguerías desde archivo, por código: una celda vacía NO borra lo que ya había; el formato de exportación no se toca
+-- (una droguería nueva recibe el de la base; una existente conserva el que se configuró).
+CREATE OR REPLACE FUNCTION importar_catalogo_droguerias(p jsonb) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer;
+BEGIN
+  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  WITH ins AS (
+    INSERT INTO dim_droguerias (codigo, nombre, rif, email_pedidos, telefono, dias_entrega, activo)
+    SELECT DISTINCT ON (upper(btrim(r->>'codigo'))) upper(btrim(r->>'codigo')), btrim(r->>'nombre'), nullif(btrim(r->>'rif'), ''),
+           nullif(btrim(r->>'email_pedidos'), ''), nullif(btrim(r->>'telefono'), ''), (r->>'dias_entrega')::smallint,
+           coalesce((r->>'activo')::boolean, true)
+      FROM jsonb_array_elements(p) r
+     WHERE coalesce(btrim(r->>'codigo'), '') <> '' AND coalesce(btrim(r->>'nombre'), '') <> ''
+    ON CONFLICT (codigo) DO UPDATE SET nombre = excluded.nombre, rif = coalesce(excluded.rif, dim_droguerias.rif),
+        email_pedidos = coalesce(excluded.email_pedidos, dim_droguerias.email_pedidos),
+        telefono = coalesce(excluded.telefono, dim_droguerias.telefono),
+        dias_entrega = coalesce(excluded.dias_entrega, dim_droguerias.dias_entrega), activo = excluded.activo, deleted_at = NULL
     RETURNING 1)
   SELECT count(*) INTO v_n FROM ins;
   RETURN v_n;
@@ -2009,7 +2094,7 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_lectura', t);
     EXECUTE format('CREATE POLICY %I ON %I FOR SELECT TO authenticated USING (true)', t || '_lectura', t);
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_admin', t);
-    EXECUTE format('CREATE POLICY %I ON %I FOR ALL TO authenticated USING (app.es_admin()) WITH CHECK (app.es_admin())',
+    EXECUTE format('CREATE POLICY %I ON %I FOR ALL TO authenticated USING ((SELECT app.es_admin())) WITH CHECK ((SELECT app.es_admin()))',
                    t || '_admin', t);
   END LOOP;
 END $$;
@@ -2023,17 +2108,17 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_lectura', t);
     EXECUTE format('CREATE POLICY %I ON %I FOR SELECT TO authenticated USING (true)', t || '_lectura', t);
     EXECUTE format('DROP POLICY IF EXISTS %I ON %I', t || '_mesa', t);
-    EXECUTE format('CREATE POLICY %I ON %I FOR ALL TO authenticated USING (app.es_mesa()) WITH CHECK (app.es_mesa())',
+    EXECUTE format('CREATE POLICY %I ON %I FOR ALL TO authenticated USING ((SELECT app.es_mesa())) WITH CHECK ((SELECT app.es_mesa()))',
                    t || '_mesa', t);
   END LOOP;
 END $$;
 
 DROP POLICY IF EXISTS usuarios_lectura ON dim_usuarios;
 CREATE POLICY usuarios_lectura ON dim_usuarios FOR SELECT TO authenticated
-  USING (id = (SELECT auth.uid()) OR app.es_staff());
+  USING (id = (SELECT auth.uid()) OR (SELECT app.es_staff()));
 DROP POLICY IF EXISTS usuarios_admin ON dim_usuarios;
 CREATE POLICY usuarios_admin ON dim_usuarios FOR ALL TO authenticated
-  USING (app.es_admin()) WITH CHECK (app.es_admin());
+  USING ((SELECT app.es_admin())) WITH CHECK ((SELECT app.es_admin()));
 
 DROP POLICY IF EXISTS clientes_lectura ON dim_clientes;
 -- creado_por se evalúa sobre la propia fila: INSERT ... ON CONFLICT exige poder "leer" la fila nueva.
@@ -2041,20 +2126,20 @@ CREATE POLICY clientes_lectura ON dim_clientes FOR SELECT TO authenticated
   USING (creado_por = (SELECT auth.uid()) OR app.puede_ver_cliente(id));
 DROP POLICY IF EXISTS clientes_alta_campo ON dim_clientes;
 CREATE POLICY clientes_alta_campo ON dim_clientes FOR INSERT TO authenticated
-  WITH CHECK (app.rol() = 'vendedor' OR app.es_mesa());
+  WITH CHECK ((SELECT app.rol()) = 'vendedor' OR (SELECT app.es_mesa()));
 DROP POLICY IF EXISTS clientes_edicion ON dim_clientes;
 CREATE POLICY clientes_edicion ON dim_clientes FOR UPDATE TO authenticated
-  USING (app.es_mesa() OR (creado_por = (SELECT auth.uid()) AND estado_validacion = 'prospecto_pendiente'))
-  WITH CHECK (app.es_mesa() OR creado_por = (SELECT auth.uid()));
+  USING ((SELECT app.es_mesa()) OR (creado_por = (SELECT auth.uid()) AND estado_validacion = 'prospecto_pendiente'))
+  WITH CHECK ((SELECT app.es_mesa()) OR creado_por = (SELECT auth.uid()));
 DROP POLICY IF EXISTS clientes_baja ON dim_clientes;
-CREATE POLICY clientes_baja ON dim_clientes FOR DELETE TO authenticated USING (app.es_admin());
+CREATE POLICY clientes_baja ON dim_clientes FOR DELETE TO authenticated USING ((SELECT app.es_admin()));
 
 DROP POLICY IF EXISTS relcv_lectura ON rel_cliente_vendedor;
 CREATE POLICY relcv_lectura ON rel_cliente_vendedor FOR SELECT TO authenticated
-  USING (vendedor_id = (SELECT auth.uid()) OR app.es_staff());
+  USING (vendedor_id = (SELECT auth.uid()) OR (SELECT app.es_staff()));
 DROP POLICY IF EXISTS relcv_admin ON rel_cliente_vendedor;
 CREATE POLICY relcv_admin ON rel_cliente_vendedor FOR ALL TO authenticated
-  USING (app.es_mesa()) WITH CHECK (app.es_mesa());
+  USING ((SELECT app.es_mesa())) WITH CHECK ((SELECT app.es_mesa()));
 DROP POLICY IF EXISTS relcv_propio ON rel_cliente_vendedor;
 CREATE POLICY relcv_propio ON rel_cliente_vendedor FOR INSERT TO authenticated
   WITH CHECK (vendedor_id = (SELECT auth.uid())
@@ -2066,14 +2151,14 @@ CREATE POLICY pedidos_lectura ON fact_pedidos FOR SELECT TO authenticated
   USING (vendedor_id = (SELECT auth.uid()) OR app.puede_ver_cliente(cliente_id));
 DROP POLICY IF EXISTS pedidos_alta ON fact_pedidos;
 CREATE POLICY pedidos_alta ON fact_pedidos FOR INSERT TO authenticated
-  WITH CHECK (vendedor_id = (SELECT auth.uid()) OR app.es_admin());
+  WITH CHECK (vendedor_id = (SELECT auth.uid()) OR (SELECT app.es_admin()));
 DROP POLICY IF EXISTS pedidos_edicion_vendedor ON fact_pedidos;
 CREATE POLICY pedidos_edicion_vendedor ON fact_pedidos FOR UPDATE TO authenticated
   USING (vendedor_id = (SELECT auth.uid()) AND estado IN ('borrador','enviado_teletransferencia','en_revision'))
   WITH CHECK (vendedor_id = (SELECT auth.uid()));
 DROP POLICY IF EXISTS pedidos_edicion_mesa ON fact_pedidos;
 CREATE POLICY pedidos_edicion_mesa ON fact_pedidos FOR UPDATE TO authenticated
-  USING (app.es_mesa()) WITH CHECK (app.es_mesa());
+  USING ((SELECT app.es_mesa())) WITH CHECK ((SELECT app.es_mesa()));
 
 DROP POLICY IF EXISTS detalles_lectura ON fact_pedido_detalles;
 CREATE POLICY detalles_lectura ON fact_pedido_detalles FOR SELECT TO authenticated
@@ -2086,16 +2171,16 @@ CREATE POLICY detalles_vendedor ON fact_pedido_detalles FOR ALL TO authenticated
                  AND p.estado IN ('borrador','enviado_teletransferencia','en_revision')));
 DROP POLICY IF EXISTS detalles_mesa ON fact_pedido_detalles;
 CREATE POLICY detalles_mesa ON fact_pedido_detalles FOR ALL TO authenticated
-  USING (app.es_mesa()) WITH CHECK (app.es_mesa());
+  USING ((SELECT app.es_mesa())) WITH CHECK ((SELECT app.es_mesa()));
 
 DROP POLICY IF EXISTS bloqueos_lectura ON pedido_bloqueos;
-CREATE POLICY bloqueos_lectura ON pedido_bloqueos FOR SELECT TO authenticated USING (app.es_staff());
+CREATE POLICY bloqueos_lectura ON pedido_bloqueos FOR SELECT TO authenticated USING ((SELECT app.es_staff()));
 
 DROP POLICY IF EXISTS visitas_propias ON crm_visitas;
 CREATE POLICY visitas_propias ON crm_visitas FOR ALL TO authenticated
   USING (vendedor_id = (SELECT auth.uid())) WITH CHECK (vendedor_id = (SELECT auth.uid()));
 DROP POLICY IF EXISTS visitas_staff ON crm_visitas;
-CREATE POLICY visitas_staff ON crm_visitas FOR SELECT TO authenticated USING (app.es_staff());
+CREATE POLICY visitas_staff ON crm_visitas FOR SELECT TO authenticated USING ((SELECT app.es_staff()));
 
 DROP POLICY IF EXISTS plantillas_propias ON plantillas_reposicion;
 CREATE POLICY plantillas_propias ON plantillas_reposicion FOR ALL TO authenticated
@@ -2113,22 +2198,22 @@ CREATE POLICY notif_leer ON notificaciones FOR UPDATE TO authenticated
 
 DROP POLICY IF EXISTS alertas_lectura ON alertas_comerciales;
 CREATE POLICY alertas_lectura ON alertas_comerciales FOR SELECT TO authenticated
-  USING (app.es_staff()
+  USING ((SELECT app.es_staff())
          OR equipo_id IS NULL AND cliente_id IS NOT NULL AND app.puede_ver_cliente(cliente_id)
          OR equipo_id = (SELECT equipo_id FROM dim_usuarios WHERE id = (SELECT auth.uid())));
 
 -- Ventas reportadas por las droguerías: solo lectura para el personal (se escriben con importar_ventas_drogueria).
 DROP POLICY IF EXISTS lotes_lectura ON import_lotes;
-CREATE POLICY lotes_lectura ON import_lotes FOR SELECT TO authenticated USING (app.es_staff());
+CREATE POLICY lotes_lectura ON import_lotes FOR SELECT TO authenticated USING ((SELECT app.es_staff()));
 DROP POLICY IF EXISTS ventas_lectura ON fact_ventas_drogueria;
-CREATE POLICY ventas_lectura ON fact_ventas_drogueria FOR SELECT TO authenticated USING (app.es_staff());
+CREATE POLICY ventas_lectura ON fact_ventas_drogueria FOR SELECT TO authenticated USING ((SELECT app.es_staff()));
 -- El consolidado mensual baja al dispositivo del vendedor solo para las farmacias que atiende (todos los equipos).
 DROP POLICY IF EXISTS compras_lectura ON fact_compras_mensual;
 CREATE POLICY compras_lectura ON fact_compras_mensual FOR SELECT TO authenticated
-  USING (app.es_staff() OR app.puede_ver_cliente(cliente_id));
+  USING ((SELECT app.es_staff()) OR app.puede_ver_cliente(cliente_id));
 
 DROP POLICY IF EXISTS audit_admin ON audit_log;
-CREATE POLICY audit_admin ON audit_log FOR SELECT TO authenticated USING (app.es_admin());
+CREATE POLICY audit_admin ON audit_log FOR SELECT TO authenticated USING ((SELECT app.es_admin()));
 
 -- Permisos: nada para anon; las funciones internas no se exponen por la API.
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
@@ -2245,7 +2330,10 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE v_equipo uuid; v_rol rol_usuario; v_asig integer := 0; v_quit integer := 0; v_faltan jsonb;
         v_codigos text[] := ARRAY(SELECT DISTINCT btrim(c) FROM unnest(coalesce(p_codigos, ARRAY[]::text[])) c WHERE btrim(c) <> '');
 BEGIN
-  IF NOT app.es_admin() THEN RAISE EXCEPTION 'Solo administrador' USING ERRCODE = '42501'; END IF;
+  -- El administrador asigna a cualquiera; un vendedor solo agrega o quita farmacias de SU propio fichero.
+  IF NOT app.es_admin() AND NOT (p_vendedor = auth.uid() AND app.rol() = 'vendedor' AND p_modo IN ('agregar', 'quitar')) THEN
+    RAISE EXCEPTION 'Solo el administrador, o el propio vendedor en su fichero' USING ERRCODE = '42501';
+  END IF;
   IF p_modo NOT IN ('agregar', 'quitar', 'reemplazar') THEN RAISE EXCEPTION 'Modo inválido: %', p_modo USING ERRCODE = '22023'; END IF;
   SELECT rol, equipo_id INTO v_rol, v_equipo FROM dim_usuarios WHERE id = p_vendedor AND deleted_at IS NULL;
   IF NOT FOUND THEN RAISE EXCEPTION 'El usuario no existe' USING ERRCODE = 'P0002'; END IF;
@@ -2281,15 +2369,46 @@ END $$;
 REVOKE ALL ON FUNCTION asignar_clientes_vendedor(uuid, text[], text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION asignar_clientes_vendedor(uuid, text[], text) TO authenticated;
 
+-- Farmacias activas que el vendedor que pregunta AÚN NO tiene en su fichero (para "Agregar farmacias" sin duplicar).
+-- Muestra solo datos de identificación; la ficha completa se ve cuando la farmacia ya es suya (RLS).
+CREATE OR REPLACE FUNCTION farmacias_disponibles(p_busqueda text DEFAULT NULL, p_limite integer DEFAULT 50)
+RETURNS TABLE (codigo_interno text, nombre_comercial text, razon_social text, rif text, municipio text,
+               estado_geografico text, bandera text, vendedores integer)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_q text := app.norm_texto(p_busqueda);
+BEGIN
+  IF app.rol() IS NULL THEN RAISE EXCEPTION 'Usuario sin acceso' USING ERRCODE = '42501'; END IF;
+  RETURN QUERY
+  SELECT c.codigo_interno, c.nombre_comercial, c.razon_social, c.rif, c.municipio, c.estado_geografico, c.bandera,
+         (SELECT count(*)::integer FROM rel_cliente_vendedor r2 WHERE r2.cliente_id = c.id AND r2.activo AND r2.deleted_at IS NULL)
+    FROM dim_clientes c
+   WHERE c.deleted_at IS NULL AND c.estado_validacion = 'activo' AND c.codigo_interno IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM rel_cliente_vendedor r
+                      WHERE r.cliente_id = c.id AND r.vendedor_id = auth.uid() AND r.activo AND r.deleted_at IS NULL)
+     AND (v_q IS NULL OR app.norm_texto(c.nombre_comercial || ' ' || c.razon_social || ' ' || c.codigo_interno || ' ' ||
+                                        coalesce(c.rif, '') || ' ' || coalesce(c.municipio, '')) LIKE '%' || v_q || '%')
+   ORDER BY c.nombre_comercial
+   LIMIT least(greatest(coalesce(p_limite, 50), 1), 200);
+END $$;
+REVOKE ALL ON FUNCTION farmacias_disponibles(text, integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION farmacias_disponibles(text, integer) TO authenticated;
+
 -- ------------------------------------------------------------------------------
 -- 15. MANTENIMIENTO: BORRADO DE DATOS CON CLAVE
 -- ------------------------------------------------------------------------------
 -- Protecciones: rol administrador + "borrado habilitado" (interruptor de config_sistema) + clave propia (bcrypt, distinta de
 -- la de inicio de sesión) + máximo 5 intentos fallidos cada 15 minutos. Cada uso queda en audit_log.
 -- Nunca se tocan usuarios, equipos, configuración, secretos ni auditoría.
---   alcance 'historial' -> ventas reportadas por las droguerías, sus lotes y el consolidado mensual
---   alcance 'pedidos'   -> pedidos, detalles, visitas, plantillas, notificaciones y alertas (el correlativo reinicia)
---   alcance 'todo'      -> lo anterior + farmacias, productos, droguerías, homologaciones, fichero y reglas comerciales
+--   alcance 'historial'       -> ventas reportadas por las droguerías, sus lotes y el consolidado mensual
+--   alcance 'pedidos'         -> pedidos, detalles, visitas, plantillas, notificaciones y alertas (el correlativo reinicia)
+--   alcance 'homologaciones'  -> códigos de farmacias y productos por droguería; las ventas vuelven a "sin homologar"
+--   alcance 'fichero'         -> asignación de farmacias a vendedores
+--   alcance 'clientes'        -> farmacias + pedidos (dependen de ellas), fichero y homologaciones de farmacias;
+--                                las ventas se conservan sin farmacia
+--   alcance 'productos'       -> productos + pedidos (dependen de ellos) y homologaciones de productos;
+--                                las ventas se conservan sin producto
+--   alcance 'droguerias'      -> droguerías + pedidos, ventas, homologaciones, precios y reglas de esa droguería
+--   alcance 'todo'            -> todo lo anterior y las reglas comerciales
 CREATE OR REPLACE FUNCTION configurar_password_purga(p_nueva text) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
 BEGIN
@@ -2323,7 +2442,9 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
 DECLARE v_hash text; v_fallos integer;
 BEGIN
   IF NOT app.es_admin() THEN RAISE EXCEPTION 'Permiso denegado' USING ERRCODE = '42501'; END IF;
-  IF p_alcance NOT IN ('historial', 'pedidos', 'todo') THEN RAISE EXCEPTION 'Alcance inválido: %', p_alcance USING ERRCODE = '22023'; END IF;
+  IF p_alcance NOT IN ('historial', 'pedidos', 'homologaciones', 'fichero', 'clientes', 'productos', 'droguerias', 'todo') THEN
+    RAISE EXCEPTION 'Alcance inválido: %', p_alcance USING ERRCODE = '22023';
+  END IF;
   IF coalesce((SELECT (valor #>> '{}')::boolean FROM config_sistema WHERE clave = 'purga_habilitada'), false) IS NOT TRUE THEN
     RAISE EXCEPTION 'El borrado está deshabilitado: actívalo primero en Configuración' USING ERRCODE = '42501';
   END IF;
@@ -2338,13 +2459,35 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'credenciales_invalidas');
   END IF;
 
-  IF p_alcance IN ('historial', 'todo') THEN
+  IF p_alcance IN ('historial', 'droguerias', 'todo') THEN
     TRUNCATE fact_compras_mensual, fact_ventas_drogueria, import_lotes RESTART IDENTITY CASCADE;
   END IF;
-  IF p_alcance IN ('pedidos', 'todo') THEN
+  IF p_alcance IN ('pedidos', 'clientes', 'productos', 'droguerias', 'todo') THEN
     TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, plantilla_items,
              plantillas_reposicion, alertas_comerciales, fact_pedidos RESTART IDENTITY CASCADE;
     PERFORM setval('seq_correlativo_pedido', 1001, false);
+  END IF;
+  IF p_alcance = 'homologaciones' THEN
+    TRUNCATE map_producto_drogueria, map_cliente_drogueria;
+    UPDATE fact_ventas_drogueria SET cliente_id = NULL, producto_id = NULL WHERE cliente_id IS NOT NULL OR producto_id IS NOT NULL;
+    TRUNCATE fact_compras_mensual;
+  END IF;
+  IF p_alcance = 'fichero' THEN
+    TRUNCATE rel_cliente_vendedor;
+  END IF;
+  IF p_alcance = 'clientes' THEN
+    UPDATE fact_ventas_drogueria SET cliente_id = NULL WHERE cliente_id IS NOT NULL;
+    TRUNCATE fact_compras_mensual;
+    DELETE FROM dim_clientes;                -- en cascada: fichero y homologaciones de farmacias
+  END IF;
+  IF p_alcance = 'productos' THEN
+    UPDATE fact_ventas_drogueria SET producto_id = NULL WHERE producto_id IS NOT NULL;
+    TRUNCATE fact_compras_mensual;
+    DELETE FROM dim_productos;               -- en cascada: homologaciones y precios de productos
+  END IF;
+  IF p_alcance = 'droguerias' THEN
+    DELETE FROM config_reglas_comerciales WHERE drogueria_id IS NOT NULL;
+    DELETE FROM dim_droguerias;              -- en cascada: homologaciones y precios de cada droguería
   END IF;
   IF p_alcance = 'todo' THEN
     TRUNCATE map_producto_drogueria, map_cliente_drogueria, precios_drogueria_producto, rel_cliente_vendedor,
@@ -2366,6 +2509,8 @@ REVOKE ALL ON FUNCTION purgar_base_datos_pruebas(text, boolean), borrar_datos(te
 GRANT EXECUTE ON FUNCTION purgar_base_datos_pruebas(text, boolean), borrar_datos(text, text), habilitar_borrado(boolean), estado_borrado() TO authenticated;
 REVOKE ALL ON FUNCTION configurar_password_purga(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION configurar_password_purga(text) TO authenticated;
+REVOKE ALL ON FUNCTION finalizar_lote_ventas(uuid), resumen_ventas_nube(), importar_catalogo_droguerias(jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION finalizar_lote_ventas(uuid), resumen_ventas_nube(), importar_catalogo_droguerias(jsonb) TO authenticated;
 REVOKE ALL ON FUNCTION importar_ventas_drogueria(jsonb, jsonb), borrar_lote_ventas(uuid), refrescar_compras_mensual(date),
   importar_catalogo_productos(jsonb), importar_catalogo_clientes(jsonb), importar_homologacion(jsonb),
   reprocesar_homologacion(uuid), homologar_cliente(uuid, uuid, text, text, boolean),

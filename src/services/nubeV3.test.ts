@@ -80,8 +80,10 @@ describe('envío de ventas y homologación al servidor', () => {
         llamadas.push({ fn, args });
         if (fn === 'importar_ventas_drogueria') {
           const filas = args.p_filas as unknown[];
-          return { data: { insertadas: filas.length, recibidas: filas.length, droguerias_desconocidas: ['FANTASMA'], homologacion: { clientes_enlazados: filas.length, productos_enlazados: filas.length, codigos_aprendidos: 1 } }, error: null };
+          const lote = args.p_lote as { archivo: string };
+          return { data: { lote_id: `lote-${lote.archivo}`, insertadas: filas.length, recibidas: filas.length, droguerias_desconocidas: ['FANTASMA'], homologacion: { clientes_enlazados: filas.length, productos_enlazados: filas.length, codigos_aprendidos: 1 } }, error: null };
         }
+        if (fn === 'finalizar_lote_ventas') return { data: { sin_farmacia: 2, sin_producto: 1 }, error: null };
         return { data: { clientes: 1, productos: 1, omitidos: [{ tipo: 'producto' }] }, error: null };
       },
     } as unknown as SupabaseClient;
@@ -93,12 +95,18 @@ describe('envío de ventas y homologación al servidor', () => {
     const historico = [...Array.from({ length: 2300 }, (_, i) => fila(i, 'enero.csv')), fila(9000, 'febrero.csv', { cod_cliente_drogueria: undefined })];
     const progreso: number[] = [];
     const r = await importarVentas(sb, historico, (e) => progreso.push(e));
-    expect(llamadas.map((l) => (l.args.p_filas as unknown[]).length)).toEqual([1000, 1000, 300, 1]);
-    expect(new Set(llamadas.slice(0, 3).map((l) => (l.args.p_lote as { checksum: string }).checksum)).size).toBe(1); // mismo lote en todos los trozos
-    expect((llamadas[3].args.p_lote as { archivo: string }).archivo).toBe('febrero.csv');
-    expect((llamadas[0].args.p_filas as Array<Record<string, unknown>>)[0]).toMatchObject({ n: 1, drogueria: 'COBECA', cod_cliente: 'C-1', cod_producto: 'P-1', cod_sap: 'SKU-1', unidades: 2 });
-    expect((llamadas[3].args.p_filas as Array<Record<string, unknown>>)[0].cod_cliente).toBeNull(); // sin código: solo nombre
-    expect(r).toMatchObject({ insertadas: 2301, droguerias_desconocidas: ['FANTASMA'], codigos_aprendidos: 4 });
+    // Trozos diferidos y UN cierre por archivo (el consolidado mensual se calcula una sola vez).
+    expect(llamadas.map((l) => l.fn)).toEqual(['importar_ventas_drogueria', 'importar_ventas_drogueria', 'importar_ventas_drogueria', 'finalizar_lote_ventas',
+      'importar_ventas_drogueria', 'finalizar_lote_ventas']);
+    const trozos = llamadas.filter((l) => l.fn === 'importar_ventas_drogueria');
+    expect(trozos.map((l) => (l.args.p_filas as unknown[]).length)).toEqual([1000, 1000, 300, 1]);
+    expect(new Set(trozos.slice(0, 3).map((l) => (l.args.p_lote as { checksum: string }).checksum)).size).toBe(1); // mismo lote en todos los trozos
+    expect(trozos.every((l) => (l.args.p_lote as { diferir: boolean }).diferir)).toBe(true);
+    expect(llamadas[3].args).toEqual({ p_lote: 'lote-enero.csv' });
+    expect((trozos[3].args.p_lote as { archivo: string }).archivo).toBe('febrero.csv');
+    expect((trozos[0].args.p_filas as Array<Record<string, unknown>>)[0]).toMatchObject({ n: 1, drogueria: 'COBECA', cod_cliente: 'C-1', cod_producto: 'P-1', cod_sap: 'SKU-1', unidades: 2 });
+    expect((trozos[3].args.p_filas as Array<Record<string, unknown>>)[0].cod_cliente).toBeNull(); // sin código: solo nombre
+    expect(r).toMatchObject({ insertadas: 2301, droguerias_desconocidas: ['FANTASMA'], codigos_aprendidos: 4, sin_farmacia: 4, sin_producto: 2 });
     expect(progreso.at(-1)).toBe(2301);
   });
 
