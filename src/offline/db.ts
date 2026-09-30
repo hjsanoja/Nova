@@ -2,13 +2,16 @@ import Dexie from 'dexie';
 import type { Table } from 'dexie';
 import type {
   LocalCliente,
+  LocalComunicado,
   LocalDetalle,
   LocalCompraMensual,
   LocalDrogueria,
   LocalMapCliente,
   LocalMapProducto,
+  LocalMeta,
   LocalNotificacion,
   LocalPedido,
+  LocalPlantilla,
   LocalProducto,
   LocalVisita,
   MetaEntrada,
@@ -33,6 +36,9 @@ export class NovaDB extends Dexie {
   detalles!: Table<LocalDetalle, string>;
   visitas!: Table<LocalVisita, string>;
   notificaciones!: Table<LocalNotificacion, string>;
+  plantillas!: Table<LocalPlantilla, string>;
+  comunicados!: Table<LocalComunicado, string>;
+  metas!: Table<LocalMeta, string>;
   outbox!: Table<OutboxItem, number>;
   meta!: Table<MetaEntrada, string>;
 
@@ -62,6 +68,12 @@ export class NovaDB extends Dexie {
     });
     // v3: se retiran las plantillas de reposición (las reemplazan los carritos guardados y el pedido sugerido).
     this.version(3).stores({ plantillas: null });
+    // v4: plantillas de pedido (nuevas, por farmacia), comunicados de la gerencia y metas del mes.
+    this.version(4).stores({
+      plantillas: 'id, cliente_id, vendedor_id, updated_at',
+      comunicados: 'id, updated_at',
+      metas: 'id, periodo, vendedor_id, updated_at',
+    });
   }
 
   async leerMeta<T>(clave: string, defecto: T): Promise<T> {

@@ -18,15 +18,15 @@ export function unidadesPorPedido(detalles: LocalDetalle[]): Map<string, number>
   return m;
 }
 
-export interface PuntoDia { fecha: string; pedidos: number; unidades: number }
+export interface PuntoDia { fecha: string; pedidos: number; unidades: number; farmacias: number }
 
 /** Serie diaria de los últimos `dias` días (incluye los días sin pedidos, en cero). */
 export function serieDiaria(pedidos: LocalPedido[], unidades: Map<string, number>, dias: number, hoy = new Date()): PuntoDia[] {
-  const serie = new Map<string, PuntoDia>();
+  const serie = new Map<string, PuntoDia & { _f: Set<string> }>();
   for (let i = dias - 1; i >= 0; i--) {
     const d = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - i);
     const f = diaLocal(d.toISOString());
-    serie.set(f, { fecha: f, pedidos: 0, unidades: 0 });
+    serie.set(f, { fecha: f, pedidos: 0, unidades: 0, farmacias: 0, _f: new Set() });
   }
   for (const p of pedidos) {
     if (!cuenta(p)) continue;
@@ -34,8 +34,29 @@ export function serieDiaria(pedidos: LocalPedido[], unidades: Map<string, number
     if (!punto) continue;
     punto.pedidos++;
     punto.unidades += unidades.get(p.id) ?? 0;
+    punto._f.add(p.cliente_id);
   }
-  return [...serie.values()];
+  return [...serie.values()].map(({ _f, ...p }) => ({ ...p, farmacias: _f.size }));
+}
+
+export interface PuntoMes { mes: string; pedidos: number; unidades: number; farmacias: number }
+
+/** Totales por mes de los últimos `meses` meses (incluye el actual; los meses sin pedidos, en cero). */
+export function serieMensual(pedidos: LocalPedido[], unidades: Map<string, number>, meses: number, hoy = new Date()): PuntoMes[] {
+  const serie = new Map<string, PuntoMes & { _f: Set<string> }>();
+  for (let i = meses - 1; i >= 0; i--) {
+    const m = mesLocal(new Date(hoy.getFullYear(), hoy.getMonth() - i, 1));
+    serie.set(m, { mes: m, pedidos: 0, unidades: 0, farmacias: 0, _f: new Set() });
+  }
+  for (const p of pedidos) {
+    if (!cuenta(p)) continue;
+    const punto = serie.get(mesLocal(new Date(p.created_at)));
+    if (!punto) continue;
+    punto.pedidos++;
+    punto.unidades += unidades.get(p.id) ?? 0;
+    punto._f.add(p.cliente_id);
+  }
+  return [...serie.values()].map(({ _f, ...p }) => ({ ...p, farmacias: _f.size }));
 }
 
 export interface ResumenPeriodo { pedidos: number; unidades: number; clientes: number }

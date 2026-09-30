@@ -60,6 +60,7 @@ Cada droguería tiene **sus propios** códigos y nombres para cada producto y ca
 * **`fact_pedidos` / `fact_pedido_detalles`**: lo que Nova toma en campo. Correlativo del servidor (`PED-1045`, derivados `PED-1045-R1` con `parent_pedido_id`), estados con máquina de transiciones, campos de precio nulos.
 * **`fact_ventas_drogueria`** (+ `import_lotes`): lo que **reportan las droguerías**, guardado con sus códigos y nombres; `cliente_id`/`producto_id` se enlazan con los `map_*` (`app.homologar_ventas`) y quedan nulos si no se reconocen (`vw_pendientes_clientes`, `vw_pendientes_productos`). Homologar después enlaza el histórico retroactivamente.
 * **`fact_compras_mensual`**: consolidado farmacia × producto × mes. Baja al dispositivo (6 meses) y alimenta pedido sugerido, segmentos y alertas.
+* Novedades: `plantillas_pedido` (pedido habitual por farmacia), `comunicados` (segmentados por rol, equipo, estado, ciudad o región; columna calculada `para_mi`), `metas` (por representante, farmacia y/o droguería), `registro_accesos` (`registrar_acceso`, `reporte_accesos`).
 * Operativas: `crm_visitas` (geofence), `notificaciones`, `alertas_comerciales`, `pedido_bloqueos`, `config_reglas_comerciales`, `precios_drogueria_producto` (futura), `audit_log`.
 
 ---
@@ -95,7 +96,9 @@ Cada droguería tiene **sus propios** códigos y nombres para cada producto y ca
     │   ├── exportacionDrogueria.ts    # Archivo de pedido por droguería con los códigos principales
     │   └── nubeV3.ts                  # Carga masiva, catálogos, usuarios y borrado contra el esquema v3
     ├── offline/                       # Dexie, Outbox, pull incremental, motor de sync, aislamiento por usuario
-    ├── pedido/                        # Tienda: carritos por farmacia (carritos.ts), dictado (dictado.ts + useDictado.ts), vista previa
+    ├── pedido/                        # Tienda: carritos por farmacia, dictado (farmacia, droguería, productos, "plantilla"), código de farmacia
+    ├── comunicados/                   # Banner y gestión de comunicados segmentados
+    ├── metas/                         # Metas del mes: cálculo de avance (logica.ts) y pantalla de gestión
     ├── sql/
     │   ├── 00_reiniciar_esquema_anterior.sql  # Solo si hay restos de otra versión: los aparta en un respaldo
     │   └── nova_produccion_v3.sql     # Esquema vigente: DDL, RLS, triggers, RPC
@@ -128,8 +131,8 @@ Cada droguería tiene **sus propios** códigos y nombres para cada producto y ca
 ```
 
 **Menús por rol** (`navConfig.ts`, agrupados en Ventas · Clientes y productos · Gestión · Cuenta): vendedor (Inicio, Nuevo pedido, Mis pedidos, Mis clientes, Configuración) ·
-teletransferencista (Por procesar, Pedidos, Clientes, Catálogo, Configuración) · gerente (Resumen, Pedidos, Clientes, Catálogo, Reportes, Condiciones comerciales, Configuración) ·
-admin (todo, más *Datos maestros*). Sin sesión no hay datos: no existe usuario por defecto; el modo demostración solo está disponible cuando Supabase no está configurado.
+teletransferencista (Por procesar, Pedidos, Clientes, Catálogo, Configuración) · gerente (Resumen, Pedidos, Clientes, Catálogo, Reportes, Metas, Condiciones comerciales, Comunicados, Configuración) ·
+admin (todo, más *Datos maestros*). Los comunicados vigentes aparecen como banner arriba de todas las pantallas. Sin sesión no hay datos: no existe usuario por defecto; el modo demostración solo está disponible cuando Supabase no está configurado.
 
 ---
 

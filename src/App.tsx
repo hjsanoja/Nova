@@ -23,6 +23,9 @@ const CatalogoVista = lazy(() => import('./vistas/CatalogoVista').then((m) => ({
 const ReportesVista = lazy(() => import('./vistas/ReportesVista').then((m) => ({ default: m.ReportesVista })));
 const DatosVista = lazy(() => import('./vistas/DatosVista').then((m) => ({ default: m.DatosVista })));
 const CondicionesVista = lazy(() => import('./vistas/CondicionesVista').then((m) => ({ default: m.CondicionesVista })));
+const ComunicadosVista = lazy(() => import('./comunicados/ComunicadosVista').then((m) => ({ default: m.ComunicadosVista })));
+const MetasVista = lazy(() => import('./metas/MetasVista').then((m) => ({ default: m.MetasVista })));
+const BannerComunicados = lazy(() => import('./comunicados/BannerComunicados').then((m) => ({ default: m.BannerComunicados })));
 const ConfigVista = lazy(() => import('./vistas/config/ConfigVista').then((m) => ({ default: m.ConfigVista })));
 
 const leerTabDelHash = () => window.location.hash.replace(/^#\/?/, '');
@@ -142,6 +145,11 @@ function AppContent() {
         <SideNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} />
 
         <main className="mx-auto w-full min-w-0 max-w-[1500px] flex-1 px-3 py-3 pb-24 sm:px-5 sm:py-4 md:pb-6 lg:px-6">
+          <ErrorBoundary compacto>
+            <Suspense fallback={null}>
+              <BannerComunicados />
+            </Suspense>
+          </ErrorBoundary>
           <ErrorBoundary compacto resetKey={tabActiva}>
             <Suspense fallback={<Cargando />}>
               {tabActiva === 'inicio' && <Inicio usuario={usuarioActual} irATab={irATab} />}
@@ -152,6 +160,8 @@ function AppContent() {
               {tabActiva === 'catalogo' && <CatalogoVista usuario={usuarioActual} />}
               {tabActiva === 'reportes' && <ReportesVista usuario={usuarioActual} />}
               {tabActiva === 'condiciones' && <CondicionesVista usuario={usuarioActual} />}
+              {tabActiva === 'metas' && <MetasVista />}
+              {tabActiva === 'comunicados' && <ComunicadosVista />}
               {tabActiva === 'datos' && <DatosVista usuario={usuarioActual} esDemo={esDemo} />}
               {tabActiva === 'config' && (
                 <ConfigVista usuario={usuarioActual} irATab={irATab} esDemo={esDemo} onCerrarSesion={handleCerrarSesion} onConexionCambiada={() => setConectado(getStoredSupabaseConfig().isConnected)} onUsuarioActualizado={setUsuarioActual} />

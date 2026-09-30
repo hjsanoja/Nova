@@ -1,75 +1,24 @@
-import React from 'react';
-
-interface NovaLogoProps {
-  size?: 'sm' | 'md' | 'lg';
-  showTagline?: boolean;
-  className?: string;
-  esClaro?: boolean;
+/** Símbolo de NOVA. Es el mismo dibujo que public/icons/icon.svg (pestaña del navegador e ícono de la app instalada). */
+function NovaSimbolo({ tamano = 32 }: { tamano?: number }) {
+  return (
+    <svg viewBox="0 0 40 40" width={tamano} height={tamano} aria-hidden className="shrink-0">
+      <rect width="40" height="40" rx="9" fill="#0f766e" />
+      <path d="M20 5c.5 8.5 6.5 14.5 15 15-8.5.5-14.5 6.5-15 15-.5-8.5-6.5-14.5-15-15 8.5-.5 14.5-6.5 15-15z" fill="#fff" />
+      <circle cx="20" cy="20" r="4.6" fill="#0f766e" />
+      <path d="M20 17.4v5.2M17.4 20h5.2" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
 }
 
-export const NovaLogo: React.FC<NovaLogoProps> = ({
-  size = 'md',
-  showTagline = true,
-  className = '',
-  esClaro = true,
-}) => {
-  const iconSize = size === 'sm' ? 28 : size === 'lg' ? 44 : 34;
-
+export function NovaLogo({ size = 'md', showTagline = true, className = '' }: { size?: 'sm' | 'md' | 'lg'; showTagline?: boolean; className?: string; esClaro?: boolean }) {
+  const tamano = size === 'sm' ? 28 : size === 'lg' ? 44 : 34;
   return (
-    <div className={`flex items-center gap-2.5 select-none ${className}`}>
-      {/* Símbolo Nova: Estrella geométrica médica con destello estelar y cruz clínica */}
-      <div 
-        className="relative shrink-0 flex items-center justify-center rounded-xl bg-marca-700 text-white"
-        style={{ width: iconSize, height: iconSize }}
-      >
-        <svg
-          viewBox="0 0 40 40"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-          className="w-full h-full p-1.5"
-        >
-          {/* Estrella Nova de 4 puntas estilizada */}
-          <path
-            d="M20 2C20.6 11 29 19.4 38 20C29 20.6 20.6 29 20 38C19.4 29 11 20.6 2 20C11 19.4 19.4 11 20 2Z"
-            fill="currentColor"
-            fillOpacity="0.95"
-          />
-          {/* Núcleo de Destello / Cruz Médica */}
-          <circle cx="20" cy="20" r="4.5" fill="#ffffff" />
-          <path
-            d="M20 14V26M14 20H26"
-            stroke="#001428"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          {/* Destellos diagonales menores */}
-          <circle cx="29" cy="11" r="1.5" fill="#ffffff" fillOpacity="0.8" />
-          <circle cx="11" cy="29" r="1.5" fill="#ffffff" fillOpacity="0.8" />
-        </svg>
-      </div>
-
-      {/* Tipografía Nova */}
-      <div className="flex flex-col min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span 
-            className={` font-bold tracking-tight leading-none ${
-              size === 'sm' ? 'text-lg' : size === 'lg' ? 'text-2xl' : 'text-xl'
-            } ${esClaro ? 'text-[#001428]' : 'text-white'}`}
-          >
-            NOVA
-          </span>
-          <span className="w-1.5 h-1.5 rounded-full bg-marca-500 animate-pulse"></span>
-        </div>
-        {showTagline && (
-          <span 
-            className={`text-xs font-medium tracking-wide truncate ${
-              esClaro ? 'text-slate-500' : 'text-slate-400'
-            }`}
-          >
-            Comercial & Teletransferencia
-          </span>
-        )}
+    <div className={`flex select-none items-center gap-2.5 ${className}`}>
+      <NovaSimbolo tamano={tamano} />
+      <div className="flex min-w-0 flex-col">
+        <span className={`font-bold leading-none tracking-tight text-slate-900 dark:text-white ${size === 'sm' ? 'text-lg' : size === 'lg' ? 'text-2xl' : 'text-xl'}`}>NOVA</span>
+        {showTagline && <span className="truncate text-xs font-medium text-slate-500 dark:text-slate-400">Comercial & Teletransferencia</span>}
       </div>
     </div>
   );
-};
+}

@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { Mic, MicOff, RotateCcw, ShoppingCart, Wand2 } from 'lucide-react';
 import { Sheet } from '../components/capture/Sheet';
 import { Avatar, Boton, Campo, Casilla, Etiqueta, PasoUnidades, estiloInput } from '../components/ui/kit';
-import type { LocalCliente, LocalProducto } from '../offline/types';
+import type { LocalCliente, LocalDrogueria, LocalPlantilla, LocalProducto } from '../offline/types';
+import { normalizar } from '../offline/busqueda';
 import { interpretarDictado } from './dictado';
 import type { PedidoDictado } from './dictado';
 import { useDictado } from './useDictado';
@@ -10,39 +11,80 @@ import { SelectorCliente } from './SelectorCliente';
 
 interface LineaVista { incluir: boolean; producto_id: string; unidades: number; texto: string; opciones: LocalProducto[]; confianza: number }
 
+export interface ExtraDictado {
+  /** Droguería dicha o elegida en la vista previa (null = la habitual de la farmacia). */
+  drogueria_id: string | null;
+  /** Guardar lo confirmado como plantilla de la farmacia. */
+  plantilla: { nombre: string } | null;
+}
+
+/** Plantilla de la farmacia que mejor coincide con el nombre dicho ("plantilla semanal"); si no se dijo nombre, la más reciente. */
+function plantillaDicha(plantillas: LocalPlantilla[], nombre: string): LocalPlantilla | null {
+  if (plantillas.length === 0) return null;
+  const buscado = normalizar(nombre);
+  const ordenadas = [...plantillas].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  if (!buscado) return ordenadas[0];
+  return ordenadas.find((p) => normalizar(p.nombre) === buscado) ?? ordenadas.find((p) => normalizar(p.nombre).includes(buscado) || buscado.includes(normalizar(p.nombre))) ?? null;
+}
+
 /**
  * Pedido por voz: el vendedor dice la farmacia, los productos y las unidades; NOVA muestra una vista previa para
  * confirmar o corregir y lo agrega al carrito de esa farmacia. Si el navegador no permite dictar, se escribe la frase.
  */
-export function DictadoHoja({ abierto, clientes, productos, clienteActual, conCarrito, onCerrar, onConfirmar }: {
+export function DictadoHoja({ abierto, clientes, productos, droguerias, plantillasDe, clienteActual, conCarrito, onCerrar, onConfirmar }: {
   abierto: boolean;
   clientes: LocalCliente[];
   productos: LocalProducto[];
+  droguerias: LocalDrogueria[];
+  /** Plantillas guardadas de una farmacia ("Farmacia La Paz, plantilla semanal" la carga). */
+  plantillasDe: (cliente_id: string) => LocalPlantilla[];
   /** Farmacia del carrito activo: se usa si el dictado no nombra ninguna. */
   clienteActual: LocalCliente | undefined;
   conCarrito: Set<string>;
   onCerrar: () => void;
-  onConfirmar: (cliente: LocalCliente, lineas: { producto_id: string; unidades: number }[]) => void;
+  onConfirmar: (cliente: LocalCliente, lineas: { producto_id: string; unidades: number }[], extra: ExtraDictado) => void;
 }) {
   const voz = useDictado();
-  const [vista, setVista] = useState<{ cliente: LocalCliente | null; alternativas: LocalCliente[]; lineas: LineaVista[] } | null>(null);
+  const [vista, setVista] = useState<{
+    cliente: LocalCliente | null;
+    alternativas: LocalCliente[];
+    lineas: LineaVista[];
+    drogueria_id: string;
+    guardarPlantilla: boolean;
+    nombrePlantilla: string;
+    /** Se cargó una plantilla existente (no se vuelve a guardar salvo que se marque). */
+    desdePlantilla: string | null;
+  } | null>(null);
   const [buscandoCliente, setBuscandoCliente] = useState(false);
   const porId = useMemo(() => new Map(productos.map((p) => [p.id, p])), [productos]);
 
   const interpretar = () => {
     if (voz.escuchando) voz.detener();
-    const r: PedidoDictado<LocalCliente, LocalProducto> = interpretarDictado(voz.texto, clientes, productos);
+    const r: PedidoDictado<LocalCliente, LocalProducto, LocalDrogueria> = interpretarDictado(voz.texto, clientes, productos, droguerias);
+    const cliente = r.cliente ?? clienteActual ?? null;
+    // "Farmacia La Paz, plantilla semanal" sin productos: se carga esa plantilla guardada.
+    const guardada = r.plantilla && r.lineas.length === 0 && cliente ? plantillaDicha(plantillasDe(cliente.id), r.plantilla.nombre) : null;
+    const lineas: LineaVista[] = guardada
+      ? guardada.lineas.flatMap((l) => {
+          const p = porId.get(l.producto_id);
+          return p ? [{ incluir: true, producto_id: p.id, unidades: l.unidades, texto: p.nombre_comercial, opciones: [p], confianza: 1 }] : [];
+        })
+      : r.lineas.map((l) => ({
+          incluir: !!l.producto,
+          producto_id: l.producto?.id ?? '',
+          unidades: l.unidades,
+          texto: l.texto,
+          opciones: [...(l.producto ? [l.producto] : []), ...l.alternativas],
+          confianza: l.confianza,
+        }));
     setVista({
-      cliente: r.cliente ?? clienteActual ?? null,
+      cliente,
       alternativas: r.alternativasCliente,
-      lineas: r.lineas.map((l) => ({
-        incluir: !!l.producto,
-        producto_id: l.producto?.id ?? '',
-        unidades: l.unidades,
-        texto: l.texto,
-        opciones: [...(l.producto ? [l.producto] : []), ...l.alternativas],
-        confianza: l.confianza,
-      })),
+      lineas,
+      drogueria_id: r.drogueria?.id ?? guardada?.drogueria_id ?? '',
+      guardarPlantilla: !!r.plantilla && !guardada,
+      nombrePlantilla: r.plantilla?.nombre || 'Pedido habitual',
+      desdePlantilla: guardada?.nombre ?? null,
     });
   };
 
@@ -63,7 +105,10 @@ export function DictadoHoja({ abierto, clientes, productos, clienteActual, conCa
       {!vista ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-slate-600 dark:text-slate-300">
-            Di la farmacia y luego cada producto con sus unidades. Por ejemplo: <i>“Farmacia La Paz, diez losartán cincuenta, cinco atorvastatina”</i>.
+            Di la farmacia, la droguería y cada producto con sus unidades. Por ejemplo: <i>“Farmacia La Paz por Cobeca, diez losartán cincuenta y cinco atorvastatina”</i>.
+          </p>
+          <p className="-mt-2 text-sm text-slate-600 dark:text-slate-300">
+            Termina con <i>“guárdalo como plantilla semanal”</i> para guardarlo, y la próxima vez di solo <i>“Farmacia La Paz, plantilla semanal”</i>.
           </p>
           {voz.disponible && (
             <div className="flex flex-col items-center gap-2">
@@ -105,6 +150,15 @@ export function DictadoHoja({ abierto, clientes, productos, clienteActual, conCa
             <Boton tamano="sm" onClick={() => setBuscandoCliente(true)}>Buscar</Boton>
           </div>
 
+          {vista.desdePlantilla && <p className="text-sm text-slate-600 dark:text-slate-300">Cargué la plantilla <b>{vista.desdePlantilla}</b>. Ajusta lo que haga falta.</p>}
+
+          <Campo rotulo="Droguería">
+            <select value={vista.drogueria_id} onChange={(e) => setVista({ ...vista, drogueria_id: e.target.value })} className={estiloInput}>
+              <option value="">La habitual de la farmacia</option>
+              {droguerias.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+            </select>
+          </Campo>
+
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
             {vista.lineas.length === 0 && <li className="p-3 text-sm text-slate-500">No encontré productos en lo que dijiste. Vuelve a dictar.</li>}
             {vista.lineas.map((l, i) => (
@@ -131,13 +185,31 @@ export function DictadoHoja({ abierto, clientes, productos, clienteActual, conCa
             ))}
           </ul>
 
+          <div className="flex flex-col gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+            <div className="-my-1 -ml-2 flex items-center">
+              <Casilla etiqueta="Guardar también como plantilla de esta farmacia" marcada={vista.guardarPlantilla} onChange={(v) => setVista({ ...vista, guardarPlantilla: v })} />
+              <span className="text-sm text-slate-800 dark:text-slate-200" aria-hidden>Guardar también como plantilla de esta farmacia</span>
+            </div>
+            {vista.guardarPlantilla && (
+              <input value={vista.nombrePlantilla} onChange={(e) => setVista({ ...vista, nombrePlantilla: e.target.value })} aria-label="Nombre de la plantilla" placeholder="Nombre de la plantilla" className={estiloInput} />
+            )}
+          </div>
+
           <div className="flex flex-wrap justify-between gap-2">
             <Boton icono={RotateCcw} onClick={() => setVista(null)}>Volver a dictar</Boton>
             <Boton
               variante="primario"
               icono={ShoppingCart}
               disabled={!vista.cliente || aAgregar.length === 0}
-              onClick={() => { if (vista.cliente) { onConfirmar(vista.cliente, aAgregar.map((l) => ({ producto_id: l.producto_id, unidades: l.unidades }))); voz.setTexto(''); setVista(null); } }}
+              onClick={() => {
+                if (!vista.cliente) return;
+                onConfirmar(vista.cliente, aAgregar.map((l) => ({ producto_id: l.producto_id, unidades: l.unidades })), {
+                  drogueria_id: vista.drogueria_id || null,
+                  plantilla: vista.guardarPlantilla ? { nombre: vista.nombrePlantilla.trim() || 'Pedido habitual' } : null,
+                });
+                voz.setTexto('');
+                setVista(null);
+              }}
             >
               {vista.cliente ? `Agregar ${aAgregar.length} al carrito` : 'Elige la farmacia'}
             </Boton>

@@ -103,10 +103,14 @@ export interface TotalesCarrito {
 
 export const totales = (c: Pick<Carrito, 'lineas'>): TotalesCarrito => ({ productos: c.lineas.length, unidades: c.lineas.reduce((a, l) => a + l.unidades, 0) });
 
-/** Qué impide enviar un carrito (vacío = listo). */
-export function faltaParaEnviar(c: Carrito): string[] {
+/**
+ * Qué impide enviar un carrito (vacío = listo). `tieneCodigo`: la farmacia tiene su código en la droguería elegida
+ * (sin él la droguería no la reconoce y el pedido no puede transferirse).
+ */
+export function faltaParaEnviar(c: Carrito, tieneCodigo = true): string[] {
   const f: string[] = [];
   if (c.lineas.length === 0) f.push('Agrega al menos un producto');
   if (!c.drogueria_id) f.push('Elige la droguería');
+  else if (!tieneCodigo) f.push('Falta el código de la farmacia en la droguería');
   return f;
 }

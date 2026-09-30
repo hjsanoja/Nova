@@ -72,12 +72,14 @@ export interface ResultadoEnvio {
 export async function enviarCarritos(
   db: NovaDB,
   carritos: Carrito[],
-  datos: { reglas: ReglaComercial[]; productos: Map<string, LocalProducto>; clientes: Map<string, LocalCliente>; sesion: Sesion }
+  datos: { reglas: ReglaComercial[]; productos: Map<string, LocalProducto>; clientes: Map<string, LocalCliente>; sesion: Sesion; codigoDe?: (cliente_id: string, drogueria_id: string | null) => string | null }
 ): Promise<ResultadoEnvio[]> {
   const resultados: ResultadoEnvio[] = [];
   for (const c of carritos) {
     try {
       if (!c.drogueria_id) throw new Error('Falta la droguería');
+      // Sin el código de la farmacia en la droguería el pedido no puede transferirse: no se envía.
+      if (datos.codigoDe && !datos.codigoDe(c.cliente_id, c.drogueria_id)) throw new Error('falta el código de la farmacia en la droguería');
       const { aplicada } = condicionDelPedido(datos.reglas, contextoCarrito(c, datos.productos, datos.clientes.get(c.cliente_id)));
       const pedido = await crearPedidoLocal(
         db,

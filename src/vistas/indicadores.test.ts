@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rankingMes, resumenMeses, serieDiaria, topProductosMes, unidadesPorPedido, variacion } from './indicadores';
+import { rankingMes, resumenMeses, serieDiaria, serieMensual, topProductosMes, unidadesPorPedido, variacion } from './indicadores';
 import type { LocalDetalle, LocalPedido } from '../offline/types';
 
 const HOY = new Date(2026, 8, 30, 15, 0); // 30 sep 2026, hora local
@@ -19,7 +19,15 @@ const U = unidadesPorPedido(DETALLES);
 describe('indicadores del resumen', () => {
   it('serie diaria con días vacíos en cero y sin borradores', () => {
     const s = serieDiaria(PEDIDOS, U, 3, HOY);
-    expect(s.map((p) => [p.fecha, p.pedidos, p.unidades])).toEqual([['2026-09-28', 0, 0], ['2026-09-29', 1, 20], ['2026-09-30', 1, 15]]);
+    expect(s.map((p) => [p.fecha, p.pedidos, p.unidades, p.farmacias])).toEqual([['2026-09-28', 0, 0, 0], ['2026-09-29', 1, 20, 1], ['2026-09-30', 1, 15, 1]]);
+  });
+
+  it('serie mensual con farmacias distintas', () => {
+    expect(serieMensual(PEDIDOS, U, 3, HOY)).toEqual([
+      { mes: '2026-07', pedidos: 0, unidades: 0, farmacias: 0 },
+      { mes: '2026-08', pedidos: 1, unidades: 100, farmacias: 1 },
+      { mes: '2026-09', pedidos: 3, unidades: 36, farmacias: 2 },
+    ]);
   });
 
   it('totales de hoy, del mes y del mes anterior', () => {

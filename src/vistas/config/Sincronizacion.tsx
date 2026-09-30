@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { CheckCircle2, CircleAlert, RefreshCw, Trash2 } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Link2, RefreshCw, Trash2 } from 'lucide-react';
+import { enlaceConConexion } from '../../services/supabaseConfig';
 import { obtenerDb } from '../../offline/db';
 import { limpiarDatosLocales } from '../../offline/aislamiento';
 import { reintentarAhora } from '../../offline/outbox';
@@ -85,6 +86,25 @@ export function Sincronizacion({ esDemo, esAdmin, onCerrarSesion, onConexionCamb
         <p className="mb-2 text-xs text-slate-500">Si algo no coincide con lo que ves en otro equipo, borra lo guardado aquí: se vuelve a descargar todo lo que te corresponde.</p>
         <Boton variante="peligro" icono={Trash2} onClick={() => void borrarDispositivo()}>Borrar datos de este dispositivo</Boton>
       </Tarjeta>
+
+      {esAdmin && !esDemo && (
+        <Tarjeta>
+          <p className="mb-1 text-sm font-bold">Enlace para compartir</p>
+          <p className="mb-2 text-xs text-slate-500">Quien lo abra entra directo a iniciar sesión, sin escribir la URL ni la clave de Supabase. Solo incluye la clave pública; cada persona sigue usando su correo y contraseña.</p>
+          <Boton
+            icono={Link2}
+            onClick={() => {
+              const enlace = enlaceConConexion();
+              void navigator.clipboard?.writeText(enlace).then(
+                () => mostrar({ tipo: 'ok', texto: 'Enlace copiado. Compártelo por WhatsApp o correo.' }),
+                () => window.prompt('Copia este enlace:', enlace)
+              );
+            }}
+          >
+            Copiar enlace con la conexión
+          </Boton>
+        </Tarjeta>
+      )}
 
       {esAdmin && (
         <Tarjeta>

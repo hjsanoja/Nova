@@ -1,4 +1,4 @@
-import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, Pill, Settings, ShoppingBag, ShoppingCart, Users } from 'lucide-react';
+import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, Megaphone, Pill, Settings, ShoppingBag, ShoppingCart, Target, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { RolUsuario } from '../../types/pharmacy';
 
@@ -17,7 +17,7 @@ export interface TabDef {
  * Menú por rol, en cuatro grupos fijos (el mismo orden para todos):
  *   Ventas              · lo del día: resumen, pedir, pedidos, mesa de transferencias
  *   Clientes y productos · consulta
- *   Gestión              · reportes, condiciones comerciales y datos maestros (solo quien administra)
+ *   Gestión              · reportes, metas, condiciones comerciales, comunicados y datos maestros (solo quien administra)
  *   Cuenta               · configuración personal y del sistema
  * En el móvil la barra inferior muestra hasta 4 módulos principales + "Más".
  */
@@ -30,6 +30,8 @@ const T = {
   catalogo: { id: 'catalogo', label: 'Catálogo', corto: 'Catálogo', icon: Pill, grupo: 'Clientes y productos' } as TabDef,
   reportes: { id: 'reportes', label: 'Reportes', corto: 'Reportes', icon: BarChart3, grupo: 'Gestión' } as TabDef,
   condiciones: { id: 'condiciones', label: 'Condiciones comerciales', corto: 'Condiciones', icon: BadgePercent, grupo: 'Gestión' } as TabDef,
+  metas: { id: 'metas', label: 'Metas', corto: 'Metas', icon: Target, grupo: 'Gestión' } as TabDef,
+  comunicados: { id: 'comunicados', label: 'Comunicados', corto: 'Avisos', icon: Megaphone, grupo: 'Gestión' } as TabDef,
   datos: { id: 'datos', label: 'Datos maestros', corto: 'Datos', icon: Database, grupo: 'Gestión' } as TabDef,
   config: { id: 'config', label: 'Configuración', corto: 'Ajustes', icon: Settings, grupo: 'Cuenta' } as TabDef,
 };
@@ -41,9 +43,9 @@ export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
   // El vendedor pide desde el catálogo de "Nuevo pedido": no necesita un catálogo aparte.
   vendedor: principales([T.inicio('Inicio'), T.pedir, T.pedidos('Mis pedidos'), T.clientes('Mis clientes'), T.config], ['inicio', 'captura', 'pedidos', 'clientes']),
   teletransferencista: principales([T.porProcesar, T.pedidos(), T.clientes(), T.catalogo, T.config], ['por_procesar', 'pedidos', 'clientes', 'catalogo']),
-  gerente: principales([T.inicio(), T.pedidos(), T.clientes(), T.catalogo, T.reportes, T.condiciones, T.config], ['inicio', 'reportes', 'pedidos', 'clientes']),
+  gerente: principales([T.inicio(), T.pedidos(), T.clientes(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.config], ['inicio', 'reportes', 'pedidos', 'metas']),
   admin: principales(
-    [T.inicio(), T.pedir, T.pedidos(), T.porProcesar, T.clientes(), T.catalogo, T.reportes, T.condiciones, T.datos, T.config],
+    [T.inicio(), T.pedir, T.pedidos(), T.porProcesar, T.clientes(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.datos, T.config],
     ['inicio', 'por_procesar', 'pedidos', 'datos']
   ),
 };

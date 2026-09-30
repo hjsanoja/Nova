@@ -5,7 +5,7 @@
  *   Safari/iOS no lo soporta: allí el envío lo dispara el evento "online" y la visibilidad de la pestaña.
  * Los datos (pedidos, catálogo) NO pasan por aquí: viven en IndexedDB y se sincronizan con Supabase.
  */
-const VERSION = 'nova-v3-1';
+const VERSION = 'nova-v3-2';
 const ACTUAL = `${VERSION}-app`;
 const RAIZ = new URL('./', self.location).href;
 

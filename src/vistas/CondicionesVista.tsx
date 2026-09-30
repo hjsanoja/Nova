@@ -71,7 +71,7 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
       />
       {nodo}
       {nodoConfirmar}
-      {error && <p role="alert" className="mb-3 text-sm text-rose-700">{error}</p>}
+      {error && <p role="alert" className="mb-3 text-sm text-rose-700 dark:text-rose-300">{error}</p>}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div>
@@ -198,7 +198,7 @@ function FormRegla({ inicial, droguerias, onCerrar, onGuardada }: { inicial: Fil
         <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600 sm:col-span-2 dark:bg-slate-950 dark:text-slate-300">
           <b>{r.descuento_max_pct || 0}%</b> de descuento · {describirRequisitos(r).toLowerCase()}. Si defines los dos mínimos, el pedido debe cumplir ambos; para que baste uno solo, crea dos condiciones.
         </p>
-        {error && <p role="alert" className="text-sm text-rose-700 sm:col-span-2">{error}</p>}
+        {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300 sm:col-span-2">{error}</p>}
         <div className="flex justify-end gap-2 sm:col-span-2">
           <Boton onClick={onCerrar}>Cancelar</Boton>
           <Boton type="submit" variante="primario" disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar'}</Boton>

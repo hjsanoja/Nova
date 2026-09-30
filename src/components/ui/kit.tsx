@@ -26,6 +26,17 @@ export function Campo({ rotulo, ayuda, error, children, className = '' }: { rotu
 
 // ---------------------------------------------------------------------------- estructura
 
+/** Rótulo para un grupo de botones (pestañas, chips). Un <label> solo nombraría al primer botón. */
+export function Grupo({ rotulo, ayuda, children, className = '' }: { rotulo: string; ayuda?: string; children: React.ReactNode; className?: string }) {
+  return (
+    <div role="group" aria-label={rotulo} className={className}>
+      <span className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">{rotulo}</span>
+      {children}
+      {ayuda && <span className="mt-1 block text-xs text-slate-500">{ayuda}</span>}
+    </div>
+  );
+}
+
 export function PageHeader({ titulo, descripcion, acciones }: { titulo: string; descripcion?: string; acciones?: React.ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
@@ -74,10 +85,10 @@ export function Etiqueta({ tono = 'neutro', children }: { tono?: Tono; children:
 
 type Variante = 'primario' | 'secundario' | 'fantasma' | 'peligro' | 'suave';
 const VARIANTES: Record<Variante, string> = {
-  primario: 'bg-marca-700 text-white hover:bg-marca-800 disabled:bg-marca-700/50',
+  primario: 'bg-marca-700 text-white hover:bg-marca-800 disabled:bg-marca-700/50 dark:bg-marca-600 dark:hover:bg-marca-500 dark:disabled:bg-marca-600/40',
   secundario: 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800',
   fantasma: 'text-marca-700 hover:bg-marca-50 dark:text-marca-300 dark:hover:bg-marca-950',
-  peligro: 'bg-rose-700 text-white hover:bg-rose-800 disabled:bg-rose-700/50',
+  peligro: 'bg-rose-700 text-white hover:bg-rose-800 disabled:bg-rose-700/50 dark:bg-rose-600 dark:hover:bg-rose-500',
   suave: 'text-marca-700 hover:bg-marca-50 dark:text-marca-300 dark:hover:bg-marca-950',
 };
 const TAMANOS = { md: 'min-h-10 px-4 text-sm', sm: 'min-h-8 px-3 text-xs' } as const;
@@ -160,7 +171,7 @@ export function Filtros<T extends string>({ opciones, valor, onChange }: { opcio
           onClick={() => onChange(o.id)}
           className={`min-h-8 shrink-0 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition-colors ${
             valor === o.id
-              ? 'border-marca-700 bg-marca-700 text-white'
+              ? 'border-marca-700 bg-marca-700 text-white dark:border-marca-600 dark:bg-marca-600'
               : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
           }`}
         >
@@ -218,7 +229,7 @@ export function Avatar({ nombre, foto, tamano = 40, cuadrado = false }: { nombre
   const forma = cuadrado ? 'rounded-lg' : 'rounded-full';
   const estilo = { width: tamano, height: tamano, fontSize: Math.max(11, Math.round(tamano * 0.36)) };
   if (foto && !fallo) {
-    return <img src={foto} alt="" loading="lazy" onError={() => setFallo(true)} style={estilo} className={`${forma} shrink-0 border border-slate-200 bg-white object-cover dark:border-slate-700`} />;
+    return <img src={foto} alt="" loading="lazy" onError={() => setFallo(true)} style={estilo} className={`${forma} shrink-0 border border-slate-200 bg-white object-cover dark:border-slate-700 dark:bg-slate-800`} />;
   }
   return (
     <span aria-hidden style={estilo} className={`${forma} inline-flex shrink-0 items-center justify-center bg-marca-50 font-semibold text-marca-800 dark:bg-marca-950 dark:text-marca-300`}>
@@ -344,7 +355,7 @@ export function useConfirmar() {
   };
   const nodo = pedido ? (
     <div className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" role="alertdialog" aria-modal="true" aria-labelledby="confirmar-titulo">
-      <div className="animate-in w-full rounded-t-xl bg-white p-5 shadow-xl dark:bg-slate-900 sm:max-w-md sm:rounded-xl">
+      <div className="animate-in w-full rounded-t-xl bg-white p-5 shadow-xl dark:border dark:border-slate-700 dark:bg-slate-900 sm:max-w-md sm:rounded-xl">
         <h2 id="confirmar-titulo" className="text-base font-semibold text-slate-900 dark:text-white">{pedido.titulo}</h2>
         <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{pedido.texto}</p>
         <div className="mt-5 flex justify-end gap-2 pb-safe">

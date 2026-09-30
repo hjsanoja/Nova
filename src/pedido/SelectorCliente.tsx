@@ -90,7 +90,7 @@ function NuevoProspecto({ onCancelar, onCreada }: { onCancelar: () => void; onCr
       <Campo rotulo="Teléfono"><input inputMode="tel" value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className={estiloInput} /></Campo>
       <Boton icono={LocateFixed} onClick={ubicar}>{gps ? `Ubicación guardada (${gps.lat.toFixed(4)}, ${gps.lon.toFixed(4)})` : 'Usar mi ubicación actual'}</Boton>
       <p className="text-xs text-slate-500">Queda como <b>prospecto</b>: puedes tomarle pedidos, pero la mesa los revisa hasta validar el RIF y la cuenta en la droguería.</p>
-      {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
+      {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{error}</p>}
       <div className="flex justify-end gap-2">
         <Boton onClick={onCancelar}>Cancelar</Boton>
         <Boton type="submit" variante="primario">Guardar</Boton>

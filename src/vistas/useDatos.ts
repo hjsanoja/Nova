@@ -40,6 +40,9 @@ export interface UsuarioNube {
   equipo: string | null;
   telefono: string | null;
   foto_url: string | null;
+  estado_geografico: string | null;
+  ciudad: string | null;
+  region: string | null;
 }
 
 /** Personas de la organización (la mesa y la gerencia ven a todos; un vendedor solo se ve a sí mismo). Vacío en modo demostración. */
@@ -50,7 +53,7 @@ export function useUsuariosNube(recargar = 0): { usuarios: UsuarioNube[]; cargan
     if (!sb) return setEstado({ usuarios: [], cargando: false, error: '' });
     let vivo = true;
     void (async () => {
-      const { data, error } = await sb.from('dim_usuarios').select('id,nombre_completo,email,rol,activo,telefono,foto_url,dim_equipos(codigo)').is('deleted_at', null).order('nombre_completo');
+      const { data, error } = await sb.from('dim_usuarios').select('id,nombre_completo,email,rol,activo,telefono,foto_url,estado_geografico,ciudad,region,dim_equipos(codigo)').is('deleted_at', null).order('nombre_completo');
       if (!vivo) return;
       if (error) return setEstado({ usuarios: [], cargando: false, error: error.message });
       setEstado({
@@ -62,6 +65,9 @@ export function useUsuariosNube(recargar = 0): { usuarios: UsuarioNube[]; cargan
           activo: u.activo as boolean,
           telefono: (u.telefono as string | null) ?? null,
           foto_url: (u.foto_url as string | null) ?? null,
+          estado_geografico: (u.estado_geografico as string | null) ?? null,
+          ciudad: (u.ciudad as string | null) ?? null,
+          region: (u.region as string | null) ?? null,
           equipo: ((u as { dim_equipos?: { codigo?: string } | null }).dim_equipos?.codigo as string | undefined) ?? null,
         })),
         cargando: false,

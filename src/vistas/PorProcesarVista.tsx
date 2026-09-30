@@ -6,6 +6,8 @@ import { obtenerDb } from '../offline/db';
 import { sincronizarYa } from '../offline/motor';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { generarArchivoDrogueria } from '../services/exportacionDrogueria';
+import { codigoDeFarmacia, registrarCodigoFarmacia } from '../offline/homologacion';
+import { CodigoFarmacia } from '../pedido/CodigoFarmacia';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { Sheet } from '../components/capture/Sheet';
 import { Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso } from '../components/ui/kit';
@@ -28,7 +30,7 @@ const MOTIVOS: { id: MotivoAjuste; texto: string }[] = [
 ];
 
 /** Bloqueo del pedido mientras la mesa lo trabaja (evita que dos personas lo procesen a la vez). Se renueva cada 50 s. */
-function useBloqueo(pedidoId: string | null, activo: boolean) {
+function useBloqueo(pedidoId: string | null, activo: boolean, reintento = 0) {
   const [estado, setEstado] = useState<{ ok: boolean; nombre?: string; error?: string } | null>(null);
   useEffect(() => {
     const sb = getSupabaseClient();
@@ -48,7 +50,7 @@ function useBloqueo(pedidoId: string | null, activo: boolean) {
       clearInterval(t);
       void sb.rpc('liberar_pedido', { p_pedido: pedidoId });
     };
-  }, [pedidoId, activo]);
+  }, [pedidoId, activo, reintento]);
   return estado;
 }
 
@@ -170,7 +172,15 @@ function Procesar({
   onListo: () => void;
 }) {
   const procesable = ['enviado_teletransferencia', 'en_revision', 'en_proceso'].includes(p.estado);
-  const bloqueo = useBloqueo(p.id, procesable);
+  const [reintento, setReintento] = useState(0);
+  const bloqueo = useBloqueo(p.id, procesable, reintento);
+  const codigoFarmacia = codigoDeFarmacia(mapClientes, p.cliente_id, p.drogueria_id);
+  const guardarCodigo = async (codigo: string) => {
+    await registrarCodigoFarmacia(obtenerDb(), { cliente_id: p.cliente_id, drogueria_id: p.drogueria_id, codigo });
+    await sincronizarYa();
+    setReintento((n) => n + 1);
+    onAviso({ tipo: 'ok', texto: 'Código guardado: la farmacia queda homologada con esta droguería.' });
+  };
   const puedeEditar = procesable && bloqueo?.ok === true;
   const [conf, setConf] = useState<Record<string, string>>(() => Object.fromEntries(lineas.map((l) => [l.id, String(l.unidades_confirmadas ?? l.unidades_solicitadas)])));
   const [motivos, setMotivos] = useState<Record<string, MotivoAjuste>>({});
@@ -245,6 +255,10 @@ function Procesar({
           <Lock className="mt-0.5 h-4 w-4 shrink-0" />
           {bloqueo.error ?? `${bloqueo.nombre ?? 'Otra persona'} lo está procesando ahora. Podrás tomarlo cuando termine.`}
         </p>
+      )}
+
+      {procesable && !codigoFarmacia && (
+        <CodigoFarmacia farmacia={cliente?.nombre_comercial ?? 'la farmacia'} drogueria={drogueria?.nombre ?? 'la droguería'} onGuardar={guardarCodigo} />
       )}
 
       {/* Archivo para la droguería */}

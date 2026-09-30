@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { interpretarDictado, palabrasANumeros, parecido, separarFrase } from './dictado';
+import { extraerDrogueriaYPlantilla, interpretarDictado, palabrasANumeros, parecido, separarFrase } from './dictado';
 import { normalizar, tokensProducto } from '../offline/busqueda';
 
 const prod = (id: string, nombre: string, presentacion = '', principio = '') => ({
@@ -76,5 +76,41 @@ describe('interpretar un pedido dictado', () => {
     expect(parecido(['losartan', '50'], PRODUCTOS[0].tokens)).toBe(1);
     expect(parecido(['losartan', '50'], PRODUCTOS[1].tokens)).toBe(0.5);
     expect(parecido(['farmacia', 'la'], CLIENTES[0].busqueda.split(' '))).toBe(0);
+  });
+});
+
+describe('droguería y plantilla dichas en el pedido', () => {
+  const DROG = [{ id: 'd1', nombre: 'Cobeca', codigo: 'COBECA' }, { id: 'd2', nombre: 'Drocerca', codigo: 'DRO' }, { id: 'd3', nombre: 'Nena', codigo: 'NEN' }];
+
+  it('cliente, droguería, productos y unidades; y guardar como plantilla con nombre', () => {
+    const r = interpretarDictado('Farmacia La Paz por Cobeca, diez losartán 50 y cinco omeprazol, guárdalo como plantilla semanal', CLIENTES, PRODUCTOS, DROG);
+    expect(r.cliente?.id).toBe('CLI-1');
+    expect(r.drogueria?.id).toBe('d1');
+    expect(r.lineas.map((l) => [l.producto?.id, l.unidades])).toEqual([['LOS50', 10], ['OME20', 5]]);
+    expect(r.plantilla).toEqual({ nombre: 'Semanal' });
+  });
+
+  it('la droguería puede ir al final y la plantilla sin nombre', () => {
+    const r = interpretarDictado('san rafael 4 atamel droguería drocerca, es una plantilla', CLIENTES, PRODUCTOS, DROG);
+    expect(r.cliente?.id).toBe('CLI-3');
+    expect(r.drogueria?.id).toBe('d2');
+    expect(r.lineas.map((l) => [l.producto?.id, l.unidades])).toEqual([['ATA500', 4]]);
+    expect(r.plantilla).toEqual({ nombre: '' });
+  });
+
+  it('el nombre de la farmacia puede llevar números si se separa con una pausa', () => {
+    const clientes = [...CLIENTES, cli('CLI-24', 'Farmacia 24 Horas'), cli('CLI-12', 'Farmacia 12')];
+    const r = interpretarDictado('Farmacia 12 por Drocerca, 3 losartán 50 y 4 omeprazol', clientes, PRODUCTOS, DROG);
+    expect(r.cliente?.id).toBe('CLI-12');
+    expect(r.lineas.map((l) => [l.producto?.id, l.unidades])).toEqual([['LOS50', 3], ['OME20', 4]]);
+    expect(interpretarDictado('farmacia 24 horas, 2 atamel', clientes, PRODUCTOS, DROG).cliente?.id).toBe('CLI-24');
+  });
+
+  it('sin droguería ni plantilla no cambia nada; un nombre corto solo cuenta si se dice "droguería" o "por"', () => {
+    const r = interpretarDictado('la paz 3 omeprazol', CLIENTES, PRODUCTOS, DROG);
+    expect(r.drogueria).toBeNull();
+    expect(r.plantilla).toBeNull();
+    expect(extraerDrogueriaYPlantilla('farmacia nena 3 omeprazol', [{ id: 'x', nombre: 'Ne', codigo: 'NE' }]).drogueria).toBeNull();
+    expect(extraerDrogueriaYPlantilla('3 omeprazol por nena', DROG).drogueria?.id).toBe('d3');
   });
 });

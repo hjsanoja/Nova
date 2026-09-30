@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
-import { BadgePercent, Plus, Send, ShoppingCart, Trash2, X } from 'lucide-react';
+import { BadgePercent, BookmarkPlus, Plus, Send, ShoppingCart, Trash2, X } from 'lucide-react';
+import { CodigoFarmacia } from './CodigoFarmacia';
 import { Avatar, Boton, BotonIcono, Campo, PasoUnidades, Vacio, estiloInput } from '../components/ui/kit';
 import { condicionDelPedido } from '../offline/politicas';
 import type { ReglaComercial } from '../offline/politicas';
@@ -18,12 +19,17 @@ interface Props {
   enviando: boolean;
   onEnviar: (carritos: Carrito[]) => void;
   onNuevaFarmacia: () => void;
+  /** Código de la farmacia en la droguería (null si falta). */
+  codigoDe: (cliente_id: string, drogueria_id: string | null) => string | null;
+  onGuardarCodigo: (cliente_id: string, drogueria_id: string, codigo: string) => Promise<void>;
+  /** Guardar el carrito activo como plantilla de esa farmacia. */
+  onGuardarPlantilla?: (carrito: Carrito) => void;
 }
 
 /** Los carritos abiertos (uno por farmacia) y el detalle del activo. */
-export function PanelCarrito({ estado, dispatch, clientes, productos, droguerias, reglas, enviando, onEnviar, onNuevaFarmacia }: Props) {
+export function PanelCarrito({ estado, dispatch, clientes, productos, droguerias, reglas, enviando, onEnviar, onNuevaFarmacia, codigoDe, onGuardarCodigo, onGuardarPlantilla }: Props) {
   const activo = estado.carritos.find((c) => c.id === estado.activo) ?? null;
-  const listos = estado.carritos.filter((c) => faltaParaEnviar(c).length === 0);
+  const listos = estado.carritos.filter((c) => faltaParaEnviar(c, !!codigoDe(c.cliente_id, c.drogueria_id)).length === 0);
 
   if (estado.carritos.length === 0) {
     return (
@@ -59,7 +65,21 @@ export function PanelCarrito({ estado, dispatch, clientes, productos, droguerias
         <Boton tamano="sm" variante="fantasma" icono={Plus} onClick={onNuevaFarmacia} className="shrink-0">Farmacia</Boton>
       </div>
 
-      {activo && <DetalleCarrito carrito={activo} dispatch={dispatch} cliente={clientes.get(activo.cliente_id)} productos={productos} droguerias={droguerias} reglas={reglas} enviando={enviando} onEnviar={() => onEnviar([activo])} />}
+      {activo && (
+        <DetalleCarrito
+          carrito={activo}
+          dispatch={dispatch}
+          cliente={clientes.get(activo.cliente_id)}
+          productos={productos}
+          droguerias={droguerias}
+          reglas={reglas}
+          enviando={enviando}
+          onEnviar={() => onEnviar([activo])}
+          codigo={codigoDe(activo.cliente_id, activo.drogueria_id)}
+          onGuardarCodigo={(codigo) => onGuardarCodigo(activo.cliente_id, activo.drogueria_id!, codigo)}
+          onGuardarPlantilla={onGuardarPlantilla ? () => onGuardarPlantilla(activo) : undefined}
+        />
+      )}
 
       {listos.length > 1 && (
         <Boton variante="primario" icono={Send} disabled={enviando} onClick={() => onEnviar(listos)} className="w-full">
@@ -70,7 +90,7 @@ export function PanelCarrito({ estado, dispatch, clientes, productos, droguerias
   );
 }
 
-function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, reglas, enviando, onEnviar }: {
+function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, reglas, enviando, onEnviar, codigo, onGuardarCodigo, onGuardarPlantilla }: {
   carrito: Carrito;
   dispatch: (a: AccionCarritos) => void;
   cliente: LocalCliente | undefined;
@@ -79,9 +99,13 @@ function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, 
   reglas: ReglaComercial[];
   enviando: boolean;
   onEnviar: () => void;
+  codigo: string | null;
+  onGuardarCodigo: (codigo: string) => Promise<void>;
+  onGuardarPlantilla?: () => void;
 }) {
   const t = totales(c);
-  const faltas = faltaParaEnviar(c);
+  const faltas = faltaParaEnviar(c, !!codigo);
+  const drogueria = droguerias.find((d) => d.id === c.drogueria_id);
   const condicion = useMemo(() => condicionDelPedido(reglas, contextoCarrito(c, productos, cliente)), [reglas, c, productos, cliente]);
 
   return (
@@ -101,6 +125,11 @@ function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, 
           {droguerias.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}
         </select>
       </Campo>
+      {c.drogueria_id && (codigo ? (
+        <p className="-mt-1 text-xs text-slate-500">Código de la farmacia en {drogueria?.nombre ?? 'la droguería'}: <span className="font-medium text-slate-700 dark:text-slate-200">{codigo}</span></p>
+      ) : (
+        <CodigoFarmacia farmacia={cliente?.nombre_comercial ?? 'la farmacia'} drogueria={drogueria?.nombre ?? 'la droguería'} onGuardar={onGuardarCodigo} />
+      ))}
 
       {c.lineas.length === 0 ? (
         <p className="rounded-lg bg-slate-50 p-3 text-center text-sm text-slate-500 dark:bg-slate-950">Agrega productos del catálogo.</p>
@@ -140,6 +169,10 @@ function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, 
       <Campo rotulo="Nota para la droguería (opcional)">
         <input value={c.observaciones} onChange={(e) => dispatch({ tipo: 'observaciones', carrito_id: c.id, texto: e.target.value })} className={estiloInput} />
       </Campo>
+
+      {onGuardarPlantilla && c.lineas.length > 0 && (
+        <Boton variante="fantasma" tamano="sm" icono={BookmarkPlus} onClick={onGuardarPlantilla} className="self-start">Guardar como plantilla</Boton>
+      )}
 
       {cliente && cliente.estado_validacion !== 'activo' && <p className="text-xs text-amber-800 dark:text-amber-300">Farmacia por validar: el pedido irá a revisión de la mesa.</p>}
       <Boton variante="primario" icono={Send} disabled={faltas.length > 0 || enviando} onClick={onEnviar} className="w-full" title={faltas.join(' · ')}>

@@ -83,7 +83,7 @@ export function Productos() {
         <Boton icono={Upload} onClick={() => void cargarArchivo()}>Cargar archivo</Boton>
         <Boton variante="fantasma" icono={Download} onClick={() => descargarCsv('plantilla_productos.csv', PLANTILLA)}>Plantilla</Boton>
       </div>
-      {error && <p role="alert" className="mb-3 text-sm text-rose-700">{error}</p>}
+      {error && <p role="alert" className="mb-3 text-sm text-rose-700 dark:text-rose-300">{error}</p>}
       <TablaMaestro
         filas={filas}
         clave={(p) => p.sku}
@@ -156,9 +156,9 @@ function FormProducto({ inicial, nuevo, onCerrar, onGuardado, onEliminar }: { in
           <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={p.activo} onChange={(e) => setP({ ...p, activo: e.target.checked })} className="h-4 w-4 accent-marca-700" /> Activo</label>
           <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={p.es_prioritario} onChange={(e) => setP({ ...p, es_prioritario: e.target.checked })} className="h-4 w-4 accent-marca-700" /> Prioritario (se sugiere primero)</label>
         </div>
-        {error && <p role="alert" className="text-sm text-rose-700 sm:col-span-2">{error}</p>}
+        {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300 sm:col-span-2">{error}</p>}
         <div className="flex flex-wrap justify-between gap-2 sm:col-span-2">
-          {onEliminar ? <Boton variante="fantasma" className="!text-rose-700" onClick={onEliminar}>Eliminar</Boton> : <span />}
+          {onEliminar ? <Boton variante="fantasma" className="!text-rose-700 dark:!text-rose-300" onClick={onEliminar}>Eliminar</Boton> : <span />}
           <div className="flex gap-2">
             <Boton onClick={onCerrar}>Cancelar</Boton>
             <Boton type="submit" variante="primario" disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar'}</Boton>

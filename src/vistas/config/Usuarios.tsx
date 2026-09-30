@@ -3,7 +3,8 @@ import { Search, Trash2, UserPlus } from 'lucide-react';
 import type { RolUsuario, Usuario } from '../../types/pharmacy';
 import { getSupabaseClient, crearClienteSinSesion } from '../../services/supabaseClient';
 import { crearUsuarioNube, rolDesdeV3 } from '../../services/nubeV3';
-import { Avatar, BarraSeleccion, Boton, Casilla, Etiqueta, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useSeleccion } from '../../components/ui/kit';
+import { Avatar, BarraSeleccion, Boton, Campo, Casilla, Etiqueta, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useSeleccion } from '../../components/ui/kit';
+import { Sheet } from '../../components/capture/Sheet';
 import { eliminarUsuarios, filtrarPorTexto } from '../../services/maestros';
 import { useUsuariosNube } from '../useDatos';
 import type { UsuarioNube } from '../useDatos';
@@ -31,6 +32,7 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
   const { confirmar, nodo: nodoConfirmar } = useConfirmar();
   const sel = useSeleccion();
   const [texto, setTexto] = useState('');
+  const [zona, setZona] = useState<UsuarioNube | null>(null);
   const equipos = useMemo(() => Array.from(new Set(usuarios.map((u) => u.equipo).filter((e): e is string => !!e))).sort(), [usuarios]);
 
   const actual = (u: UsuarioNube): Borrador => borradores[u.id] ?? { rol: u.rol, equipo: u.equipo ?? '', activo: u.activo };
@@ -124,6 +126,9 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold">{u.nombre_completo}{soyYo && <span className="ml-1 text-xs font-normal text-slate-400">(tú)</span>}</p>
                         <p className="truncate text-xs text-slate-500">{u.email}</p>
+                        <button type="button" onClick={() => setZona(u)} className="truncate text-xs font-medium text-marca-700 hover:underline dark:text-marca-300">
+                          {[u.region, u.estado_geografico, u.ciudad].filter(Boolean).join(' · ') || 'Asignar zona'}
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -144,7 +149,38 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
         )}
         <datalist id="equipos">{equipos.map((e) => <option key={e} value={e} />)}</datalist>
       </Tarjeta>
+      {zona && <ZonaUsuario usuario={zona} onCerrar={() => setZona(null)} onGuardado={() => { setZona(null); setRecarga((x) => x + 1); mostrar({ tipo: 'ok', texto: 'Zona guardada.' }); }} />}
     </div>
+  );
+}
+
+/** Estado, ciudad y región de la persona: sirven para dirigirle comunicados por zona. */
+function ZonaUsuario({ usuario: u, onCerrar, onGuardado }: { usuario: UsuarioNube; onCerrar: () => void; onGuardado: () => void }) {
+  const [z, setZ] = useState({ region: u.region ?? '', estado_geografico: u.estado_geografico ?? '', ciudad: u.ciudad ?? '' });
+  const [error, setError] = useState('');
+  const guardar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const limpio = (t: string) => t.trim() || null;
+    const { error: err } = await sb.from('dim_usuarios').update({ region: limpio(z.region), estado_geografico: limpio(z.estado_geografico), ciudad: limpio(z.ciudad) }).eq('id', u.id);
+    if (err) return setError(err.message);
+    onGuardado();
+  };
+  return (
+    <Sheet abierto titulo={`Zona de ${u.nombre_completo}`} onCerrar={onCerrar}>
+      <form onSubmit={guardar} className="flex flex-col gap-3">
+        <p className="text-sm text-slate-600 dark:text-slate-300">Se usa para enviarle comunicados por región, estado o ciudad. A un vendedor también le llegan los de las zonas de las farmacias de su fichero.</p>
+        <Campo rotulo="Región"><input value={z.region} onChange={(e) => setZ({ ...z, region: e.target.value })} placeholder="Ej.: Occidente" className={estiloInput} /></Campo>
+        <Campo rotulo="Estado"><input value={z.estado_geografico} onChange={(e) => setZ({ ...z, estado_geografico: e.target.value })} placeholder="Ej.: Zulia" className={estiloInput} /></Campo>
+        <Campo rotulo="Ciudad"><input value={z.ciudad} onChange={(e) => setZ({ ...z, ciudad: e.target.value })} placeholder="Ej.: Maracaibo" className={estiloInput} /></Campo>
+        {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Boton onClick={onCerrar}>Cancelar</Boton>
+          <Boton type="submit" variante="primario">Guardar</Boton>
+        </div>
+      </form>
+    </Sheet>
   );
 }
 

@@ -118,7 +118,7 @@ export function Ventas() {
         <Boton icono={RefreshCw} onClick={() => { void verificar(); void recargar(); }}>Actualizar</Boton>
         <Boton variante="fantasma" icono={Download} onClick={() => descargarCsv('plantilla_ventas_drogueria.csv', PLANTILLA)}>Plantilla</Boton>
       </div>
-      {error && <p role="alert" className="mb-3 text-sm text-rose-700">{error}</p>}
+      {error && <p role="alert" className="mb-3 text-sm text-rose-700 dark:text-rose-300">{error}</p>}
       <TablaMaestro
         filas={filas}
         clave={(l) => l.id}

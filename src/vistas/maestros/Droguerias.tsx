@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
-import { Building2, Download, Plus, Upload } from 'lucide-react';
+import { Building2, Download, FileCog, Plus, Upload } from 'lucide-react';
+import { FormatoArchivo } from './FormatoArchivo';
 import { Sheet } from '../../components/capture/Sheet';
 import { TablaMaestro } from '../../components/maestros/TablaMaestro';
 import type { Columna } from '../../components/maestros/TablaMaestro';
@@ -31,6 +32,7 @@ export function Droguerias() {
   const cargar = useCallback(listarDroguerias, []);
   const { filas, cargando, error, recargar } = useListaNube(cargar);
   const [edicion, setEdicion] = useState<{ fila: FilaDrogueria; nueva: boolean } | null>(null);
+  const [formato, setFormato] = useState<{ codigo: string; nombre: string } | null>(null);
   const { mostrar, nodo } = useAviso();
   const { confirmar, nodo: nodoConfirmar } = useConfirmar();
   const carga = useCargaArchivo();
@@ -72,7 +74,7 @@ export function Droguerias() {
         <Boton icono={Upload} onClick={() => void cargarArchivo()}>Cargar archivo</Boton>
         <Boton variante="fantasma" icono={Download} onClick={() => descargarCsv('plantilla_droguerias.csv', PLANTILLA)}>Plantilla</Boton>
       </div>
-      {error && <p role="alert" className="mb-3 text-sm text-rose-700">{error}</p>}
+      {error && <p role="alert" className="mb-3 text-sm text-rose-700 dark:text-rose-300">{error}</p>}
       <TablaMaestro
         filas={filas}
         clave={(d) => d.codigo}
@@ -92,13 +94,22 @@ export function Droguerias() {
           onCerrar={() => setEdicion(null)}
           onGuardada={(nombre) => { setEdicion(null); mostrar({ tipo: 'ok', texto: `${nombre} guardada.` }); void recargar(); }}
           onEliminar={edicion.nueva ? undefined : () => { setEdicion(null); void eliminar([edicion.fila.codigo]); }}
+          onFormato={edicion.nueva ? undefined : () => { setFormato({ codigo: edicion.fila.codigo, nombre: edicion.fila.nombre }); setEdicion(null); }}
+        />
+      )}
+      {formato && (
+        <FormatoArchivo
+          codigo={formato.codigo}
+          nombre={formato.nombre}
+          onCerrar={() => setFormato(null)}
+          onGuardado={() => { mostrar({ tipo: 'ok', texto: `Formato de ${formato.nombre} guardado. Los próximos archivos saldrán así.` }); setFormato(null); void recargar(); }}
         />
       )}
     </div>
   );
 }
 
-function FormDrogueria({ inicial, nueva, onCerrar, onGuardada, onEliminar }: { inicial: FilaDrogueria; nueva: boolean; onCerrar: () => void; onGuardada: (nombre: string) => void; onEliminar?: () => void }) {
+function FormDrogueria({ inicial, nueva, onCerrar, onGuardada, onEliminar, onFormato }: { inicial: FilaDrogueria; nueva: boolean; onCerrar: () => void; onGuardada: (nombre: string) => void; onEliminar?: () => void; onFormato?: () => void }) {
   const [d, setD] = useState(inicial);
   const [dias, setDias] = useState(inicial.dias_entrega?.toString() ?? '');
   const [error, setError] = useState('');
@@ -132,15 +143,21 @@ function FormDrogueria({ inicial, nueva, onCerrar, onGuardada, onEliminar }: { i
         <Campo rotulo="Teléfono"><input {...campo('telefono')} inputMode="tel" className={estiloInput} /></Campo>
         <Campo rotulo="Correo para pedidos" className="sm:col-span-2"><input {...campo('email_pedidos')} type="email" className={estiloInput} /></Campo>
         <Campo rotulo="Días de entrega"><input value={dias} onChange={(e) => setDias(e.target.value)} inputMode="numeric" className={estiloInput} /></Campo>
-        <Campo rotulo="Separador del archivo de pedidos">
-          <select value={d.delimitador} onChange={(e) => setD({ ...d, delimitador: e.target.value })} className={estiloInput}>
-            {SEPARADORES.map((x) => <option key={x.t} value={x.v}>{x.t}</option>)}
-          </select>
-        </Campo>
+        {nueva ? (
+          <Campo rotulo="Separador del archivo de pedidos" ayuda="Después de crearla podrás armar todas las columnas del archivo.">
+            <select value={d.delimitador} onChange={(e) => setD({ ...d, delimitador: e.target.value })} className={estiloInput}>
+              {SEPARADORES.map((x) => <option key={x.t} value={x.v}>{x.t}</option>)}
+            </select>
+          </Campo>
+        ) : (
+          <div className="flex flex-col justify-end">
+            <Boton icono={FileCog} onClick={onFormato}>Formato del archivo de pedido</Boton>
+          </div>
+        )}
         <label className="inline-flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={d.activo} onChange={(e) => setD({ ...d, activo: e.target.checked })} className="h-4 w-4 accent-marca-700" /> Activa (se puede elegir en los pedidos)</label>
-        {error && <p role="alert" className="text-sm text-rose-700 sm:col-span-2">{error}</p>}
+        {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300 sm:col-span-2">{error}</p>}
         <div className="flex flex-wrap justify-between gap-2 sm:col-span-2">
-          {onEliminar ? <Boton variante="fantasma" className="!text-rose-700" onClick={onEliminar}>Eliminar</Boton> : <span />}
+          {onEliminar ? <Boton variante="fantasma" className="!text-rose-700 dark:!text-rose-300" onClick={onEliminar}>Eliminar</Boton> : <span />}
           <div className="flex gap-2">
             <Boton onClick={onCerrar}>Cancelar</Boton>
             <Boton type="submit" variante="primario" disabled={guardando}>{guardando ? 'Guardando…' : 'Guardar'}</Boton>

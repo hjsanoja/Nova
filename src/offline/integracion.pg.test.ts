@@ -54,7 +54,7 @@ async function comoUsuario<T>(uid: string, fn: (c: pg.Client) => Promise<T>): Pr
   }
 }
 
-const TABLAS = new Set(['dim_productos', 'dim_droguerias', 'dim_clientes', 'map_producto_drogueria', 'map_cliente_drogueria', 'config_reglas_comerciales', 'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'fact_compras_mensual']);
+const TABLAS = new Set(['dim_productos', 'dim_droguerias', 'dim_clientes', 'map_producto_drogueria', 'map_cliente_drogueria', 'config_reglas_comerciales', 'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'fact_compras_mensual', 'plantillas_pedido', 'comunicados', 'metas']);
 const COLUMNAS_FILTRO = new Set(['pedido_id']);
 const COLUMNAS_MINIMO = new Set(['periodo']);
 
@@ -77,7 +77,7 @@ function remotoPostgres(uid: string): SyncRemote & { caido: boolean } {
         throw new ErrorRemoto('permanente', err.message, err.code);
       }
     },
-    async traer(tabla: string, desde: string | null, limite: number, opciones: { creadoDesde?: string; filtro?: Record<string, string>; minimo?: Record<string, string> } = {}) {
+    async traer(tabla: string, desde: string | null, limite: number, opciones: { creadoDesde?: string; seleccion?: string; filtro?: Record<string, string>; minimo?: Record<string, string> } = {}) {
       if (!TABLAS.has(tabla)) throw new Error(`tabla no permitida: ${tabla}`);
       return comoUsuario(uid, async (c) => {
         const params: unknown[] = [];
@@ -95,7 +95,8 @@ function remotoPostgres(uid: string): SyncRemote & { caido: boolean } {
           donde.push(`t.${col} >= $${params.length}`);
         }
         params.push(limite);
-        const extra = '';
+        // Columna calculada de PostgREST (select=*,para_mi): aquí se llama a la función con la fila.
+        const extra = opciones.seleccion === '*,para_mi' ? ', para_mi(t) AS para_mi' : '';
         // row_to_json imita a PostgREST: fechas ISO, numéricos como números, jsonb anidado.
         const r = await c.query(`SELECT row_to_json(x) AS f FROM (SELECT t.*${extra} FROM ${tabla} t WHERE ${donde.join(' AND ')} ORDER BY t.updated_at LIMIT $${params.length}) x`, params);
         return r.rows.map((row) => row.f as FilaRemota);
@@ -116,6 +117,8 @@ const RPC: Record<Exclude<TipoOutbox, 'pedido.rerutear'>, string> = {
   'pedido.crear': 'sync_crear_pedido',
   'pedido.modificar': 'sync_modificar_pedido',
   'visita.registrar': 'sync_registrar_visita',
+  'farmacia.codigo': 'sync_registrar_codigo_farmacia',
+  'plantilla.guardar': 'sync_guardar_plantilla',
 };
 
 describe.skipIf(!activo)('integración con PostgreSQL + PostGIS', () => {

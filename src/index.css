@@ -39,6 +39,15 @@
   }
 }
 
+/*
+ * Modo oscuro: mismas piezas, superficies en capas (fondo < tarjeta < elemento flotante) y texto secundario más claro
+ * para que se lea con contraste AA. slate-500 (texto secundario) sube de tono solo en oscuro; el modo claro no cambia.
+ */
+.dark {
+  --color-slate-500: #8b98ad;
+  --color-slate-950: #070c18;
+}
+
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;

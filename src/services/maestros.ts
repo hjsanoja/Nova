@@ -2,6 +2,7 @@
 // Se leen y escriben directamente en Supabase (el administrador trabaja con conexión); los dispositivos de campo los
 // reciben por la sincronización. Las bajas son lógicas y volver a cargar el mismo código reactiva el registro.
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { FormatoExport } from '../offline/types';
 
 export type TipoMaestro = 'clientes' | 'productos' | 'droguerias' | 'reglas';
 
@@ -98,6 +99,31 @@ export const guardarProducto = (sb: SupabaseClient, p: FilaProducto) => rpcNumer
 
 /** Crea o actualiza una droguería por su código (incluye el separador del archivo de pedidos). */
 export const guardarDrogueria = (sb: SupabaseClient, d: FilaDrogueria) => rpcNumero(sb, 'importar_catalogo_droguerias', { p: [d] });
+
+/** Formato del archivo de pedido de una droguería (lo que descarga la mesa al procesar). */
+export async function leerFormatoDrogueria(sb: SupabaseClient, codigo: string): Promise<FormatoExport> {
+  const { data, error } = await sb.from('dim_droguerias').select('formato_export').eq('codigo', codigo).single();
+  if (error) throw new Error(error.message);
+  return (data as { formato_export: FormatoExport }).formato_export;
+}
+
+/** Problemas del formato antes de guardarlo (los mismos que rechaza la base). Vacío = válido. */
+export function problemasFormato(f: FormatoExport): string[] {
+  const p: string[] = [];
+  if (f.columnas.length === 0) p.push('Agrega al menos una columna.');
+  if (f.formato === 'txt' && f.delimitador === '' && f.columnas.some((c) => !c.ancho)) p.push('En un archivo de ancho fijo cada columna necesita su ancho.');
+  if (f.formato === 'csv' && f.delimitador === '') p.push('Elige el separador de columnas.');
+  if (f.encabezado && f.columnas.some((c) => !c.encabezado.trim())) p.push('Cada columna necesita su título (o quita la fila de títulos).');
+  if (!f.extension.trim()) p.push('Escribe la extensión del archivo (csv, txt…).');
+  return p;
+}
+
+export async function guardarFormatoDrogueria(sb: SupabaseClient, codigo: string, formato: FormatoExport): Promise<void> {
+  const problemas = problemasFormato(formato);
+  if (problemas.length) throw new Error(problemas.join(' '));
+  const { error } = await sb.from('dim_droguerias').update({ formato_export: formato }).eq('codigo', codigo);
+  if (error) throw new Error(error.message);
+}
 
 /** Texto normalizado para buscar sin tildes ni mayúsculas. */
 export const normalizarBusqueda = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
