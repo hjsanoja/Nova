@@ -35,7 +35,7 @@
 
 ## 3. Estructura de la Base de Datos (PostgreSQL / Supabase)
 
-El esquema vigente es **v3**: `src/sql/nova_produccion_v3.sql` (24 tablas, 4 vistas, RLS, RPC). No existe migración desde esquemas anteriores: el script se ejecuta sobre un proyecto vacío. El detalle completo del modelo, del flujo de
+El esquema vigente es **v3**: `src/sql/nova_produccion_v3.sql` (24 tablas, 4 vistas, RLS, RPC). No existe migración de datos desde esquemas anteriores: el script se ejecuta sobre un proyecto vacío. Si el proyecto tiene restos de otra versión, `src/sql/00_reiniciar_esquema_anterior.sql` los aparta en un esquema de respaldo antes de instalar. El detalle completo del modelo, del flujo de
 homologación y de la seguridad está en ese documento; aquí van las reglas que no deben romperse.
 
 ### 3.1. Dimensiones (los "quién / qué / dónde")
@@ -96,6 +96,7 @@ Cada droguería tiene **sus propios** códigos y nombres para cada producto y ca
     │   └── nubeV3.ts                  # Carga masiva, catálogos, usuarios y borrado contra el esquema v3
     ├── offline/                       # Dexie, Outbox, pull incremental, motor de sync, aislamiento por usuario
     ├── sql/
+    │   ├── 00_reiniciar_esquema_anterior.sql  # Solo si hay restos de otra versión: los aparta en un respaldo
     │   └── nova_produccion_v3.sql     # Esquema vigente: DDL, RLS, triggers, RPC
     ├── types/
     │   └── pharmacy.ts                # Interfaces TypeScript de dominio
