@@ -321,27 +321,50 @@ export interface ResumenImportacionVentas {
   clientes_enlazados: number;
   productos_enlazados: number;
   codigos_aprendidos: number;
+  /** Filas del archivo que quedaron sin farmacia / sin producto (pendientes de homologar). */
+  sin_farmacia: number;
+  sin_producto: number;
 }
 
-async function rpcPorLotes<T>(sb: SupabaseClient, funcion: string, filas: T[], tamano: number, onProgreso?: (hechas: number) => void): Promise<void> {
+/** Avance de una carga: filas enviadas de un total y la etapa en curso (para la barra de progreso). */
+export type Progreso = (hechas: number, total: number, etapa?: string) => void;
+
+/** Envía `filas` en trozos a una RPC que devuelve cuántas guardó; devuelve el total guardado. */
+async function rpcPorLotes<T>(sb: SupabaseClient, funcion: string, filas: T[], tamano: number, onProgreso?: Progreso): Promise<number> {
+  let guardadas = 0;
+  onProgreso?.(0, filas.length);
   for (let i = 0; i < filas.length; i += tamano) {
-    const { error } = await sb.rpc(funcion, { p: filas.slice(i, i + tamano) });
+    const { data, error } = await sb.rpc(funcion, { p: filas.slice(i, i + tamano) });
     if (error) throw new Error(`${funcion}: ${error.message}`);
-    onProgreso?.(Math.min(i + tamano, filas.length));
+    guardadas += typeof data === 'number' ? data : 0;
+    onProgreso?.(Math.min(i + tamano, filas.length), filas.length);
   }
+  return guardadas;
 }
 
-export const importarCatalogoClientes = (sb: SupabaseClient, clientes: Cliente[]) =>
-  rpcPorLotes(sb, 'importar_catalogo_clientes', clientes.filter((c) => c.ident01 || c.codigo_cliente).map(clienteAV3), LOTE_CATALOGO);
+export const importarCatalogoClientes = (sb: SupabaseClient, clientes: Cliente[], onProgreso?: Progreso) =>
+  rpcPorLotes(sb, 'importar_catalogo_clientes', clientes.filter((c) => c.ident01 || c.codigo_cliente).map(clienteAV3), LOTE_CATALOGO, onProgreso);
 
-export const importarCatalogoProductos = (sb: SupabaseClient, productos: Producto[]) =>
-  rpcPorLotes(sb, 'importar_catalogo_productos', productos.filter((p) => p.codigo || p.sku).map(productoAV3), LOTE_CATALOGO);
+export const importarCatalogoProductos = (sb: SupabaseClient, productos: Producto[], onProgreso?: Progreso) =>
+  rpcPorLotes(sb, 'importar_catalogo_productos', productos.filter((p) => p.codigo || p.sku).map(productoAV3), LOTE_CATALOGO, onProgreso);
 
-export async function guardarDroguerias(sb: SupabaseClient, droguerias: Drogueria[]): Promise<void> {
-  if (droguerias.length === 0) return;
+/** Crea o actualiza droguerías por código, con su formato de exportación (lo edita el administrador en pantalla). */
+export async function guardarDroguerias(sb: SupabaseClient, droguerias: Drogueria[]): Promise<number> {
+  if (droguerias.length === 0) return 0;
   const { error } = await sb.from('dim_droguerias').upsert(droguerias.map(drogueriaAV3), { onConflict: 'codigo' });
   if (error) throw new Error(`dim_droguerias: ${error.message}`);
+  return droguerias.length;
 }
+
+/**
+ * Droguerías desde archivo: una celda vacía no borra lo que ya había y el formato de exportación no se toca.
+ * Devuelve cuántas se crearon o actualizaron.
+ */
+export const importarCatalogoDroguerias = (sb: SupabaseClient, droguerias: Drogueria[], onProgreso?: Progreso) =>
+  rpcPorLotes(sb, 'importar_catalogo_droguerias', droguerias.map((d) => {
+    const { formato_export: _formato, ...resto } = drogueriaAV3(d);
+    return resto;
+  }), LOTE_CATALOGO, onProgreso);
 
 export interface ResultadoHomologacion {
   clientes: number;
@@ -389,21 +412,28 @@ export function checksumLote(archivo: string, filas: Array<{ fecha: string; unid
 /**
  * Envía el histórico de ventas de las droguerías: un lote por archivo de origen, en trozos de 1000 filas.
  * Se envían los códigos y nombres TAL COMO los escribió cada droguería; el servidor los enlaza con la farmacia y el producto
- * (y deja lo demás como pendiente de homologar).
+ * (y deja lo demás como pendiente de homologar). Cada trozo solo inserta y enlaza sus filas; el consolidado mensual se
+ * calcula una vez por archivo al final (finalizar_lote_ventas), así el tiempo crece en línea recta con el tamaño.
  */
 export async function importarVentas(
   sb: SupabaseClient,
   historico: HistoricoPedidoPrevio[],
-  onProgreso?: (enviadas: number, total: number) => void
+  onProgreso?: Progreso
 ): Promise<ResumenImportacionVentas> {
   const porArchivo = new Map<string, HistoricoPedidoPrevio[]>();
   for (const h of historico) {
     const archivo = h.archivo_origen || 'historico_acumulado.csv';
-    porArchivo.set(archivo, [...(porArchivo.get(archivo) ?? []), h]);
+    const lista = porArchivo.get(archivo);
+    if (lista) lista.push(h);
+    else porArchivo.set(archivo, [h]);
   }
-  const resumen: ResumenImportacionVentas = { insertadas: 0, recibidas: 0, droguerias_desconocidas: [], clientes_enlazados: 0, productos_enlazados: 0, codigos_aprendidos: 0 };
+  const resumen: ResumenImportacionVentas = {
+    insertadas: 0, recibidas: 0, droguerias_desconocidas: [], clientes_enlazados: 0, productos_enlazados: 0, codigos_aprendidos: 0,
+    sin_farmacia: 0, sin_producto: 0,
+  };
   const desconocidas = new Set<string>();
   let enviadas = 0;
+  onProgreso?.(0, historico.length, 'Subiendo filas');
   for (const [archivo, filasArchivo] of porArchivo) {
     const filas = filasArchivo.map((h, i) => ({
       n: i + 1,
@@ -416,12 +446,14 @@ export async function importarVentas(
       cod_sap: h.cod_sap || null,
       unidades: Number.isFinite(Number(h.cantidad_facturada)) ? Math.round(Number(h.cantidad_facturada)) : 0,
     }));
-    const lote = { archivo, checksum: checksumLote(archivo, filas) };
+    const lote = { archivo, checksum: checksumLote(archivo, filas), diferir: true };
+    let loteId: string | null = null;
     for (let i = 0; i < filas.length; i += LOTE_VENTAS) {
       const trozo = filas.slice(i, i + LOTE_VENTAS);
       const { data, error } = await sb.rpc('importar_ventas_drogueria', { p_lote: lote, p_filas: trozo });
       if (error) throw new Error(`importar_ventas_drogueria: ${error.message}`);
-      const r = data as { insertadas: number; recibidas: number; droguerias_desconocidas: string[]; homologacion: Record<string, number> };
+      const r = data as { lote_id: string; insertadas: number; recibidas: number; droguerias_desconocidas: string[]; homologacion: Record<string, number> };
+      loteId = r.lote_id;
       resumen.insertadas += r.insertadas;
       resumen.recibidas += r.recibidas;
       r.droguerias_desconocidas.forEach((d) => desconocidas.add(d));
@@ -429,17 +461,35 @@ export async function importarVentas(
       resumen.productos_enlazados += r.homologacion?.productos_enlazados ?? 0;
       resumen.codigos_aprendidos += r.homologacion?.codigos_aprendidos ?? 0;
       enviadas += trozo.length;
-      onProgreso?.(enviadas, historico.length);
+      onProgreso?.(enviadas, historico.length, 'Subiendo filas');
+    }
+    if (loteId) {
+      onProgreso?.(enviadas, historico.length, 'Calculando el consolidado mensual');
+      const { data, error } = await sb.rpc('finalizar_lote_ventas', { p_lote: loteId });
+      if (error) throw new Error(`finalizar_lote_ventas: ${error.message}`);
+      const f = data as { sin_farmacia: number; sin_producto: number };
+      resumen.sin_farmacia += f.sin_farmacia ?? 0;
+      resumen.sin_producto += f.sin_producto ?? 0;
     }
   }
   resumen.droguerias_desconocidas = [...desconocidas];
   return resumen;
 }
 
-export async function contarVentasNube(sb: SupabaseClient): Promise<number> {
-  const { count, error } = await sb.from('fact_ventas_drogueria').select('*', { count: 'exact', head: true });
-  if (error) throw new Error(error.message);
-  return count ?? 0;
+export interface ResumenVentasNube {
+  filas: number;
+  sin_farmacia: number;
+  sin_producto: number;
+  lotes: number;
+  desde: string | null;
+  hasta: string | null;
+}
+
+/** Cuántas ventas hay en la nube (una sola consulta en el servidor). */
+export async function resumenVentasNube(sb: SupabaseClient): Promise<ResumenVentasNube> {
+  const { data, error } = await sb.rpc('resumen_ventas_nube');
+  if (error) throw new Error(error.message || `error ${error.code ?? 'desconocido'} al consultar Supabase`);
+  return data as ResumenVentasNube;
 }
 
 async function paginar(consulta: (desde: number, hasta: number) => PromiseLike<{ data: Fila[] | null; error: { message: string } | null }>): Promise<Fila[]> {
@@ -476,6 +526,46 @@ export async function descargarCatalogosNube(sb: SupabaseClient): Promise<Catalo
     ),
   ]);
   return { clientes: clientes.map(clienteDesdeV3), productos: productos.map(productoDesdeV3), droguerias: droguerias.map(drogueriaDesdeV3) };
+}
+
+/** Texto CSV (separador ;) listo para abrir en Excel: comillas solo donde hace falta. */
+export function aCsv(encabezados: string[], filas: Array<Array<string | number | boolean | null | undefined>>): string {
+  const celda = (v: string | number | boolean | null | undefined) => {
+    const t = v == null ? '' : String(v);
+    return /[;"\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  return [encabezados, ...filas].map((f) => f.map(celda).join(';')).join('\r\n');
+}
+
+const uno = (v: unknown): Fila => ((Array.isArray(v) ? v[0] : v) ?? {}) as Fila;
+
+/**
+ * Tabla de homologación vigente en la nube, como CSV: tu código (Cod SAP / código interno) y el código que usa cada droguería.
+ * Una fila por par; un producto o farmacia puede tener varios códigos en la misma droguería (uno es el principal).
+ */
+export async function descargarHomologacionesCsv(sb: SupabaseClient, tipo: 'productos' | 'farmacias'): Promise<{ csv: string; filas: number }> {
+  if (tipo === 'productos') {
+    const filas = await paginar((a, b) =>
+      sb.from('map_producto_drogueria')
+        .select('codigo_drogueria,descripcion_drogueria,es_principal,dim_productos(sku,nombre_comercial),dim_droguerias(codigo,nombre)')
+        .is('deleted_at', null).order('producto_id').order('drogueria_id').range(a, b));
+    const datos = filas.map((f) => {
+      const p = uno(f.dim_productos);
+      const d = uno(f.dim_droguerias);
+      return [t(p.sku), t(p.nombre_comercial), t(d.nombre), t(f.codigo_drogueria), t(f.descripcion_drogueria), f.es_principal === false ? 'no' : 'si'];
+    }).sort((x, y) => `${x[0]}|${x[2]}`.localeCompare(`${y[0]}|${y[2]}`));
+    return { csv: aCsv(['Cod SAP', 'Producto', 'Drogueria', 'Codigo en la drogueria', 'Descripcion en la drogueria', 'Principal'], datos), filas: datos.length };
+  }
+  const filas = await paginar((a, b) =>
+    sb.from('map_cliente_drogueria')
+      .select('codigo_cuenta,nombre_en_drogueria,es_principal,dim_clientes(codigo_interno,nombre_comercial),dim_droguerias(codigo,nombre)')
+      .is('deleted_at', null).order('cliente_id').order('drogueria_id').range(a, b));
+  const datos = filas.map((f) => {
+    const c = uno(f.dim_clientes);
+    const d = uno(f.dim_droguerias);
+    return [t(c.codigo_interno), t(c.nombre_comercial), t(d.nombre), t(f.codigo_cuenta), t(f.nombre_en_drogueria), f.es_principal === false ? 'no' : 'si'];
+  }).sort((x, y) => `${x[0]}|${x[2]}`.localeCompare(`${y[0]}|${y[2]}`));
+  return { csv: aCsv(['Codigo interno', 'Farmacia', 'Drogueria', 'Cuenta en la drogueria', 'Nombre en la drogueria', 'Principal'], datos), filas: datos.length };
 }
 
 // ---------------------------------------------------------------------------- bajas desde las pantallas de edición

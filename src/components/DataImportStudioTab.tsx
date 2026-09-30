@@ -11,13 +11,19 @@ import {
 import { getSupabaseClient } from '../services/supabaseClient';
 import { getStoredSupabaseConfig } from '../services/supabaseConfig';
 import {
-  contarVentasNube,
   guardarDroguerias,
   importarCatalogoClientes,
+  importarCatalogoDroguerias,
   importarCatalogoProductos,
   importarHomologacion,
   importarVentas,
+  resumenVentasNube,
 } from '../services/nubeV3';
+import type { ResumenImportacionVentas } from '../services/nubeV3';
+import { fechaVenta, leerCsv, numero, prepararClientes, prepararDroguerias, prepararProductos } from '../services/cargaArchivos';
+import type { Descarte } from '../services/cargaArchivos';
+import { DialogoCarga } from './import/DialogoCarga';
+import type { EstadoCarga } from './import/DialogoCarga';
 import { prepararNombre, similitudPreparada, detectarMesDeNombreArchivo, crearLectorColumnas, norm } from '../services/importUtils';
 import type { NombrePreparado } from '../services/importUtils';
 import { leerLista } from '../services/storageMigrations';
@@ -55,6 +61,8 @@ import {
 import { useTheme } from '../context/ThemeContext';
 
 const AHORA_SEMILLA = '2026-01-01T00:00:00.000Z';
+/** Filas que se dibujan en las tablas de catálogos (dibujar miles de filas congelaba la pantalla). */
+const MAX_FILAS_TABLA = 100;
 
 const ALIAS_SEMILLA: ClienteDrogueriaAlias[] = [
   { id: 'alias-001', cliente_ident01: 'CLI-1001', drogueria: 'COBECA', cod_cliente_drogueria: 'COB-1001', nombre_cliente_drogueria: 'FARMATODO LAS MERCEDES CARACAS', verificado: true, created_at: AHORA_SEMILLA },
@@ -213,57 +221,90 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
     setTimeout(() => setNotificacion(null), 4000);
   };
 
-  // Verificar directamente en Supabase cuántas filas de ventas de droguerías hay guardadas (fact_ventas_drogueria)
+  // Ventana de carga (confirmar -> progreso -> resultado). La acción se guarda aquí hasta que el usuario confirma.
+  const [dialogo, setDialogo] = useState<EstadoCarga | null>(null);
+  const accionPendiente = useRef<(() => Promise<void>) | null>(null);
+  const confirmarCarga = () => {
+    const accion = accionPendiente.current;
+    accionPendiente.current = null;
+    if (accion) void accion();
+  };
+  const cerrarDialogo = () => {
+    if (dialogo?.fase === 'cargando') return; // no se interrumpe una subida a medias
+    accionPendiente.current = null;
+    setDialogo(null);
+  };
+  /** Muestra el avance de una subida con la barra de progreso. */
+  const progreso = (titulo: string) => (hechas: number, total: number, etapa = 'Subiendo a Supabase') =>
+    setDialogo({ fase: 'cargando', titulo, hechas, total, etapa });
+  const errorTexto = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+  const lineasVentas = (r: ResumenImportacionVentas): { lineas: string[]; ok: boolean } => {
+    const lineas = [
+      `Filas guardadas en Supabase: ${r.insertadas.toLocaleString()}.`,
+      ...(r.recibidas > r.insertadas ? [`Ya estaban cargadas (no se duplican): ${(r.recibidas - r.insertadas).toLocaleString()}.`] : []),
+      `Pendientes de homologar: ${r.sin_farmacia.toLocaleString()} filas sin farmacia y ${r.sin_producto.toLocaleString()} sin producto.`,
+    ];
+    if (r.droguerias_desconocidas.length > 0) {
+      lineas.push(`Rechazadas: las filas de ${r.droguerias_desconocidas.join(', ')} (esa droguería no existe en Supabase; cárgala primero en Droguerías).`);
+    }
+    return { lineas, ok: r.droguerias_desconocidas.length === 0 };
+  };
+
+  // Verificar en Supabase cuántas ventas hay guardadas (una sola consulta en el servidor).
   const handleVerificarSupabase = async () => {
     const supabase = getSupabaseClient();
     if (!supabase) {
-      showNotification('error', 'Supabase no está conectado en este navegador. Haz clic en "Supabase (configurar)" en la barra superior.');
+      showNotification('error', 'Supabase no está conectado en este navegador.');
       return;
     }
     setVerificandoSupabase(true);
     try {
-      const total = await contarVentasNube(supabase);
-      setFilasEnSupabase(total);
-      showNotification('exito', `Supabase confirmado: ${total.toLocaleString()} filas de ventas registradas en fact_ventas_drogueria.`);
+      const r = await resumenVentasNube(supabase);
+      setFilasEnSupabase(r.filas);
+      showNotification('exito', `En Supabase hay ${r.filas.toLocaleString()} filas de ventas (${r.lotes} archivos${r.desde ? `, del ${r.desde} al ${r.hasta}` : ''}). Sin farmacia: ${r.sin_farmacia.toLocaleString()}; sin producto: ${r.sin_producto.toLocaleString()}.`);
     } catch (err: unknown) {
-      showNotification('error', `Error al consultar Supabase: ${err instanceof Error ? err.message : String(err)}`);
+      showNotification('error', `No se pudo consultar Supabase: ${errorTexto(err)}. Si acabas de actualizar NOVA, ejecuta de nuevo nova_produccion_v3.sql en el SQL Editor.`);
     } finally {
       setVerificandoSupabase(false);
     }
   };
 
-  // Sube todo el histórico en memoria: un lote por archivo, en trozos de 1000 filas. Es idempotente (reenviar no duplica)
-  // y el servidor enlaza cada fila con la farmacia y el producto usando los códigos propios de cada droguería.
-  const handleSincronizarTodoASupabase = async () => {
+  // Sube todo el histórico guardado en este navegador. Es idempotente (reenviar no duplica) y el servidor enlaza cada
+  // fila con la farmacia y el producto usando los códigos propios de cada droguería.
+  const handleSincronizarTodoASupabase = () => {
     const supabase = getSupabaseClient();
     if (!supabase) {
-      showNotification('error', 'Supabase no está conectado. Configura tu URL y Anon Key primero.');
+      showNotification('error', 'Supabase no está conectado. Configura tu URL y clave primero.');
       return;
     }
     if (historicoPrevio.length === 0) {
-      showNotification('error', 'No hay registros en memoria para sincronizar.');
+      showNotification('error', 'No hay ventas guardadas en este navegador para subir.');
       return;
     }
-    setSincronizandoSupabase(true);
-    setProgresoSync({ insertadas: 0, total: historicoPrevio.length });
-    try {
-      // El servidor reconoce la droguería de cada fila por su código o nombre: deben existir en la nube.
-      await guardarDroguerias(supabase, droguerias);
-      const r = await importarVentas(supabase, historicoPrevio, (ins, tot) => setProgresoSync({ insertadas: ins, total: tot }));
-      const avisos: string[] = [];
-      if (r.droguerias_desconocidas.length > 0) avisos.push(`droguerías no reconocidas (${r.droguerias_desconocidas.join(', ')})`);
-      showNotification(
-        avisos.length ? 'error' : 'exito',
-        `Histórico subido: ${r.insertadas.toLocaleString()} filas nuevas${r.insertadas < r.recibidas ? ` (${(r.recibidas - r.insertadas).toLocaleString()} ya estaban)` : ''}.` +
-          (avisos.length ? ` Revisar: ${avisos.join('; ')}.` : '')
-      );
-      await handleVerificarSupabase();
-    } catch (err: unknown) {
-      showNotification('error', `Fallo al sincronizar: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setSincronizandoSupabase(false);
-      setProgresoSync(null);
-    }
+    const titulo = 'Subir histórico a Supabase';
+    accionPendiente.current = async () => {
+      setSincronizandoSupabase(true);
+      const avance = progreso(titulo);
+      try {
+        avance(0, historicoPrevio.length, 'Guardando las droguerías');
+        // El servidor reconoce la droguería de cada fila por su código o nombre: deben existir en la nube.
+        await guardarDroguerias(supabase, droguerias);
+        const r = await importarVentas(supabase, historicoPrevio, avance);
+        setDialogo({ fase: 'resultado', titulo, ...lineasVentas(r) });
+        await handleVerificarSupabase();
+      } catch (err: unknown) {
+        setDialogo({ fase: 'resultado', titulo, ok: false, lineas: ['No se pudo subir el histórico. Lo ya enviado queda guardado; puedes reintentar sin duplicar.'], detalle: [errorTexto(err)] });
+      } finally {
+        setSincronizandoSupabase(false);
+        setProgresoSync(null);
+      }
+    };
+    setDialogo({
+      fase: 'confirmar', titulo, archivo: 'Ventas guardadas en este navegador', unidad: 'filas',
+      leidas: historicoPrevio.length, aCargar: historicoPrevio.length, descartes: [], repetidas: 0,
+      avisos: ['Las filas que ya estén en Supabase no se duplican.'],
+    });
   };
 
   // Descarga de plantillas CSV oficiales (100% sin acentos para evitar errores de codificación)
@@ -272,24 +313,25 @@ export const DataImportStudioTab: React.FC<DataImportStudioTabProps> = ({
     let nombreArchivoDescarga = '';
 
     if (tipo === 'droguerias') {
-      contenido = `ID_NUMERO;NOMBRE_DROGUERIA;CODIGO_DROGUERIA;PAGINA_WEB;DELIMITADOR_CSV;EMAIL_PEDIDOS;TELEFONO
-1;BLV;DROG-BLV;https://www.drogueriablv.com;;pedidos@blv.com.ve;0212-2345678
-2;COBECA;DROG-COBECA;https://www.grupocobeca.com;;teletransferencias@cobeca.com;0261-7501000
-3;DROBIENCA;DROG-DROBIENCA;https://www.drobienca.com;;pedidos@drobienca.com;0243-2471122
-4;DROGUERIA 365;DROG-365;https://www.drogueria365.com;,;ventas@drogueria365.com;0212-9876543
-5;DROMARKO;DROG-DROMARKO;https://www.dromarko.com;;operaciones@dromarko.com;0241-8712345
-6;NENA;DROG-NENA;https://www.droguerianena.com;,;transfers@droguerianena.com;0212-9051111
-7;DROPHARMA;DROG-DROPHARMA;https://www.dropharma.com;;pedidos@dropharma.com;0251-4456789
-8;DROVENCENTRO;DROG-DROVENCENTRO;https://www.drovencentro.com;|;transferencias@drovencentro.com;0243-5567890
-9;FARMACEUTICA 24;DROG-FARMA24;https://www.farmaceutica24.com;;ordenes@farmaceutica24.com;0212-7654321
-10;INSUAMINCA;DROG-INSUAMINCA;https://www.insuaminca.com;;ventas@insuaminca.com;0281-2876543
-11;ITS;DROG-ITS;https://www.itsfarma.com;;pedidos@itsfarma.com;0212-3456789
-12;MEGA;DROG-MEGA;https://www.drogueriamega.com;;despachos@drogueriamega.com;0261-7890123
-13;PHARMA MEDIC;DROG-PHARMAMEDIC;https://www.pharmamedic.com;;contacto@pharmamedic.com;0241-8654321
-14;SAN GREGORIO;DROG-SANGREGORIO;https://www.sangregorio.com;;pedidos@sangregorio.com;0276-3456789
-15;SANTO REMEDIO;DROG-SANTOREMEDIO;https://www.santoremedio.com;;ventas@santoremedio.com;0251-7890123
-16;VITAL;DROG-VITAL;https://www.drogueriavital.com;;ordenes@drogueriavital.com;0212-9871234
-17;ZAKIPHARMA;DROG-ZAKIPHARMA;https://www.zakipharma.com;;pedidos@zakipharma.com;0261-7123456`;
+      // Nombres de las droguerías habituales; el correo, el RIF y el teléfono se completan con los datos reales.
+      contenido = `NOMBRE_DROGUERIA;CODIGO_DROGUERIA;RIF;EMAIL_PEDIDOS;TELEFONO;DELIMITADOR_CSV
+BLV;BLV;;;;
+COBECA;COBECA;;;;
+DROBIENCA;DROBIENCA;;;;
+DROGUERIA 365;DROGUERIA365;;;;
+DROMARKO;DROMARKO;;;;
+NENA;NENA;;;;
+DROPHARMA;DROPHARMA;;;;
+DROVENCENTRO;DROVENCENTRO;;;;
+FARMACEUTICA 24;FARMACEUTICA24;;;;
+INSUAMINCA;INSUAMINCA;;;;
+ITS;ITS;;;;
+MEGA;MEGA;;;;
+PHARMA MEDIC;PHARMAMEDIC;;;;
+SAN GREGORIO;SANGREGORIO;;;;
+SANTO REMEDIO;SANTOREMEDIO;;;;
+VITAL;VITAL;;;;
+ZAKIPHARMA;ZAKIPHARMA;;;;`;
       nombreArchivoDescarga = 'plantilla_dim_droguerias_ventas_al_dia.csv';
     } else if (tipo === 'clientes') {
       // 11 Campos exactos solicitados por el usuario, con ident01 como Primary Key unico
@@ -339,8 +381,9 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     const link = document.createElement('a');
     link.href = url;
     link.download = nombreArchivoDescarga;
+    document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
+    link.remove();
     URL.revokeObjectURL(url);
     showNotification('exito', `Plantilla ${nombreArchivoDescarga} descargada con exito.`);
   };
@@ -362,28 +405,9 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     reader.readAsText(file);
   };
 
-  // Parser interactivo
-  const filasParseadas = useMemo(() => {
-    if (!archivoTexto.trim()) return [];
-    const lineas = archivoTexto.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lineas.length <= 1) return [];
-
-    const delimitador = lineas[0].includes(';') ? ';' : lineas[0].includes('\t') ? '\t' : ',';
-    const encabezados = lineas[0].split(delimitador).map((h) => h.replace(/["']/g, '').trim());
-
-    const filas: any[] = [];
-    for (let i = 1; i < lineas.length; i++) {
-      const c = lineas[i].split(delimitador).map((val) => val.replace(/["']/g, '').trim());
-      if (c.length < 2) continue;
-
-      const filaObj: Record<string, string> = {};
-      encabezados.forEach((h, idx) => {
-        filaObj[h] = c[idx] || '';
-      });
-      filas.push(filaObj);
-    }
-    return filas;
-  }, [archivoTexto]);
+  // Lector del archivo: respeta comillas, detecta el separador y recuerda la línea de cada fila (para los avisos).
+  const archivoLeido = useMemo(() => leerCsv(archivoTexto), [archivoTexto]);
+  const filasParseadas = archivoLeido.filas;
 
   const cacheSimilitud = useRef<{
     clientes: Cliente[];
@@ -519,186 +543,88 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     };
   }, [filasParseadas, subTab, mapeosProductosDrogueria, aliasesFarmacias, productos, clientes, getCol]);
 
+  const limpiarArchivo = () => {
+    setArchivoTexto('');
+    setNombreArchivo('');
+  };
+
+  /** Pide confirmación mostrando lo leído y lo descartado; al confirmar ejecuta `tarea` con barra de progreso. */
+  const pedirConfirmacion = <T,>(
+    datos: { titulo: string; unidad: string; prep: { registros: T[]; descartes: Descarte[]; repetidas: number }; avisos?: string[] },
+    tarea: (avance: (hechas: number, total: number, etapa?: string) => void) => Promise<{ ok: boolean; lineas: string[]; detalle?: string[] }>
+  ) => {
+    accionPendiente.current = async () => {
+      const avance = progreso(datos.titulo);
+      avance(0, datos.prep.registros.length, 'Preparando');
+      try {
+        const r = await tarea(avance);
+        setDialogo({ fase: 'resultado', titulo: datos.titulo, ...r });
+        if (r.ok) limpiarArchivo();
+      } catch (err: unknown) {
+        setDialogo({ fase: 'resultado', titulo: datos.titulo, ok: false, lineas: ['Hubo un error y la carga no terminó.'], detalle: [errorTexto(err)] });
+      }
+    };
+    setDialogo({
+      fase: 'confirmar', titulo: datos.titulo, archivo: nombreArchivo || 'archivo', unidad: datos.unidad,
+      leidas: filasParseadas.length, aCargar: datos.prep.registros.length, descartes: datos.prep.descartes,
+      repetidas: datos.prep.repetidas, avisos: datos.avisos,
+    });
+  };
+
+  /** Líneas del resultado de un catálogo: lo guardado, lo descartado y, si falló a mitad, cuánto alcanzó a subir. */
+  const resultadoCatalogo = async (
+    unidad: string, total: number, descartadas: number, subir: ((avance: (h: number, t: number) => void) => Promise<number>) | null,
+    avance: (h: number, t: number, e?: string) => void, guardarLocal: () => void
+  ) => {
+    if (!subir) {
+      guardarLocal();
+      return { ok: true, lineas: [`Guardadas en este navegador: ${total.toLocaleString()} ${unidad} (sin conexión a Supabase).`] };
+    }
+    let enviadas = 0;
+    try {
+      const guardadas = await subir((h, t) => { enviadas = h; avance(h, t, 'Subiendo a Supabase'); });
+      guardarLocal();
+      return {
+        ok: true,
+        lineas: [
+          `Guardadas en Supabase: ${guardadas.toLocaleString()} ${unidad} (nuevas o actualizadas).`,
+          ...(descartadas ? [`Descartadas por datos incompletos: ${descartadas.toLocaleString()}.`] : []),
+        ],
+      };
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        lineas: [`Se alcanzaron a subir ${enviadas.toLocaleString()} de ${total.toLocaleString()} ${unidad} antes del error.`, 'Puedes volver a cargar el mismo archivo: lo ya guardado no se duplica.'],
+        detalle: [errorTexto(err)],
+      };
+    }
+  };
+
   const handleProcesarCarga = async () => {
     if (filasParseadas.length === 0) {
-      showNotification('error', 'No hay registros validos para procesar.');
+      showNotification('error', 'El archivo no tiene filas para cargar.');
       return;
     }
 
     const supabase = getSupabaseClient();
 
     if (subTab === 'clientes') {
-      const nuevosClientes: Cliente[] = filasParseadas.map((f, i) => {
-        const ident01 = getCol(f, ['ident01', 'IDENT01', 'Ident01', 'ident_01', 'codigo_cliente', 'CODIGO_CLIENTE', 'CODIGO', 'Codigo', 'ID']) || `CLI-${Date.now().toString().slice(-4)}${i + 1}`;
-        const razonSocial = getCol(f, ['razon social', 'razón social', 'RAZON SOCIAL', 'RAZON_SOCIAL', 'Razon Social', 'Razon social', 'NOMBRE']) || 'Farmacia C.A.';
-        const nombreFantasia = getCol(f, ['nombre de fantasia', 'nombre de fantasía', 'NOMBRE DE FANTASIA', 'NOMBRE_FANTASIA', 'Nombre Fantasia', 'nombre comercial', 'NOMBRE_COMERCIAL', 'Farmacia']) || razonSocial;
-        const brick = getCol(f, ['brick', 'BRICK', 'Brick', 'ZONA', 'Zona', 'SECTOR']) || 'CCS-CENTRO-01';
-        const munCiudad = getCol(f, ['municipio/ ciudad/ alcaldia', 'municipio/ciudad/alcaldia', 'municipio / ciudad / alcaldia', 'municipio', 'ciudad', 'MUNICIPIO', 'CIUDAD', 'Municipio', 'Ciudad']) || 'Caracas';
-        const estado = getCol(f, ['estado', 'ESTADO', 'Estado']) || 'Miranda';
-        const rif = getCol(f, ['rif', 'RIF', 'Rif']) || 'J-00000000-0';
-        const frecuencia = getCol(f, ['frecuencia', 'FRECUENCIA', 'Frecuencia']) || 'Semanal';
-        const bandera = getCol(f, ['bandera', 'BANDERA', 'Bandera', 'CADENA', 'Cadena']) || 'Independiente';
-        const lat = parseFloat(getCol(f, ['local_gps_lat', 'LOCAL_GPS_LAT', 'lat', 'LAT', 'latitud'])?.replace(',', '.')) || 10.4800;
-        const lon = parseFloat(getCol(f, ['local_gps_lon', 'LOCAL_GPS_LON', 'lon', 'LON', 'longitud'])?.replace(',', '.')) || -66.8600;
-
-        return {
-          id: ident01,
-          ident01,
-          codigo_cliente: ident01,
-          rif,
-          razon_social: razonSocial,
-          nombre_fantasia: nombreFantasia,
-          nombre_comercial: nombreFantasia,
-          brick,
-          municipio_ciudad: munCiudad,
-          ciudad: munCiudad,
-          direccion: `${munCiudad}, ${estado}`,
-          estado,
-          frecuencia,
-          bandera,
-          local_gps_lat: lat,
-          local_gps_lon: lon,
-          clasificacion_abc: 'B',
-          cupo_credito: 5000,
-          dias_credito: 15,
-          telefono: '',
-          email_contacto: '',
-          activo: true,
-          created_at: new Date().toISOString(),
-        };
-      });
-
-      let avisoNube = '';
-      if (supabase) {
-        try {
-          await importarCatalogoClientes(supabase, nuevosClientes);
-        } catch (err: unknown) {
-          avisoNube = ` Guardadas en este navegador, pero no se pudieron subir a Supabase: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      }
-
-      onImportarClientes(nuevosClientes);
-      showNotification(avisoNube ? 'error' : 'exito', `Se han cargado e incorporado ${nuevosClientes.length} farmacias (código interno = ident01).${avisoNube}`);
+      const prep = prepararClientes(archivoLeido);
+      pedirConfirmacion({ titulo: 'Cargar farmacias', unidad: 'farmacias', prep }, (avance) =>
+        resultadoCatalogo('farmacias', prep.registros.length, prep.descartes.length,
+          supabase ? (a) => importarCatalogoClientes(supabase, prep.registros, a) : null, avance, () => onImportarClientes(prep.registros)));
     } else if (subTab === 'productos') {
-      // 12 Campos exactos (tolerante con o sin acentos al leer del CSV, pero persistiendo sin tildes)
-      const nuevosProductos: Producto[] = filasParseadas.map((f, i) => {
-        const codigo = getCol(f, ['Codigo', 'CODIGO', 'Product Code', 'PRODUCT_CODE', 'SKU']) || `SKU-${i+1}`;
-        const descripcion = getCol(f, ['Descripcion', 'DESCRIPCION', 'Descripción', 'Product', 'PRODUCT', 'NOMBRE_COMERCIAL']) || `Medicamento ${i+1}`;
-        const unidadNegocio = getCol(f, ['Unidad de Negocio', 'UNIDAD_DE_NEGOCIO', 'UNIDAD DE NEGOCIO', 'LABORATORIO']) || 'La Sante';
-        const claseTerapeutica = getCol(f, ['Clase Terapeutica', 'CLASE_TERAPEUTICA', 'CLASE TERAPEUTICA', 'Clase Terapéutica']) || '';
-        const sistemas = getCol(f, ['Sistemas', 'SISTEMAS']) || '';
-        const clasifPortafolio = getCol(f, ['Clasificacion Portafolio', 'CLASIFICACION_PORTAFOLIO', 'Clasificación Portafolio']) || '';
-        const productCode = getCol(f, ['Product Code', 'PRODUCT_CODE', 'PRODUCT CODE']) || '';
-        const product = getCol(f, ['Product', 'PRODUCT']) || descripcion;
-        const packCode = getCol(f, ['Pack Code', 'PACK_CODE', 'PACK CODE', 'CODIGO_EAN13']) || `759${Math.floor(1000000000 + Math.random() * 9000000000)}`;
-        const pack = getCol(f, ['Pack', 'PACK', 'PRESENTACION']) || 'Caja x 30';
-        const molecula = getCol(f, ['Concatenate Molecule (Spanish)', 'CONCATENATE MOLECULE (SPANISH)', 'Molecula', 'Molécula', 'PRINCIPIO_ACTIVO']) || 'Principio Activo';
-        const estadoRaw = getCol(f, ['Estado', 'ESTADO']) || 'Activo';
-
-        const esActivo = !estadoRaw || 
-          estadoRaw.toLowerCase().includes('activo') || 
-          estadoRaw.toLowerCase() === 'a' || 
-          estadoRaw === '1' || 
-          estadoRaw.toLowerCase() === 'true';
-
-        const esPrioritario = 
-          clasifPortafolio.toLowerCase().includes('estrat') ||
-          clasifPortafolio.toLowerCase().includes('lanz') ||
-          clasifPortafolio.toLowerCase().includes('prio') ||
-          clasifPortafolio.toLowerCase().includes('clave');
-
-        const equipoAsignado: 'La Sante' | 'Comercial' | 'OTC' = 
-          unidadNegocio.toLowerCase().includes('comercial') ? 'Comercial' :
-          unidadNegocio.toLowerCase().includes('otc') ? 'OTC' : 'La Sante';
-
-        return {
-          id: `prod-imp-${Date.now()}-${i}`,
-          sku: codigo,
-          codigo_barras_ean13: packCode,
-          principio_activo: molecula,
-          nombre_comercial: product || descripcion,
-          presentacion: pack,
-          laboratorio: unidadNegocio,
-          precio_lista: parseFloat(getCol(f, ['PRECIO_LISTA', 'Precio Lista'])?.replace(',', '.')) || 0,
-          descuento_maximo_porc: parseFloat(getCol(f, ['DSCTO_MAX_PORC', 'Descuento'])?.replace(',', '.')) || 15.0,
-          es_prioritario: esPrioritario,
-          factor_prioridad: esPrioritario ? 1.30 : 1.00,
-          empaque_minimo: parseInt(getCol(f, ['EMPAQUE_MINIMO', 'EMPAQUE'])) || 10,
-          stock_disponible: parseInt(getCol(f, ['STOCK_DISPONIBLE', 'STOCK'])) || 500,
-          equipo_asignado: equipoAsignado,
-          activo: esActivo,
-          created_at: new Date().toISOString(),
-
-          // 12 Campos de la dimension
-          codigo,
-          descripcion,
-          unidad_negocio: unidadNegocio,
-          clase_terapeutica: claseTerapeutica,
-          sistemas,
-          clasificacion_portafolio: clasifPortafolio,
-          product_code: productCode,
-          product,
-          pack_code: packCode,
-          pack,
-          molecula,
-          estado_texto: estadoRaw,
-        };
-      });
-
-      let avisoNube = '';
-      if (supabase) {
-        try {
-          await importarCatalogoProductos(supabase, nuevosProductos);
-        } catch (err: unknown) {
-          avisoNube = ` Guardados en este navegador, pero no se pudieron subir a Supabase: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      }
-
-      onImportarProductos(nuevosProductos);
-      showNotification(avisoNube ? 'error' : 'exito', `Se han cargado e incorporado ${nuevosProductos.length} medicamentos a dim_productos.${avisoNube}`);
+      const prep = prepararProductos(archivoLeido);
+      pedirConfirmacion({ titulo: 'Cargar productos', unidad: 'productos', prep }, (avance) =>
+        resultadoCatalogo('productos', prep.registros.length, prep.descartes.length,
+          supabase ? (a) => importarCatalogoProductos(supabase, prep.registros, a) : null, avance, () => onImportarProductos(prep.registros)));
     } else if (subTab === 'droguerias') {
-      const nuevasDroguerias: Drogueria[] = filasParseadas.map((f, i) => {
-        const nombre = getCol(f, ['NOMBRE_DROGUERIA', 'NOMBRE', 'DROGUERIA', 'Nombre']) || `Drogueria ${i+1}`;
-        const codigo = getCol(f, ['CODIGO_DROGUERIA', 'CODIGO', 'Codigo']) || `DROG-${nombre.replace(/\s+/g, '').toUpperCase()}`;
-        const paginaWeb = getCol(f, ['PAGINA_WEB', 'Pagina Web', 'PORTAL', 'URL']) || `https://www.${nombre.toLowerCase().replace(/\s+/g, '')}.com`;
-        const delim = (getCol(f, ['DELIMITADOR_CSV', 'DELIMITADOR', 'Delimitador']) || ';') as ';' | ',' | '|' | '\t';
-        const idNum = parseInt(getCol(f, ['ID_NUMERO', 'ID', 'Id'])) || (droguerias.length + i + 1);
-
-        return {
-          id: `drog-${codigo.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-          id_numero: idNum,
-          codigo_drogueria: codigo,
-          rif: getCol(f, ['RIF', 'Rif']) || 'J-00000000-0',
-          nombre_drogueria: nombre,
-          email_pedidos: getCol(f, ['EMAIL_PEDIDOS', 'EMAIL', 'Email']) || `pedidos@${nombre.toLowerCase().replace(/\s+/g, '')}.com`,
-          pagina_web: paginaWeb,
-          telefono: getCol(f, ['TELEFONO', 'Telefono']) || '',
-          tiempo_entrega_promedio_dias: parseInt(getCol(f, ['DIAS_ENTREGA', 'TIEMPO_ENTREGA'])) || 2,
-          activo: true,
-          created_at: new Date().toISOString(),
-          formato_csv_config: {
-            delimitador: delim,
-            incluir_encabezados: true,
-            entrecomillado: delim === ',' ? 'siempre' : 'solo_texto',
-            codificacion: 'UTF-8',
-            salto_linea: '\r\n',
-            formato_decimal: delim === ';' ? 'coma' : 'punto',
-            columnas: [
-              { campo_origen: 'codigo_cliente', nombre_encabezado: 'COD_CLIENTE', orden: 1, formato: 'texto' },
-              { campo_origen: 'rif_cliente', nombre_encabezado: 'RIF_FARMACIA', orden: 2, formato: 'texto' },
-              { campo_origen: 'sku', nombre_encabezado: 'SKU_PRODUCTO', orden: 3, formato: 'texto' },
-              { campo_origen: 'cantidad_confirmada', nombre_encabezado: 'CANTIDAD', orden: 4, formato: 'entero' },
-              { campo_origen: 'descuento_porcentaje', nombre_encabezado: 'DESCUENTO', orden: 5, formato: delim === ';' ? 'decimal_coma' : 'decimal_punto' },
-              { campo_origen: 'numero_pedido', nombre_encabezado: 'NUMERO_ORDEN', orden: 6, formato: 'texto' },
-            ]
-          }
-        };
-      });
-
-      if (onImportarDroguerias) {
-        onImportarDroguerias(nuevasDroguerias);
-      }
-      showNotification('exito', `Se han cargado e incorporado ${nuevasDroguerias.length} droguerias a dim_droguerias.`);
+      const prep = prepararDroguerias(archivoLeido);
+      // Antes solo se guardaban en este navegador: ahora se suben (sin pisar el formato de exportación ya configurado).
+      pedirConfirmacion({ titulo: 'Cargar droguerías', unidad: 'droguerías', prep }, (avance) =>
+        resultadoCatalogo('droguerías', prep.registros.length, prep.descartes.length,
+          supabase ? (a) => importarCatalogoDroguerias(supabase, prep.registros, a) : null, avance,
+          () => onImportarDroguerias?.(prep.registros)));
     } else if (subTab === 'historico') {
       const mesPeriodo = infoMesDetectado?.periodo || new Date().toISOString().slice(0, 7);
       const nuevosMapeosAprendidos: ProductoDrogueriaMapeo[] = [];
@@ -844,69 +770,31 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
         return encontrada;
       };
 
-      const nuevoHistorico: HistoricoPedidoPrevio[] = filasParseadas.map((f, i) => {
+      const nuevoHistorico: HistoricoPedidoPrevio[] = [];
+      const descartesVentas: Descarte[] = [];
+      const drogueriasNoEncontradas = new Set<string>();
+      filasParseadas.forEach((f, i) => {
+        const linea = archivoLeido.lineas[i] ?? i + 2;
+        const descartar = (motivo: string) => { descartesVentas.push({ linea, motivo }); };
         // 1. Columnas oficiales del usuario:
         // Fecha | Cod Cliente | Nombre_cliente | Drogueria | Codigo Producto | Nombre Producto | Unidades | Cod Sap
         const fechaRaw = getCol(f, ['Fecha', 'FECHA', 'fecha', 'FECHA_PEDIDO', 'ANIO_MES', 'AÑO_MES', 'MES', 'PERIODO', 'DIA', 'Dia']).trim();
         const codClienteDrog = getCol(f, ['Cod Cliente', 'Cod_Cliente', 'COD_CLIENTE', 'COD CLIENTE', 'cod cliente', 'CodCliente', 'CODIGO_CLIENTE', 'ident01', 'IDENT01']).trim();
         const nombreCliRaw = getCol(f, ['Nombre_cliente', 'Nombre_Cliente', 'NOMBRE_CLIENTE', 'Nombre Cliente', 'nombre_cliente', 'CLIENTE', 'Farmacia', 'FARMACIA']).trim();
-        const drogRaw = getCol(f, ['Drogueria', 'DROGUERIA', 'drogueria', 'Droguería', 'NOMBRE_DROGUERIA', 'Drog']).trim() || 'COBECA';
+        const drogRaw = getCol(f, ['Drogueria', 'DROGUERIA', 'drogueria', 'Droguería', 'NOMBRE_DROGUERIA', 'Drog']).trim();
         const codigoProdDrog = getCol(f, ['Codigo Producto', 'Codigo_Producto', 'CODIGO_PRODUCTO', 'COD PRODUCTO', 'codigo producto', 'CodigoProducto', 'COD_ARTICULO']).trim();
         const nombreProdRaw = getCol(f, ['Nombre Producto', 'Nombre_Producto', 'NOMBRE_PRODUCTO', 'Nombre Producto', 'nombre producto', 'PRODUCTO', 'Descripcion', 'DESCRIPCION']).trim();
         const unidadesRaw = getCol(f, ['Unidades', 'UNIDADES', 'unidades', 'Cantidad', 'CANTIDAD', 'CANTIDAD_TOTAL', 'TOTAL_UNIDADES']).trim();
         const codSap = getCol(f, ['Cod Sap', 'Cod_Sap', 'COD_SAP', 'COD SAP', 'CodSap', 'CODSAP', 'SKU', 'Codigo', 'CODIGO']).trim();
 
-        // 2. Normalización de Fecha Diaria (admite DD/MM/AAAA exacto, DD-MM-AAAA, YYYY-MM-DD, con/sin hora)
-        let fecha = '';
-        const fechaSinHora = (fechaRaw || '').trim().split(/\s+/)[0]; // Quitar timestamp tipo '00:00:00'
-        const fechaLimpia = fechaSinHora.replace(/\./g, '/');
-
-        if (fechaLimpia) {
-          if (fechaLimpia.includes('/')) {
-            const partes = fechaLimpia.split('/');
-            if (partes.length === 3) {
-              if (partes[0].length === 4) {
-                // Formato YYYY/MM/DD
-                fecha = `${partes[0]}-${partes[1].padStart(2, '0')}-${partes[2].padStart(2, '0')}`;
-              } else {
-                // Formato oficial del usuario: DD/MM/AAAA o DD/MM/AA
-                const dia = partes[0].padStart(2, '0');
-                const mes = partes[1].padStart(2, '0');
-                const anioCompleto = partes[2].length === 2 ? `20${partes[2]}` : partes[2];
-                fecha = `${anioCompleto}-${mes}-${dia}`;
-              }
-            } else if (partes.length === 2) {
-              // DD/MM -> adjuntar año actual o intuido del archivo
-              const anio = infoMesDetectado?.anio || '2026';
-              fecha = `${anio}-${partes[1].padStart(2, '0')}-${partes[0].padStart(2, '0')}`;
-            }
-          } else if (fechaLimpia.includes('-')) {
-            const partes = fechaLimpia.split('-');
-            if (partes.length === 3) {
-              if (partes[0].length === 4) {
-                // YYYY-MM-DD
-                fecha = `${partes[0]}-${partes[1].padStart(2, '0')}-${partes[2].padStart(2, '0')}`;
-              } else {
-                // DD-MM-YYYY
-                const dia = partes[0].padStart(2, '0');
-                const mes = partes[1].padStart(2, '0');
-                const anioCompleto = partes[2].length === 2 ? `20${partes[2]}` : partes[2];
-                fecha = `${anioCompleto}-${mes}-${dia}`;
-              }
-            } else if (partes.length === 2 && partes[0].length === 4) {
-              fecha = `${fechaLimpia}-15`; // YYYY-MM
-            }
-          } else if (/^\d{1,2}$/.test(fechaLimpia)) {
-            // Si el archivo solo trae el número del día (1..31) y el mes viene en el nombre del archivo
-            const diaNum = fechaLimpia.padStart(2, '0');
-            fecha = `${mesPeriodo}-${diaNum}`;
-          } else {
-            fecha = fechaLimpia;
-          }
-        }
-        if (!fecha || fecha.length < 8) {
-          fecha = `${mesPeriodo}-15`;
-        }
+        // 2. Validación: sin droguería, producto, fecha o unidades la fila no se carga (antes se inventaban COBECA, el día 15
+        //    o 10 unidades).
+        if (!drogRaw) return descartar('Falta la droguería');
+        if (!codigoProdDrog && !codSap) return descartar('Falta el código del producto');
+        const fecha = fechaRaw ? fechaVenta(fechaRaw, mesPeriodo) : infoMesDetectado ? `${mesPeriodo}-15` : null;
+        if (!fecha) return descartar(fechaRaw ? `Fecha no válida: "${fechaRaw}"` : 'Falta la fecha (y el nombre del archivo no indica el mes)');
+        const unidadesNum = numero(unidadesRaw);
+        if (unidadesNum === null) return descartar(unidadesRaw ? `Unidades no numéricas: "${unidadesRaw}"` : 'Faltan las unidades');
 
         // Deducir el período exacto YYYY-MM a partir de la fecha real de la fila (ej: '2026-06')
         const mesPeriodoFila = (fecha.includes('-') && fecha.length >= 7) ? fecha.slice(0, 7) : mesPeriodo;
@@ -914,8 +802,8 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
         // 3. Resolución de Cod SAP y producto (memoizada por combinación distinta)
         const { codSapResuelto, prodMatch } = resolverProducto(drogRaw, codigoProdDrog, nombreProdRaw, codSap);
 
-        const prodId = prodMatch ? prodMatch.id : (codSapResuelto || codigoProdDrog || productos[0]?.id || `prod-${i}`);
-        const prodNombre = prodMatch?.nombre_comercial || prodMatch?.product || nombreProdRaw || 'Medicamento General';
+        const prodId = prodMatch ? prodMatch.id : (codSapResuelto || codigoProdDrog);
+        const prodNombre = prodMatch?.nombre_comercial || prodMatch?.product || nombreProdRaw;
 
         // 4. Deducción de Equipo Comercial:
         let equipo: EquipoVentas = 'La Sante';
@@ -934,32 +822,31 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
         // 5. Match y homologación de cliente / farmacia (multi-nombre entre droguerías)
         const { cliMatch, ident01Homologado } = resolverCliente(drogRaw, codClienteDrog, nombreCliRaw);
 
-        const cliId = ident01Homologado || (cliMatch ? (cliMatch.ident01 || cliMatch.id) : (codClienteDrog || clientes[0]?.ident01 || `cli-${i}`));
-        const cliNombre = cliMatch?.nombre_fantasia || cliMatch?.razon_social || nombreCliRaw || 'Farmacia';
+        const cliId = ident01Homologado || (cliMatch ? (cliMatch.ident01 || cliMatch.id) : (codClienteDrog || nombreCliRaw));
+        const cliNombre = cliMatch?.nombre_fantasia || cliMatch?.razon_social || nombreCliRaw;
 
         // 6. Match de droguería
         const drogMatch = resolverDrogueria(drogRaw);
 
-        const drogId = drogMatch ? drogMatch.id : (droguerias[0]?.id || 'drog-001');
-        const drogNombre = drogMatch ? drogMatch.nombre_drogueria : (drogRaw || 'Drogueria General');
+        if (!drogMatch) drogueriasNoEncontradas.add(drogRaw);
+        const drogId = drogMatch ? drogMatch.id : drogRaw;
+        const drogNombre = drogMatch ? drogMatch.nombre_drogueria : drogRaw;
 
-        // 7. Cantidad y Precio:
-        const unidades = parseInt(unidadesRaw) || 10;
-        const precio = prodMatch?.precio_lista || 5.0;
-        const desc = parseFloat(getCol(f, ['DESCUENTO_PROMEDIO', 'DESCUENTO_PORC', 'DESCUENTO', 'Descuento'])?.replace(',', '.')) || (prodMatch?.descuento_maximo_porc ? Math.min(12.0, prodMatch.descuento_maximo_porc) : 10.0);
+        // 7. Cantidad (fase 1: sin precios; negativo = devolución).
+        const unidades = Math.round(unidadesNum);
 
-        return {
+        nuevoHistorico.push({
           id: `hist-imp-${Date.now()}-${i}`,
           cliente_id: cliId,
           drogueria_id: drogId,
           producto_id: prodId,
           fecha_pedido: fecha,
           equipo_origen: equipo,
-          numero_factura_origen: getCol(f, ['NUMERO_FACTURA', 'FACTURA']) || `FAC-${Date.now().toString().slice(-6)}-${i+1}`,
+          numero_factura_origen: getCol(f, ['NUMERO_FACTURA', 'FACTURA']),
           cantidad_solicitada: unidades,
           cantidad_facturada: unidades,
-          precio_unitario: precio,
-          descuento_porcentaje: desc,
+          precio_unitario: 0,
+          descuento_porcentaje: 0,
 
           // Campos específicos de las 8 columnas del usuario
           cod_sap: codSapResuelto,
@@ -971,34 +858,44 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
           mes_periodo: mesPeriodoFila,
           archivo_origen: nombreArchivo || `ventas_${mesPeriodoFila}.csv`,
           cliente_ident01: ident01Homologado,
-        };
+        });
       });
 
-      // Guardar nuevos mapeos aprendidos
-      if (nuevosMapeosAprendidos.length > 0) {
-        setMapeosProductosDrogueria(prev => [...prev, ...nuevosMapeosAprendidos]);
-        void sincronizarMapeos(nuevosMapeosAprendidos);
-      }
-
-      // Sincronizar con Supabase si está disponible: el servidor recibe los códigos y nombres de la droguería tal cual
-      // y los enlaza con la farmacia y el producto (lo que no reconoce queda pendiente de homologar).
-      let avisoNube = '';
-      if (supabase) {
-        try {
-          await guardarDroguerias(supabase, droguerias);
-          const r = await importarVentas(supabase, nuevoHistorico);
-          if (r.droguerias_desconocidas.length > 0) avisoNube = ` En Supabase no se reconocieron las droguerías: ${r.droguerias_desconocidas.join(', ')}.`;
-        } catch (err: unknown) {
-          avisoNube = ` Guardado en este navegador, pero no se pudo subir a Supabase: ${err instanceof Error ? err.message : String(err)}`;
+      const avisos = drogueriasNoEncontradas.size > 0
+        ? [`Estas droguerías no están en tu catálogo: ${[...drogueriasNoEncontradas].join(', ')}. Supabase rechazará sus filas: cárgalas primero en Droguerías.`]
+        : [];
+      const titulo = 'Cargar ventas de droguerías';
+      pedirConfirmacion({ titulo, unidad: 'filas', prep: { registros: nuevoHistorico, descartes: descartesVentas, repetidas: 0 }, avisos }, async (avance) => {
+        // Códigos de producto aprendidos del Cod SAP que traía el reporte (se guardan solo al confirmar).
+        if (nuevosMapeosAprendidos.length > 0) {
+          setMapeosProductosDrogueria((prev) => [...prev, ...nuevosMapeosAprendidos]);
+          void sincronizarMapeos(nuevosMapeosAprendidos);
         }
-      }
-
-      onImportarHistorico(nuevoHistorico);
-      showNotification(avisoNube ? 'error' : 'exito', `Se han procesado e incorporado ${nuevoHistorico.length} registros historicos (${mesPeriodo}) con resolución de Cod SAP y Farmacias.${avisoNube}`);
+        if (!supabase) {
+          onImportarHistorico(nuevoHistorico);
+          return { ok: true, lineas: [`Guardadas en este navegador: ${nuevoHistorico.length.toLocaleString()} filas (sin conexión a Supabase).`] };
+        }
+        let enviadas = 0;
+        try {
+          // El servidor reconoce la droguería de cada fila por su código o nombre: deben existir en la nube.
+          avance(0, nuevoHistorico.length, 'Guardando las droguerías');
+          await guardarDroguerias(supabase, droguerias);
+          const r = await importarVentas(supabase, nuevoHistorico, (h, t, e) => { enviadas = h; avance(h, t, e); });
+          onImportarHistorico(nuevoHistorico);
+          const res = lineasVentas(r);
+          if (descartesVentas.length) res.lineas.push(`Descartadas por datos incompletos: ${descartesVentas.length.toLocaleString()} filas.`);
+          void handleVerificarSupabase();
+          return res;
+        } catch (err: unknown) {
+          return {
+            ok: false,
+            lineas: [`Se alcanzaron a subir ${enviadas.toLocaleString()} de ${nuevoHistorico.length.toLocaleString()} filas antes del error.`,
+                     'Puedes volver a cargar el mismo archivo: lo ya guardado no se duplica.'],
+            detalle: [errorTexto(err)],
+          };
+        }
+      });
     }
-
-    setArchivoTexto('');
-    setNombreArchivo('');
   };
 
   // Homologación de farmacias y diccionario Cod SAP: se guardan localmente y, si hay Supabase, se sincronizan por clave natural
@@ -1297,9 +1194,11 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
     showNotification('exito', `Farmacia ${formClienteNuevo.nombre_fantasia} registrada en dim_clientes.`);
   };
 
+  // La búsqueda usa un valor diferido: escribir no espera a filtrar miles de farmacias.
+  const busquedaClienteDiferida = useDeferredValue(filtroBusquedaCliente);
   const clientesFiltrados = useMemo(() => {
-    if (!filtroBusquedaCliente.trim()) return clientes;
-    const q = filtroBusquedaCliente.toLowerCase().trim();
+    if (!busquedaClienteDiferida.trim()) return clientes;
+    const q = busquedaClienteDiferida.toLowerCase().trim();
     return clientes.filter((c) =>
       (c.ident01 || '').toLowerCase().includes(q) ||
       (c.codigo_cliente || '').toLowerCase().includes(q) ||
@@ -1312,7 +1211,7 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
       (c.estado || '').toLowerCase().includes(q) ||
       (c.bandera || '').toLowerCase().includes(q)
     );
-  }, [clientes, filtroBusquedaCliente]);
+  }, [clientes, busquedaClienteDiferida]);
 
   // Solo se calcula mientras se mira la tabla del histórico acumulado; la búsqueda usa un valor diferido
   // para no bloquear el teclado y los cruces con clientes/productos usan índices (antes, un .find por fila).
@@ -1374,6 +1273,7 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
 
   return (
     <div className="space-y-6">
+      <DialogoCarga estado={dialogo} onConfirmar={confirmarCarga} onCerrar={cerrarDialogo} />
 
       {/* Notificación Toast */}
       {notificacion && (
@@ -1663,7 +1563,7 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
                   className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs bg-teal-600 hover:bg-teal-700 text-white shadow-sm transition-all min-h-[44px]"
                 >
                   <Check className="w-4 h-4" />
-                  <span>Procesar e Incorporar a la Base de Datos</span>
+                  <span>Revisar y cargar</span>
                 </button>
               </div>
 
@@ -1985,7 +1885,10 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <Users className="w-4 h-4 text-teal-600" />
-                    <span>Cartera de Farmacias en dim_clientes ({clientesFiltrados.length} de {clientes.length} Registros)</span>
+                    <span>
+                      Farmacias ({clientesFiltrados.length.toLocaleString()} de {clientes.length.toLocaleString()})
+                      {clientesFiltrados.length > MAX_FILAS_TABLA && ` · se muestran las primeras ${MAX_FILAS_TABLA}; usa la búsqueda para encontrar las demás`}
+                    </span>
                   </h3>
                   <p className="text-xs text-slate-500">
                     Cada farmacia se identifica por su código (ident01).
@@ -2047,7 +1950,7 @@ SKU-MET-850;Diaformin 850mg x 30 Tabletas;Comercial;Antidiabetico Oral;Endocrino
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-[11px]">
-                    {clientesFiltrados.map((cli, idx) => (
+                    {clientesFiltrados.slice(0, MAX_FILAS_TABLA).map((cli, idx) => (
                       <tr key={cli.ident01 || cli.id || idx} className="hover:bg-teal-50/30 dark:hover:bg-teal-950/20 transition-colors">
                         
                         {/* Numeral */}

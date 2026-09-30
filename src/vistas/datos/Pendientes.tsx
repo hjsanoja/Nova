@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import { CheckCircle2, Download } from 'lucide-react';
 import { getSupabaseClient } from '../../services/supabaseClient';
 import { Boton, Etiqueta, Tarjeta, Vacio, useAviso } from '../../components/ui/kit';
+import { descargarHomologacionesCsv } from '../../services/nubeV3';
 
 interface PendCliente { drogueria_id: string; drogueria: string; cod_cliente_drogueria: string | null; nombre_cliente_drogueria: string; filas: number; unidades: number }
 interface PendProducto { drogueria_id: string; drogueria: string; cod_producto_drogueria: string; nombre_producto_drogueria: string | null; cod_sap_reportado: string | null; filas: number; unidades: number }
@@ -39,9 +40,33 @@ export function Pendientes() {
   if (error) return <Vacio titulo="No se pudo cargar" texto={error} />;
   if (!clientes || !productos) return <Vacio titulo="Cargando…" />;
 
+  // Tabla completa de homologación (tu código <-> código de cada droguería) para revisarla en Excel.
+  const descargar = async (tipo: 'productos' | 'farmacias') => {
+    try {
+      const { csv, filas } = await descargarHomologacionesCsv(sb, tipo);
+      const url = URL.createObjectURL(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }));
+      const a = Object.assign(document.createElement('a'), { href: url, download: `homologacion_${tipo}_${new Date().toISOString().slice(0, 10)}.csv` });
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      mostrar({ tipo: 'ok', texto: `Descargadas ${filas.toLocaleString()} homologaciones de ${tipo}.` });
+    } catch (e: unknown) {
+      mostrar({ tipo: 'error', texto: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   return (
     <div className="space-y-3">
       {nodo}
+      <Tarjeta>
+        <p className="mb-1 text-sm font-bold">Tabla de homologación</p>
+        <p className="mb-2 text-xs text-slate-500">Tu código (Cod SAP o código interno) y el código que usa cada droguería. Un producto o farmacia puede tener varios códigos en una droguería; uno es el principal.</p>
+        <div className="flex flex-wrap gap-2">
+          <Boton icono={Download} onClick={() => void descargar('productos')}>Productos por droguería</Boton>
+          <Boton icono={Download} onClick={() => void descargar('farmacias')}>Farmacias por droguería</Boton>
+        </div>
+      </Tarjeta>
       {estados.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {estados.map((e) => <Etiqueta key={e.drogueria} tono={(e.pct_homologado ?? 0) >= 95 ? 'verde' : (e.pct_homologado ?? 0) >= 70 ? 'ambar' : 'rojo'}>{e.drogueria}: {e.pct_homologado ?? 0}% enlazado</Etiqueta>)}

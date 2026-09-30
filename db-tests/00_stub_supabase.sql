@@ -4,8 +4,10 @@ DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object T
 DO $$ BEGIN CREATE ROLE service_role NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text, raw_user_meta_data jsonb NOT NULL DEFAULT '{}'::jsonb);
+-- Igual que Supabase: el id viene de request.jwt.claim.sub (pruebas) o de request.jwt.claims (PostgREST).
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS
-  $$ SELECT nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
+  $$ SELECT coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''),
+                     (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid $$;
 GRANT USAGE ON SCHEMA auth TO authenticated, anon;
 GRANT USAGE ON SCHEMA public TO authenticated, anon;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO authenticated, anon;

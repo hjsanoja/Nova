@@ -12,5 +12,6 @@ $P -q -d nova_test -f src/sql/nova_produccion_v3.sql 2>&1 | grep -v NOTICE || tr
 $P -d nova_test -f db-tests/10_escenarios.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS" | sed 's/^psql:[^ ]* NOTICE: *//'
 $P -d nova_test -f db-tests/20_homologacion.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|DETAIL|CONTEXT" | sed 's/^psql:[^ ]* NOTICE: *//'
 $P -d nova_test -f db-tests/40_gestion.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|DETAIL|CONTEXT" | sed 's/^psql:[^ ]* NOTICE: *//'
+$P -d nova_test -f db-tests/60_cargas.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|DETAIL|CONTEXT" | sed 's/^psql:[^ ]* NOTICE: *//'
 
 ./db-tests/50_version_anterior.sh

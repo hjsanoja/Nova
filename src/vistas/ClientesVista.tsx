@@ -1,12 +1,15 @@
 import { useMemo, useState } from 'react';
-import { ClipboardPlus, MapPin, Phone, Search, Users } from 'lucide-react';
+import { ClipboardPlus, MapPin, Phone, Plus, Search, UserMinus, Users } from 'lucide-react';
 import type { Usuario } from '../types/pharmacy';
 import type { LocalCliente } from '../offline/types';
 import { Sheet } from '../components/capture/Sheet';
-import { Boton, Etiqueta, PageHeader, Tarjeta, Vacio, estiloInput, useDebounced } from '../components/ui/kit';
+import { Boton, Etiqueta, PageHeader, Tarjeta, Vacio, estiloInput, useAviso, useDebounced } from '../components/ui/kit';
 import { normalizar } from '../offline/busqueda';
 import { actividadDeClientes, clientesPorAtender, ESTADOS_ETIQUETA, diasDesde } from './logica';
 import { prepararPedidoPara } from './navegacion';
+import { AgregarFarmacias } from './AgregarFarmacias';
+import { getSupabaseClient } from '../services/supabaseClient';
+import { cambiarMiFichero, refrescarFarmaciasDelDispositivo } from '../services/ficheroVendedor';
 import { ultimaCompraPorCliente, ultimoPedidoPorCliente, useClientes, useCompras, useDroguerias, useMapClientes, usePedidos, useProductos } from './useDatos';
 
 const POR_PAGINA = 60;
@@ -27,6 +30,23 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
   const [abierto, setAbierto] = useState<string | null>(null);
 
   const esVendedor = usuario.rol === 'vendedor';
+  // El vendedor arma su fichero (necesita la nube: en modo demostración no aplica).
+  const puedeEditarFichero = esVendedor && !!getSupabaseClient();
+  const [agregando, setAgregando] = useState(false);
+  const { mostrar, nodo } = useAviso();
+  const quitarDeMiFichero = async (c: LocalCliente) => {
+    const sb = getSupabaseClient();
+    if (!sb || !c.codigo_interno) return;
+    if (!window.confirm(`¿Quitar ${c.nombre_comercial} de tu fichero? Dejarás de verla (sus pedidos se conservan).`)) return;
+    try {
+      await cambiarMiFichero(sb, usuario.id, [c.codigo_interno], 'quitar');
+      setAbierto(null);
+      await refrescarFarmaciasDelDispositivo();
+      mostrar({ tipo: 'ok', texto: `${c.nombre_comercial} salió de tu fichero.` });
+    } catch (e: unknown) {
+      mostrar({ tipo: 'error', texto: navigator.onLine === false ? 'Necesitas conexión a internet para cambiar tu fichero.' : e instanceof Error ? e.message : String(e) });
+    }
+  };
   const propios = useMemo(() => (esVendedor ? pedidos.filter((p) => p.vendedor_id === usuario.id) : pedidos), [pedidos, esVendedor, usuario.id]);
   const actividad = useMemo(() => actividadDeClientes(clientes, ultimaCompraPorCliente(compras), ultimoPedidoPorCliente(pedidos)), [clientes, compras, pedidos]);
   const atrasados = useMemo(() => new Set(clientesPorAtender(actividad, Number.MAX_SAFE_INTEGER).map((a) => a.cliente.id)), [actividad]);
@@ -45,7 +65,20 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
 
   return (
     <div>
-      <PageHeader titulo={esVendedor ? 'Mis clientes' : 'Clientes'} descripcion={`${clientes.length} farmacia${clientes.length === 1 ? '' : 's'}${esVendedor ? ' en tu fichero' : ''}`} />
+      <PageHeader
+        titulo={esVendedor ? 'Mis clientes' : 'Clientes'}
+        descripcion={`${clientes.length} farmacia${clientes.length === 1 ? '' : 's'}${esVendedor ? ' en tu fichero' : ''}`}
+        acciones={puedeEditarFichero ? <Boton variante="primario" icono={Plus} onClick={() => setAgregando(true)}>Agregar farmacias</Boton> : undefined}
+      />
+      {nodo}
+      {puedeEditarFichero && (
+        <AgregarFarmacias
+          abierto={agregando}
+          vendedorId={usuario.id}
+          onCerrar={() => setAgregando(false)}
+          onAgregadas={(n) => mostrar({ tipo: 'ok', texto: n === 1 ? 'Se agregó 1 farmacia a tu fichero.' : `Se agregaron ${n} farmacias a tu fichero.` })}
+        />
+      )}
 
       <div className="mb-3 flex flex-wrap gap-2">
         <div className="relative min-w-52 flex-1">
@@ -68,7 +101,7 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
           <Vacio
             icono={Users}
             titulo={clientes.length === 0 ? (esVendedor ? 'Aún no tienes clientes asignados' : 'Todavía no hay clientes') : 'Sin resultados'}
-            texto={clientes.length === 0 ? (esVendedor ? 'Pídele a un administrador que te asigne tu fichero.' : 'Cárgalos desde "Cargar y editar datos".') : 'Prueba con otra búsqueda o quita los filtros.'}
+            texto={clientes.length === 0 ? (esVendedor ? (puedeEditarFichero ? 'Toca "Agregar farmacias" y marca las que atiendes.' : 'Pídele a un administrador que te asigne tu fichero.') : 'Cárgalos desde "Cargar y editar datos".') : 'Prueba con otra búsqueda o quita los filtros.'}
           />
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -108,6 +141,7 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
             cuentas={mapClientes.filter((m) => m.cliente_id === seleccionado.id).map((m) => ({ drogueria: droguerias.find((d) => d.id === m.drogueria_id)?.nombre ?? 'Droguería', cuenta: m.codigo_cuenta, nombre: m.nombre_en_drogueria ?? null, principal: m.es_principal !== false }))}
             puedePedir={usuario.rol === 'vendedor' || usuario.rol === 'admin'}
             onPedido={() => { prepararPedidoPara(seleccionado.id); setAbierto(null); irATab('captura'); }}
+            onQuitar={puedeEditarFichero && seleccionado.codigo_interno ? () => void quitarDeMiFichero(seleccionado) : undefined}
           />
         )}
       </Sheet>
@@ -123,6 +157,7 @@ function FichaCliente({
   cuentas,
   puedePedir,
   onPedido,
+  onQuitar,
 }: {
   cliente: LocalCliente;
   compras: { producto_id: string; periodo: string; unidades: number }[];
@@ -131,6 +166,8 @@ function FichaCliente({
   cuentas: { drogueria: string; cuenta: string | null; nombre: string | null; principal: boolean }[];
   puedePedir: boolean;
   onPedido: () => void;
+  /** Solo el vendedor, en su propio fichero. */
+  onQuitar?: () => void;
 }) {
   // Lo que más compró en los últimos 3 meses con datos.
   const periodos = Array.from(new Set(compras.map((x) => x.periodo))).sort().reverse().slice(0, 3);
@@ -145,6 +182,7 @@ function FichaCliente({
         {puedePedir && <Boton variante="primario" icono={ClipboardPlus} onClick={onPedido}>Tomar pedido</Boton>}
         {c.telefono && <a href={`tel:${c.telefono}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"><Phone className="h-4 w-4" />{c.telefono}</a>}
         {mapa && <a href={mapa} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"><MapPin className="h-4 w-4" />Cómo llegar</a>}
+        {onQuitar && <Boton variante="suave" icono={UserMinus} onClick={onQuitar}>Quitar de mi fichero</Boton>}
       </div>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">

@@ -6,11 +6,16 @@ import { limpiarDatosLocales } from '../../offline/aislamiento';
 import { borrarClavesLocales } from '../../hooks/usePersistentState';
 import { Boton, Tarjeta, estiloInput, useAviso } from '../../components/ui/kit';
 
-type Alcance = 'historial' | 'pedidos' | 'todo';
+type Alcance = 'historial' | 'pedidos' | 'homologaciones' | 'fichero' | 'clientes' | 'productos' | 'droguerias' | 'todo';
 const ALCANCES: { id: Alcance; titulo: string; texto: string }[] = [
-  { id: 'historial', titulo: 'Historial de ventas', texto: 'Las ventas que reportaron las droguerías y el consolidado mensual. Farmacias, productos y pedidos se conservan.' },
+  { id: 'historial', titulo: 'Ventas de droguerías', texto: 'Las ventas reportadas por las droguerías y el consolidado mensual. Todo lo demás se conserva.' },
   { id: 'pedidos', titulo: 'Pedidos', texto: 'Todos los pedidos, visitas, plantillas y avisos. La numeración vuelve a empezar en PED-1001.' },
-  { id: 'todo', titulo: 'Todo', texto: 'Historial, pedidos y también farmacias, productos, droguerías, homologaciones, ficheros y reglas. Solo se conservan los usuarios.' },
+  { id: 'homologaciones', titulo: 'Homologaciones', texto: 'Los códigos de farmacias y productos en cada droguería. Las ventas se conservan y vuelven a "pendientes de homologar".' },
+  { id: 'fichero', titulo: 'Fichero de vendedores', texto: 'Qué farmacias atiende cada vendedor. Farmacias y pedidos se conservan.' },
+  { id: 'clientes', titulo: 'Farmacias', texto: 'Todas las farmacias. También se borran los pedidos y visitas (dependen de ellas), el fichero y sus homologaciones. Las ventas se conservan sin farmacia.' },
+  { id: 'productos', titulo: 'Productos', texto: 'Todos los productos. También se borran los pedidos (dependen de ellos) y sus homologaciones. Las ventas se conservan sin producto.' },
+  { id: 'droguerias', titulo: 'Droguerías', texto: 'Todas las droguerías. También se borran los pedidos, las ventas, las homologaciones y las reglas de cada droguería.' },
+  { id: 'todo', titulo: 'Todo', texto: 'Todo lo anterior y las reglas comerciales. Solo se conservan los usuarios, los equipos y la configuración.' },
 ];
 
 /**
@@ -54,11 +59,11 @@ export function BorradoDatos() {
     if (error) return mostrar({ tipo: 'error', texto: error.message });
     const r = data as { ok: boolean; error?: string };
     if (!r.ok) return mostrar({ tipo: 'error', texto: r.error === 'demasiados_intentos' ? 'Demasiados intentos fallidos. Espera 15 minutos.' : 'La clave de borrado no es correcta.' });
-    // Se apaga el interruptor y se vacía también lo guardado en este dispositivo.
-    await sb.rpc('habilitar_borrado', { p_habilitar: false });
+    // Se vacía también lo guardado en este dispositivo (lo que sigue en la nube se vuelve a descargar). El interruptor queda
+    // encendido para poder borrar otra tabla enseguida: apágalo al terminar.
     await limpiarDatosLocales(obtenerDb());
     await borrarClavesLocales();
-    mostrar({ tipo: 'ok', texto: 'Datos borrados. Se recargará la aplicación…' });
+    mostrar({ tipo: 'ok', texto: `${ALCANCES.find((a) => a.id === alcance)?.titulo} borrado. Se recargará la aplicación… Recuerda desactivar el borrado cuando termines.` });
     setTimeout(() => window.location.reload(), 1500);
   };
 
@@ -80,7 +85,7 @@ export function BorradoDatos() {
 
         {/* 2. interruptor */}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
-          <p className="text-xs"><b>2. Permitir borrado:</b> {estado?.habilitado ? 'ACTIVADO' : 'apagado'}. Se apaga solo después de borrar.</p>
+          <p className="text-xs"><b>2. Permitir borrado:</b> {estado?.habilitado ? 'ACTIVADO (apágalo cuando termines)' : 'apagado'}.</p>
           <Boton variante={estado?.habilitado ? 'secundario' : 'peligro'} disabled={ocupado || !estado} onClick={() => void rpc('habilitar_borrado', { p_habilitar: !estado?.habilitado }, estado?.habilitado ? 'Borrado desactivado.' : 'Borrado activado: ya puedes usarlo.')}>{estado?.habilitado ? 'Desactivar' : 'Activar'}</Boton>
         </div>
 

@@ -171,14 +171,31 @@ comparten los mismos casos de prueba (`politicas.test.ts` y `db-tests/10_escenar
 
 Opcional: programar `recalcular_segmentos_clientes()` y `generar_alertas_comerciales()` a diario (pg_cron, ver el final del DDL). Realtime ya queda habilitado para `fact_pedidos`, `pedido_bloqueos`, `notificaciones` y `dim_clientes`.
 
-**Borrado de datos (solo admin):** `configurar_password_purga` (clave, mín. 6) → `habilitar_borrado(true)` → `borrar_datos(clave, alcance)` con alcance `historial` (pedidos, ventas, compras, visitas, alertas) o `todo` (además farmacias, productos, droguerías, homologaciones y fichero). Usuarios, equipos y configuración se conservan. Queda registrado en `audit_log`. Desde la app: **Configuración → Base de datos**.
+**Borrado de datos (solo admin):** `configurar_password_purga` (clave, mín. 6) → `habilitar_borrado(true)` → `borrar_datos(clave, alcance)`.
+Alcances: `historial` (ventas de droguerías), `pedidos`, `homologaciones` (las ventas vuelven a pendientes), `fichero`,
+`clientes` (+ pedidos y visitas; las ventas quedan sin farmacia), `productos` (+ pedidos; las ventas quedan sin producto),
+`droguerias` (+ pedidos y ventas) y `todo`. Usuarios, equipos y configuración se conservan. Queda en `audit_log`.
+Desde la app: **Configuración → Base de datos** (el interruptor queda encendido para borrar varias tablas seguidas: apágalo al terminar).
+
+**Cargas de archivos (Cargar y editar datos):** cada carga muestra antes cuántas filas se leyeron, cuántos registros se
+cargarán y cuáles se descartan (con la línea y el motivo); luego una barra de progreso y el resultado (guardados, ya
+existentes, rechazados o el error). Nunca se inventan datos: lo obligatorio que falta descarta la fila y lo opcional queda vacío.
+Las ventas se suben en trozos de 1000 (`importar_ventas_drogueria` con `diferir`) y el consolidado mensual se calcula una vez
+por archivo (`finalizar_lote_ventas`). "Verificar en Supabase" usa `resumen_ventas_nube()`.
+
+**Fichero del vendedor:** en **Mis clientes → Agregar farmacias** el vendedor ve las farmacias activas que aún no tiene
+(`farmacias_disponibles`) y las agrega; desde la ficha puede quitarlas. Solo puede cambiar su propio fichero
+(`asignar_clientes_vendedor` con su id, modos `agregar`/`quitar`); el administrador sigue asignando a cualquiera.
+
+**Tabla de homologación:** `map_producto_drogueria` (Cod SAP ↔ código de cada droguería) y `map_cliente_drogueria`
+(código interno ↔ cuenta en cada droguería). Se descargan en CSV desde **Cargar y editar datos → Pendientes de homologar**.
 
 ## 7. Pruebas
 
 ```bash
 npm test                                   # pruebas de lógica cliente (Dexie en memoria)
 NOVA_PG=1 PGHOST=… PGUSER=… npm test       # + integración contra PostgreSQL + PostGIS reales
-./db-tests/run.sh                          # DDL (dos veces) + escenarios de negocio, homologación, fichero y borrado
+./db-tests/run.sh                          # DDL (dos veces) + escenarios de negocio, homologación, fichero, borrado y cargas
 ```
 
 La prueba de integración ejecuta la **misma cola** del dispositivo contra las RPC reales: cubre pull, pedido offline,
