@@ -528,6 +528,46 @@ export async function descargarCatalogosNube(sb: SupabaseClient): Promise<Catalo
   return { clientes: clientes.map(clienteDesdeV3), productos: productos.map(productoDesdeV3), droguerias: droguerias.map(drogueriaDesdeV3) };
 }
 
+/** Texto CSV (separador ;) listo para abrir en Excel: comillas solo donde hace falta. */
+export function aCsv(encabezados: string[], filas: Array<Array<string | number | boolean | null | undefined>>): string {
+  const celda = (v: string | number | boolean | null | undefined) => {
+    const t = v == null ? '' : String(v);
+    return /[;"\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  return [encabezados, ...filas].map((f) => f.map(celda).join(';')).join('\r\n');
+}
+
+const uno = (v: unknown): Fila => ((Array.isArray(v) ? v[0] : v) ?? {}) as Fila;
+
+/**
+ * Tabla de homologación vigente en la nube, como CSV: tu código (Cod SAP / código interno) y el código que usa cada droguería.
+ * Una fila por par; un producto o farmacia puede tener varios códigos en la misma droguería (uno es el principal).
+ */
+export async function descargarHomologacionesCsv(sb: SupabaseClient, tipo: 'productos' | 'farmacias'): Promise<{ csv: string; filas: number }> {
+  if (tipo === 'productos') {
+    const filas = await paginar((a, b) =>
+      sb.from('map_producto_drogueria')
+        .select('codigo_drogueria,descripcion_drogueria,es_principal,dim_productos(sku,nombre_comercial),dim_droguerias(codigo,nombre)')
+        .is('deleted_at', null).order('producto_id').order('drogueria_id').range(a, b));
+    const datos = filas.map((f) => {
+      const p = uno(f.dim_productos);
+      const d = uno(f.dim_droguerias);
+      return [t(p.sku), t(p.nombre_comercial), t(d.nombre), t(f.codigo_drogueria), t(f.descripcion_drogueria), f.es_principal === false ? 'no' : 'si'];
+    }).sort((x, y) => `${x[0]}|${x[2]}`.localeCompare(`${y[0]}|${y[2]}`));
+    return { csv: aCsv(['Cod SAP', 'Producto', 'Drogueria', 'Codigo en la drogueria', 'Descripcion en la drogueria', 'Principal'], datos), filas: datos.length };
+  }
+  const filas = await paginar((a, b) =>
+    sb.from('map_cliente_drogueria')
+      .select('codigo_cuenta,nombre_en_drogueria,es_principal,dim_clientes(codigo_interno,nombre_comercial),dim_droguerias(codigo,nombre)')
+      .is('deleted_at', null).order('cliente_id').order('drogueria_id').range(a, b));
+  const datos = filas.map((f) => {
+    const c = uno(f.dim_clientes);
+    const d = uno(f.dim_droguerias);
+    return [t(c.codigo_interno), t(c.nombre_comercial), t(d.nombre), t(f.codigo_cuenta), t(f.nombre_en_drogueria), f.es_principal === false ? 'no' : 'si'];
+  }).sort((x, y) => `${x[0]}|${x[2]}`.localeCompare(`${y[0]}|${y[2]}`));
+  return { csv: aCsv(['Codigo interno', 'Farmacia', 'Drogueria', 'Cuenta en la drogueria', 'Nombre en la drogueria', 'Principal'], datos), filas: datos.length };
+}
+
 // ---------------------------------------------------------------------------- bajas desde las pantallas de edición
 
 async function bajaLogica(sb: SupabaseClient, tabla: 'dim_clientes' | 'dim_productos' | 'dim_droguerias', columna: string, valor: string): Promise<void> {

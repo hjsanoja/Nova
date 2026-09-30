@@ -163,3 +163,10 @@ describe('usuarios: el rol lo fija la base, no los metadatos del registro', () =
     await expect(crearUsuarioNube(admin, registro, { email: 'a@b.com', password: 'x', nombre_completo: 'A', rol: 'admin', equipo: 'TODOS', activo: true })).rejects.toThrow(/no se pudo asignar rol/);
   });
 });
+
+describe('CSV de homologación', () => {
+  it('separador ; y comillas solo donde hace falta', async () => {
+    const { aCsv } = await import('./nubeV3');
+    expect(aCsv(['A', 'B'], [['x;y', 'dice "hola"'], [null, 3]])).toBe('A;B\r\n"x;y";"dice ""hola"""\r\n;3');
+  });
+});
