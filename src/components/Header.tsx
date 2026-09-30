@@ -4,6 +4,7 @@ import { RolUsuario, EquipoVentas, Usuario } from '../types/pharmacy';
 import { useTheme } from '../context/ThemeContext';
 import { NovaLogo } from './NovaLogo';
 import { SyncStatusChip } from './SyncStatusChip';
+import { FirmaVersion } from './version/Version';
 
 interface HeaderProps {
   rolActual: RolUsuario;
@@ -87,6 +88,9 @@ export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuario
                   <button type="button" role="menuitem" onClick={accion(onCerrarSesion)} className={`${itemMenu} text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40`}>
                     <LogOut className="h-4 w-4" /> Cerrar sesión
                   </button>
+                </div>
+                <div className="mt-1 border-t border-slate-100 pt-1 dark:border-slate-800">
+                  <FirmaVersion variante="completa" className="w-full px-3 py-2" />
                 </div>
               </div>
             )}

@@ -5,6 +5,10 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import './index.css';
 import { registrarServiceWorker } from './pwa/registrarSw.ts';
 import { aplicarConexionDelEnlace } from './services/supabaseConfig.ts';
+import { aplicarAparienciaGuardada } from './context/ThemeContext.tsx';
+
+// Tema (claro/oscuro) y color de la app antes del primer dibujo: sin parpadeo de colores al abrir.
+aplicarAparienciaGuardada();
 
 // Un enlace compartido con ?conexion=… deja la app conectada sin escribir la URL ni la clave.
 aplicarConexionDelEnlace();

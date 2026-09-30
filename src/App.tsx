@@ -12,6 +12,9 @@ import { leerUsuario } from './services/storageMigrations';
 import { ThemeProvider } from './context/ThemeContext';
 import { usePersistentState } from './hooks/usePersistentState';
 import { obtenerEstadoSync } from './offline/syncStore';
+import { AvisoVersion, marcarVersionVista } from './components/version/Version';
+import { vigilarVersionPublicada } from './pwa/versionPublicada';
+import { EVENTO_ABRIR_GUIA, debeVerGuia, recordarGuiaVista } from './components/guia/estadoGuia';
 
 // Cada módulo se descarga solo cuando se usa (el bundle inicial se reduce a la estructura).
 const Inicio = lazy(() => import('./vistas/Inicio').then((m) => ({ default: m.Inicio })));
@@ -30,6 +33,7 @@ const AvisoPendientes = lazy(() => import('./components/AvisoPendientes').then((
 const AvisosLocales = lazy(() => import('./avisos/AvisosLocales').then((m) => ({ default: m.AvisosLocales })));
 const BannerComunicados = lazy(() => import('./comunicados/BannerComunicados').then((m) => ({ default: m.BannerComunicados })));
 const ConfigVista = lazy(() => import('./vistas/config/ConfigVista').then((m) => ({ default: m.ConfigVista })));
+const GuiaBienvenida = lazy(() => import('./components/guia/GuiaBienvenida').then((m) => ({ default: m.GuiaBienvenida })));
 
 const leerTabDelHash = () => window.location.hash.replace(/^#\/?/, '');
 
@@ -51,6 +55,36 @@ function AppContent() {
   const [usuarioActual, setUsuarioActual] = usePersistentState<Usuario | null>('PHARMA_AUTH_USER', () => null, leerUsuario);
   const [verificando, setVerificando] = useState(true);
   const usuarioAlAbrir = useRef(usuarioActual);
+
+  // ¿Hay una versión publicada más nueva que la de este equipo? (aviso arriba y en el menú)
+  useEffect(() => vigilarVersionPublicada(), []);
+
+  // Guía de bienvenida: sola en el primer inicio de sesión; desde Ayuda, cuando se pida.
+  const [guiaAbierta, setGuiaAbierta] = useState(false);
+  const usuarioIdGuia = usuarioActual?.id;
+  useEffect(() => {
+    if (verificando || !usuarioActual) return;
+    if (debeVerGuia(usuarioActual)) setGuiaAbierta(true);
+    // Solo al entrar (o al terminar de verificar la sesión), no en cada cambio del perfil.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usuarioIdGuia, verificando]);
+  useEffect(() => {
+    const abrir = () => setGuiaAbierta(true);
+    window.addEventListener(EVENTO_ABRIR_GUIA, abrir);
+    return () => window.removeEventListener(EVENTO_ABRIR_GUIA, abrir);
+  }, []);
+  const cerrarGuia = useCallback(() => {
+    setGuiaAbierta(false);
+    if (!usuarioActual) return;
+    recordarGuiaVista(usuarioActual.id);
+    marcarVersionVista();
+    if (!usuarioActual.guia_vista_en) {
+      setUsuarioActual({ ...usuarioActual, guia_vista_en: new Date().toISOString() });
+      const sb = getSupabaseClient();
+      // Queda en la base: no vuelve a salir en otro teléfono o computadora. Sin la columna (SQL anterior) no pasa nada.
+      if (sb && usuarioActual.id !== 'demo') void Promise.resolve(sb.rpc('marcar_guia_vista')).catch(() => undefined);
+    }
+  }, [usuarioActual, setUsuarioActual]);
 
   // Al abrir: la cuenta guardada debe seguir vigente en Supabase (y activa). Sin red se conserva y la base de datos decide al sincronizar.
   useEffect(() => {
@@ -105,7 +139,8 @@ function AppContent() {
   useEffect(() => {
     if (!usuarioId) return;
     let detener: (() => void) | null = null;
-    let cancelado = false;
+    // Si la pantalla se desmonta antes de terminar de arrancar (o cambia la sesión), ese arranque se descarta.
+    const control = new AbortController();
     void import('./offline/arranque').then(async ({ iniciarOffline }) => {
       const crearRemoto = conectado
         ? async () => {
@@ -114,12 +149,12 @@ function AppContent() {
             return cliente ? crearRemotoSupabase(cliente) : null;
           }
         : null;
-      const parar = await iniciarOffline(crearRemoto, usuarioId);
-      if (cancelado) parar();
+      const parar = await iniciarOffline(crearRemoto, usuarioId, control.signal);
+      if (control.signal.aborted) parar();
       else detener = parar;
     });
     return () => {
-      cancelado = true;
+      control.abort();
       detener?.();
     };
   }, [conectado, usuarioId]);
@@ -148,6 +183,7 @@ function AppContent() {
         <SideNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} />
 
         <main className="mx-auto w-full min-w-0 max-w-[1500px] flex-1 px-3 py-3 pb-24 sm:px-5 sm:py-4 md:pb-6 lg:px-6">
+          <AvisoVersion guiaAbierta={guiaAbierta} />
           <ErrorBoundary compacto>
             <Suspense fallback={null}>
               {!esDemo && <AvisoPendientes />}
@@ -178,6 +214,13 @@ function AppContent() {
       </div>
 
       <BottomNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} />
+      {guiaAbierta && (
+        <ErrorBoundary compacto>
+          <Suspense fallback={null}>
+            <GuiaBienvenida usuario={usuarioActual} onCerrar={cerrarGuia} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
     </div>
   );
 }

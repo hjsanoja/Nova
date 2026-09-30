@@ -2749,24 +2749,36 @@ CREATE TABLE IF NOT EXISTS registro_accesos (
 );
 CREATE INDEX IF NOT EXISTS idx_accesos_usuario ON registro_accesos (usuario_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_accesos_fecha ON registro_accesos (created_at);
+-- Versión de NOVA con la que entró (para saber quién usa la versión publicada y quién una anterior).
+ALTER TABLE registro_accesos ADD COLUMN IF NOT EXISTS version_app text;
 
--- Una apertura se cuenta como máximo una vez cada 30 minutos por persona (recargar la página no infla el conteo).
-CREATE OR REPLACE FUNCTION registrar_acceso(p_evento text, p_dispositivo text DEFAULT NULL) RETURNS void
+-- Una apertura se cuenta como máximo una vez cada 30 minutos por persona (recargar la página no infla el conteo);
+-- si en ese lapso cambió la versión de la app, se corrige la versión del último acceso.
+DROP FUNCTION IF EXISTS registrar_acceso(text, text);   -- versión anterior, sin la versión de la app
+CREATE OR REPLACE FUNCTION registrar_acceso(p_evento text, p_dispositivo text DEFAULT NULL, p_version text DEFAULT NULL) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_ultimo bigint; v_version text := left(nullif(btrim(p_version), ''), 20);
 BEGIN
   IF auth.uid() IS NULL OR NOT EXISTS (SELECT 1 FROM dim_usuarios WHERE id = auth.uid()) THEN RETURN; END IF;
   IF p_evento NOT IN ('inicio_sesion','apertura') THEN RAISE EXCEPTION 'Evento no válido' USING ERRCODE = '22023'; END IF;
-  IF p_evento = 'apertura' AND EXISTS (SELECT 1 FROM registro_accesos WHERE usuario_id = auth.uid()
-                                        AND created_at > now() - interval '30 minutes') THEN
-    RETURN;
+  IF p_evento = 'apertura' THEN
+    SELECT id INTO v_ultimo FROM registro_accesos WHERE usuario_id = auth.uid() AND created_at > now() - interval '30 minutes'
+     ORDER BY created_at DESC LIMIT 1;
+    IF v_ultimo IS NOT NULL THEN
+      IF v_version IS NOT NULL THEN
+        UPDATE registro_accesos SET version_app = v_version WHERE id = v_ultimo AND version_app IS DISTINCT FROM v_version;
+      END IF;
+      RETURN;
+    END IF;
   END IF;
-  INSERT INTO registro_accesos (usuario_id, evento, dispositivo) VALUES (auth.uid(), p_evento, left(p_dispositivo, 200));
+  INSERT INTO registro_accesos (usuario_id, evento, dispositivo, version_app) VALUES (auth.uid(), p_evento, left(p_dispositivo, 200), v_version);
 END $$;
 
--- Resumen por persona (incluye a quien no entró). Solo administración y gerencia.
+-- Resumen por persona (incluye a quien no entró). Solo administración y gerencia. version_app: la de su último acceso.
+DROP FUNCTION IF EXISTS reporte_accesos(date, date);   -- cambia lo que devuelve (se agregó la versión)
 CREATE OR REPLACE FUNCTION reporte_accesos(p_desde date, p_hasta date)
 RETURNS TABLE (usuario_id uuid, nombre text, email text, rol text, inicios_sesion integer, aperturas integer,
-               dias_activos integer, ultimo_acceso timestamptz)
+               dias_activos integer, ultimo_acceso timestamptz, version_app text)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   IF coalesce(app.rol()::text, '') NOT IN ('admin','gerente') THEN
@@ -2777,7 +2789,9 @@ BEGIN
          count(*) FILTER (WHERE a.evento = 'inicio_sesion')::integer,
          count(*) FILTER (WHERE a.evento = 'apertura')::integer,
          count(DISTINCT (a.created_at AT TIME ZONE 'America/Caracas')::date)::integer,
-         (SELECT max(x.created_at) FROM registro_accesos x WHERE x.usuario_id = u.id)
+         (SELECT max(x.created_at) FROM registro_accesos x WHERE x.usuario_id = u.id),
+         (SELECT x.version_app FROM registro_accesos x WHERE x.usuario_id = u.id AND x.version_app IS NOT NULL
+           ORDER BY x.created_at DESC LIMIT 1)
     FROM dim_usuarios u
     LEFT JOIN registro_accesos a ON a.usuario_id = u.id
          AND a.created_at >= p_desde AND a.created_at < p_hasta + 1
@@ -2785,8 +2799,17 @@ BEGIN
    GROUP BY u.id
    ORDER BY count(a.id) DESC, u.nombre_completo;
 END $$;
-REVOKE ALL ON FUNCTION registrar_acceso(text, text), reporte_accesos(date, date) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION registrar_acceso(text, text), reporte_accesos(date, date) TO authenticated;
+REVOKE ALL ON FUNCTION registrar_acceso(text, text, text), reporte_accesos(date, date) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION registrar_acceso(text, text, text), reporte_accesos(date, date) TO authenticated;
+
+-- 16.4b Guía de bienvenida: se muestra en el primer inicio de sesión de cada persona (en cualquier equipo) una sola vez.
+ALTER TABLE dim_usuarios ADD COLUMN IF NOT EXISTS guia_vista_en timestamptz;
+CREATE OR REPLACE FUNCTION marcar_guia_vista() RETURNS void
+LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  UPDATE dim_usuarios SET guia_vista_en = now() WHERE id = auth.uid() AND guia_vista_en IS NULL
+$$;
+REVOKE ALL ON FUNCTION marcar_guia_vista() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION marcar_guia_vista() TO authenticated;
 
 -- 16.5 Metas del mes: por representante, por farmacia, por droguería, o cualquier combinación de las tres.
 -- Mide unidades, pedidos o farmacias con pedido. El avance se calcula en la app con los pedidos del mes.

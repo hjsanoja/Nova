@@ -1,10 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Table2, BarChart3 } from 'lucide-react';
+import { Table2, LineChart } from 'lucide-react';
 
 /*
- * Gráficos de NOVA (una sola serie): marca-600 para las marcas (validado en claro y oscuro), textos con los tonos de
- * texto (nunca con el color de la serie), rejilla fina y sólida, columnas de hasta 24px con punta redondeada de 4px y
- * base recta, ayuda al pasar el cursor o enfocar con el teclado, y una vista de tabla equivalente.
+ * Gráficos de NOVA. Cada forma según lo que muestra:
+ *  - Linea: evolución en el tiempo (por día, por mes). Línea de 2px, área al 10%, cruz que sigue al cursor/dedo.
+ *  - BarrasRanking: comparar y ordenar (representantes, productos).
+ *  - Anillo: reparto de un total entre pocas partes (hasta 6), con leyenda y valores siempre visibles.
+ *  - Medidor: una proporción contra un límite (cobertura, metas).
+ * Color: `grafico` para una serie; `serie-1…6` para categorías, en orden fijo por entidad (nunca por posición en el
+ * ranking). Los textos usan los tonos de texto, nunca el color de la serie. Todos tienen tabla o leyenda equivalente.
  */
 
 const formato = (n: number) => n.toLocaleString('es-VE');
@@ -31,83 +35,93 @@ function useAncho<T extends HTMLElement>() {
   return { ref, ancho };
 }
 
-/** Rectángulo con la punta superior redondeada (4px) y la base recta. */
-function columna(x: number, y: number, w: number, h: number): string {
-  const r = Math.min(4, w / 2, h);
-  return `M${x},${y + h} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + h} Z`;
-}
-
 export interface PuntoSerie { clave: string; etiqueta: string; valor: number }
 
-/** Columnas por período (p. ej. unidades por día). Tocar o pasar el cursor muestra el valor; "Ver tabla" lo lista. */
-export function Columnas({ puntos, unidad, titulo, onSeleccionar }: { puntos: PuntoSerie[]; unidad: string; titulo: string; onSeleccionar?: (p: PuntoSerie) => void }) {
+/** Tabla equivalente de una serie por período (la vista "Ver tabla"). */
+function TablaSerie({ puntos, unidad, onSeleccionar }: { puntos: PuntoSerie[]; unidad: string; onSeleccionar?: (p: PuntoSerie) => void }) {
+  return (
+    <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-800">
+      <table className="w-full text-sm">
+        <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-950"><tr><th className="px-3 py-1.5 text-left font-medium">Período</th><th className="px-3 py-1.5 text-right font-medium">{unidad}</th></tr></thead>
+        <tbody className="divide-y divide-slate-100 tabular-nums dark:divide-slate-800">
+          {[...puntos].reverse().map((p) => (
+            <tr key={p.clave} onClick={onSeleccionar ? () => onSeleccionar(p) : undefined} className={onSeleccionar ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800' : ''}>
+              <td className="px-3 py-1">{p.etiqueta}</td><td className="px-3 py-1 text-right">{formato(p.valor)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Evolución en el tiempo (p. ej. unidades por día o por mes): línea de 2px con área suave, el último valor rotulado al
+ * final y una cruz que sigue al cursor o al dedo con el valor del período. Tocar un período abre su detalle.
+ */
+export function Linea({ puntos, unidad, titulo, onSeleccionar }: { puntos: PuntoSerie[]; unidad: string; titulo: string; onSeleccionar?: (p: PuntoSerie) => void }) {
   const { ref, ancho } = useAncho<HTMLDivElement>();
   const [activo, setActivo] = useState<number | null>(null);
   const [tabla, setTabla] = useState(false);
   const ALTO = 160;
   const EJE_X = 22;
   const EJE_Y = 40;
-  const ARRIBA = 8; // aire para que la marca superior del eje no se corte
+  const ARRIBA = 18; // aire para el rótulo del último valor
   const max = ejeRedondo(Math.max(0, ...puntos.map((p) => p.valor)));
-  const plot = Math.max(0, ancho - EJE_Y);
+  const plot = Math.max(0, ancho - EJE_Y - 6);
   const banda = puntos.length ? plot / puntos.length : 0;
-  const w = Math.max(2, Math.min(24, banda - 2));
+  const x = (i: number) => EJE_Y + i * banda + banda / 2;
   const y = (v: number) => ARRIBA + ALTO - (v / max) * ALTO;
-  const marcasX = useMemo(() => (puntos.length ? [0, Math.floor((puntos.length - 1) / 2), puntos.length - 1] : []), [puntos.length]);
+  const marcasX = useMemo(() => (puntos.length ? [...new Set([0, Math.floor((puntos.length - 1) / 2), puntos.length - 1])] : []), [puntos.length]);
   useEffect(() => setActivo(null), [puntos]);
   const total = puntos.reduce((a, p) => a + p.valor, 0);
+  const trazo = puntos.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.valor).toFixed(1)}`).join(' ');
+  const area = puntos.length ? `${trazo} L${x(puntos.length - 1).toFixed(1)},${ARRIBA + ALTO} L${x(0).toFixed(1)},${ARRIBA + ALTO} Z` : '';
+  const ultimo = puntos.length - 1;
+  const conPuntero = activo ?? ultimo;
 
   return (
     <figure className="m-0">
       <figcaption className="mb-2 flex items-center justify-between gap-2">
         <span className="text-sm font-semibold text-slate-900 dark:text-white">{titulo}</span>
         <button type="button" onClick={() => setTabla((t) => !t)} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
-          {tabla ? <BarChart3 className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />} {tabla ? 'Ver gráfico' : 'Ver tabla'}
+          {tabla ? <LineChart className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />} {tabla ? 'Ver gráfico' : 'Ver tabla'}
         </button>
       </figcaption>
       {tabla ? (
-        <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-800">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-950"><tr><th className="px-3 py-1.5 text-left font-medium">Fecha</th><th className="px-3 py-1.5 text-right font-medium">{unidad}</th></tr></thead>
-            <tbody className="divide-y divide-slate-100 tabular-nums dark:divide-slate-800">
-              {[...puntos].reverse().map((p) => (
-                <tr key={p.clave} onClick={onSeleccionar ? () => onSeleccionar(p) : undefined} className={onSeleccionar ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800' : ''}>
-                  <td className="px-3 py-1">{p.etiqueta}</td><td className="px-3 py-1 text-right">{formato(p.valor)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <TablaSerie puntos={puntos} unidad={unidad} onSeleccionar={onSeleccionar} />
       ) : (
         <div ref={ref} className="relative" onPointerLeave={() => setActivo(null)}>
-          {ancho > 0 && (
-            <svg width={ancho} height={ARRIBA + ALTO + EJE_X} role="img" aria-label={`${titulo}: ${formato(total)} ${unidad} en total`}>
+          {ancho > 0 && puntos.length > 0 && (
+            <svg width={ancho} height={ARRIBA + ALTO + EJE_X} role="img" aria-label={`${titulo}: ${formato(total)} ${unidad} en total; último período ${puntos[ultimo].etiqueta}, ${formato(puntos[ultimo].valor)}`}>
               {[0, max / 2, max].map((v) => (
                 <g key={v}>
                   <line x1={EJE_Y} x2={ancho} y1={y(v) + 0.5} y2={y(v) + 0.5} className="stroke-slate-200 dark:stroke-slate-800" strokeWidth={1} />
                   <text x={EJE_Y - 6} y={y(v) + 4} textAnchor="end" className="fill-slate-500 text-[11px] tabular-nums">{compacto(v)}</text>
                 </g>
               ))}
-              {puntos.map((p, i) => {
-                const x = EJE_Y + i * banda + (banda - w) / 2;
-                const h = (p.valor / max) * ALTO;
-                return (
-                  <g key={p.clave}>
-                    {/* Zona sensible: toda la banda (más grande que la columna). */}
-                    <rect
-                      x={EJE_Y + i * banda} y={ARRIBA} width={banda} height={ALTO} fill="transparent"
-                      tabIndex={0} role="button" aria-label={`${p.etiqueta}: ${formato(p.valor)} ${unidad}`}
-                      onPointerEnter={() => setActivo(i)} onFocus={() => setActivo(i)} onBlur={() => setActivo(null)}
-                      onClick={onSeleccionar ? () => onSeleccionar(p) : undefined}
-                      onKeyDown={onSeleccionar ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSeleccionar(p); } } : undefined}
-                      className={`${onSeleccionar ? 'cursor-pointer' : 'cursor-default'} focus:outline-none`}
-                    />
-                    {h > 0 && <path d={columna(x, ARRIBA + ALTO - h, w, h)} className={`pointer-events-none fill-marca-600 ${activo !== null && activo !== i ? 'opacity-50' : ''}`} />}
-                  </g>
-                );
-              })}
+              <path d={area} className="pointer-events-none fill-grafico/10" />
+              <path d={trazo} fill="none" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" className="pointer-events-none stroke-grafico" />
+              {activo !== null && <line x1={x(activo)} x2={x(activo)} y1={ARRIBA} y2={ARRIBA + ALTO} className="pointer-events-none stroke-slate-300 dark:stroke-slate-600" strokeWidth={1} />}
+              {/* Punto del período activo (o del último), con anillo del color del fondo para que se lea sobre la línea. */}
+              <circle cx={x(conPuntero)} cy={y(puntos[conPuntero].valor)} r={4} strokeWidth={2} className="pointer-events-none fill-grafico stroke-white dark:stroke-slate-900" />
+              {activo === null && (
+                <text x={Math.min(x(ultimo), ancho - 2)} y={y(puntos[ultimo].valor) - 9} textAnchor="end" className="pointer-events-none fill-slate-700 text-[11px] font-semibold tabular-nums dark:fill-slate-200">{formato(puntos[ultimo].valor)}</text>
+              )}
+              {puntos.map((p, i) => (
+                // Zona sensible: toda la franja del período (mucho más grande que el punto).
+                <rect
+                  key={p.clave}
+                  x={EJE_Y + i * banda} y={ARRIBA} width={banda} height={ALTO} fill="transparent"
+                  tabIndex={0} role="button" aria-label={`${p.etiqueta}: ${formato(p.valor)} ${unidad}`}
+                  onPointerEnter={() => setActivo(i)} onPointerMove={() => setActivo(i)} onFocus={() => setActivo(i)} onBlur={() => setActivo(null)}
+                  onClick={onSeleccionar ? () => onSeleccionar(p) : undefined}
+                  onKeyDown={onSeleccionar ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSeleccionar(p); } } : undefined}
+                  className={`${onSeleccionar ? 'cursor-pointer' : 'cursor-default'} focus:outline-none`}
+                />
+              ))}
               {marcasX.map((i) => (
-                <text key={i} x={EJE_Y + i * banda + banda / 2} y={ARRIBA + ALTO + 16} textAnchor={i === 0 ? 'start' : i === puntos.length - 1 ? 'end' : 'middle'} className="fill-slate-500 text-[11px]">{puntos[i].etiqueta}</text>
+                <text key={i} x={x(i)} y={ARRIBA + ALTO + 16} textAnchor={i === 0 ? 'start' : i === ultimo ? 'end' : 'middle'} className="fill-slate-500 text-[11px]">{puntos[i].etiqueta}</text>
               ))}
             </svg>
           )}
@@ -115,7 +129,7 @@ export function Columnas({ puntos, unidad, titulo, onSeleccionar }: { puntos: Pu
             <div
               role="status"
               className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900"
-              style={{ left: Math.min(Math.max(EJE_Y + activo * banda + banda / 2, 60), ancho - 60) }}
+              style={{ left: Math.min(Math.max(x(activo), 70), ancho - 70) }}
             >
               <p className="text-sm font-semibold text-slate-900 dark:text-white">{formato(puntos[activo].valor)} {unidad}</p>
               <p className="text-slate-500">{puntos[activo].etiqueta}{onSeleccionar ? ' · toca para ver' : ''}</p>
@@ -124,6 +138,86 @@ export function Columnas({ puntos, unidad, titulo, onSeleccionar }: { puntos: Pu
         </div>
       )}
     </figure>
+  );
+}
+
+/** Clases por color de categoría (nombres completos para que Tailwind las genere). */
+const TRAZO_SERIE = ['stroke-serie-1', 'stroke-serie-2', 'stroke-serie-3', 'stroke-serie-4', 'stroke-serie-5', 'stroke-serie-6'];
+const FONDO_SERIE = ['bg-serie-1', 'bg-serie-2', 'bg-serie-3', 'bg-serie-4', 'bg-serie-5', 'bg-serie-6'];
+export const MAX_PARTES_ANILLO = TRAZO_SERIE.length;
+
+export interface ParteAnillo { clave: string; nombre: string; valor: number; /** Posición fija de la entidad (0–5): su color. */ color: number }
+
+/**
+ * Reparto de un total entre pocas partes (p. ej. unidades del mes por droguería). El centro dice el total (o la parte
+ * resaltada); la leyenda muestra cada parte con su valor y su porcentaje, y tocarla abre el detalle.
+ */
+export function Anillo({ partes, unidad, onSeleccionar }: { partes: ParteAnillo[]; unidad: string; onSeleccionar?: (clave: string) => void }) {
+  const [activa, setActiva] = useState<string | null>(null);
+  const total = partes.reduce((a, p) => a + p.valor, 0);
+  const TAM = 168;
+  const R = 70;
+  const GROSOR = 20;
+  const C = 2 * Math.PI * R;
+  const HUECO = partes.length > 1 ? 2 : 0; // 2px del color del fondo entre partes
+  let inicio = 0;
+  const arcos = partes.map((p) => {
+    const largo = total > 0 ? (p.valor / total) * C : 0;
+    const arco = { ...p, desde: inicio, visible: Math.max(0, largo - HUECO) };
+    inicio += largo;
+    return arco;
+  });
+  const resaltada = partes.find((p) => p.clave === activa) ?? null;
+  const pct = (v: number) => (total > 0 ? Math.round((v / total) * 100) : 0);
+
+  return (
+    <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center" onPointerLeave={() => setActiva(null)}>
+      <div className="relative shrink-0" style={{ width: TAM, height: TAM }}>
+        <svg width={TAM} height={TAM} viewBox={`0 0 ${TAM} ${TAM}`} role="img" aria-label={`Total ${formato(total)} ${unidad}: ${partes.map((p) => `${p.nombre} ${formato(p.valor)} (${pct(p.valor)}%)`).join(', ')}`}>
+          <g transform={`rotate(-90 ${TAM / 2} ${TAM / 2})`}>
+            {arcos.map((a) =>
+              a.visible > 0 ? (
+                <circle
+                  key={a.clave}
+                  cx={TAM / 2} cy={TAM / 2} r={R} fill="none" strokeWidth={GROSOR}
+                  strokeDasharray={`${a.visible} ${C - a.visible}`} strokeDashoffset={-(a.desde + HUECO / 2)}
+                  className={`${TRAZO_SERIE[a.color % TRAZO_SERIE.length]} transition-opacity ${activa && activa !== a.clave ? 'opacity-40' : ''} ${onSeleccionar ? 'cursor-pointer' : ''}`}
+                  style={{ pointerEvents: 'stroke' }}
+                  onPointerEnter={() => setActiva(a.clave)}
+                  onClick={onSeleccionar ? () => onSeleccionar(a.clave) : undefined}
+                />
+              ) : null
+            )}
+          </g>
+        </svg>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
+          <span className="text-xl font-semibold text-slate-900 dark:text-white">{formato(resaltada ? resaltada.valor : total)}</span>
+          <span className="line-clamp-2 text-xs text-slate-500">{resaltada ? `${resaltada.nombre} · ${pct(resaltada.valor)}%` : `${unidad} en total`}</span>
+        </div>
+      </div>
+      <ul className="flex w-full min-w-0 flex-col gap-1">
+        {partes.map((p) => {
+          const fila = (
+            <>
+              <span className={`h-2.5 w-2.5 shrink-0 rounded-sm ${FONDO_SERIE[p.color % FONDO_SERIE.length]}`} aria-hidden />
+              <span className="min-w-0 flex-1 truncate text-sm text-slate-700 dark:text-slate-200">{p.nombre}</span>
+              <span className="shrink-0 text-sm font-medium tabular-nums text-slate-900 dark:text-white">{formato(p.valor)}</span>
+              <span className="w-10 shrink-0 text-right text-xs tabular-nums text-slate-500">{pct(p.valor)}%</span>
+            </>
+          );
+          const clases = `flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left ${activa === p.clave ? 'bg-slate-100 dark:bg-slate-800' : ''}`;
+          return (
+            <li key={p.clave} onPointerEnter={() => setActiva(p.clave)}>
+              {onSeleccionar ? (
+                <button type="button" onClick={() => onSeleccionar(p.clave)} onFocus={() => setActiva(p.clave)} onBlur={() => setActiva(null)} aria-label={`${p.nombre}: ${formato(p.valor)} ${unidad}, ${pct(p.valor)}%. Ver detalle`} className={`${clases} hover:bg-slate-50 dark:hover:bg-slate-800`}>{fila}</button>
+              ) : (
+                <div className={clases}>{fila}</div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -142,7 +236,7 @@ export function BarrasRanking({ filas, unidad, vacio, onSeleccionar }: { filas: 
                   <span className="truncate text-sm text-slate-700 dark:text-slate-200">{f.nombre}</span>
                   <span className="shrink-0 text-sm font-medium tabular-nums text-slate-900 dark:text-white">{formato(f.valor)}</span>
                 </div>
-                <div className="mt-1 h-2 rounded-r bg-marca-600" style={{ width: `${Math.max(1, (f.valor / max) * 100)}%` }} aria-hidden />
+                <div className="mt-1 h-2 rounded-r bg-grafico" style={{ width: `${Math.max(1, (f.valor / max) * 100)}%` }} aria-hidden />
               </>
             );
             return onSeleccionar ? (
@@ -166,7 +260,7 @@ export function Medidor({ valor, total, rotulo, nota, onClick }: { valor: number
         <p className="text-sm text-slate-500"><span className="text-lg font-semibold text-slate-900 dark:text-white">{pct}%</span> · {formato(valor)} de {formato(total)}</p>
       </div>
       <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-marca-100 dark:bg-marca-950" role="meter" aria-valuemin={0} aria-valuemax={total} aria-valuenow={valor} aria-label={rotulo}>
-        <div className="h-full rounded-full bg-marca-600" style={{ width: `${Math.min(100, pct)}%` }} />
+        <div className="h-full rounded-full bg-grafico" style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       {nota && <p className="mt-1.5 text-xs text-slate-500">{nota}</p>}
     </Caja>

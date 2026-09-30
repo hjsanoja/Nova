@@ -5,7 +5,8 @@
  *   Safari/iOS no lo soporta: allí el envío lo dispara el evento "online" y la visibilidad de la pestaña.
  * Los datos (pedidos, catálogo) NO pasan por aquí: viven en IndexedDB y se sincronizan con Supabase.
  */
-const VERSION = 'nova-v3-4';
+// Al compilar, vite.config.ts pone aquí la versión de NOVA: cada versión estrena su caché y borra la anterior.
+const VERSION = 'nova-__VERSION_APP__';
 const ACTUAL = `${VERSION}-app`;
 const RAIZ = new URL('./', self.location).href;
 
@@ -43,6 +44,8 @@ self.addEventListener('fetch', (evento) => {
 
   // Supabase y cualquier API: nunca se cachean aquí.
   if (url.origin !== self.location.origin && !/fonts\.(googleapis|gstatic)\.com$/.test(url.hostname)) return;
+  // La versión publicada siempre se consulta en la red (es la que avisa que hay una versión nueva).
+  if (url.pathname.endsWith('/version.json')) return;
 
   if (req.mode === 'navigate') {
     evento.respondWith(

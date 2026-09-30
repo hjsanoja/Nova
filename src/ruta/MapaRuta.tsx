@@ -28,9 +28,13 @@ export function MapaRuta({ paradas, origen, onElegir }: { paradas: Parada[]; ori
     const g = capa.current;
     if (!m || !g) return;
     g.clearLayers();
+    // Colores de la marca en uso (azul o la paleta clásica): el mapa no lee las clases de Tailwind.
+    const estilo = getComputedStyle(document.documentElement);
+    const marca700 = estilo.getPropertyValue('--color-marca-700').trim() || '#1e53bc';
+    const marca600 = estilo.getPropertyValue('--color-marca-600').trim() || '#2a66db';
     const puntos: L.LatLngExpression[] = [];
     if (origen) {
-      L.circleMarker([origen.lat, origen.lon], { radius: 8, color: '#ffffff', weight: 3, fillColor: '#2563eb', fillOpacity: 1 }).bindTooltip('Estás aquí').addTo(g);
+      L.circleMarker([origen.lat, origen.lon], { radius: 8, color: '#ffffff', weight: 3, fillColor: '#0f172a', fillOpacity: 1 }).bindTooltip('Estás aquí').addTo(g);
       puntos.push([origen.lat, origen.lon]);
     }
     let n = 0;
@@ -40,14 +44,14 @@ export function MapaRuta({ paradas, origen, onElegir }: { paradas: Parada[]; ori
       n++;
       const icono = L.divIcon({
         className: '',
-        html: `<span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9999px;border:2px solid #fff;font:600 12px Inter,sans-serif;color:#fff;background:${p.visitadaHoy ? '#64748b' : '#0f766e'};box-shadow:0 1px 3px rgba(0,0,0,.4)">${p.visitadaHoy ? '✓' : n}</span>`,
+        html: `<span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9999px;border:2px solid #fff;font:600 12px Inter,sans-serif;color:#fff;background:${p.visitadaHoy ? '#64748b' : marca700};box-shadow:0 1px 3px rgba(0,0,0,.4)">${p.visitadaHoy ? '✓' : n}</span>`,
         iconSize: [28, 28],
         iconAnchor: [14, 14],
       });
       L.marker([c.lat, c.lon], { icon: icono, title: c.nombre_comercial }).bindTooltip(c.nombre_comercial).on('click', () => onElegir(c.id)).addTo(g);
       puntos.push([c.lat, c.lon]);
     }
-    if (puntos.length > 1) L.polyline(puntos, { color: '#0d9488', weight: 3, opacity: 0.7, dashArray: '6 6' }).addTo(g);
+    if (puntos.length > 1) L.polyline(puntos, { color: marca600, weight: 3, opacity: 0.7, dashArray: '6 6' }).addTo(g);
     if (puntos.length) m.fitBounds(L.latLngBounds(puntos), { padding: [30, 30], maxZoom: 15 });
   }, [paradas, origen, onElegir]);
 

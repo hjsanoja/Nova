@@ -39,6 +39,9 @@ export const TABLAS_EN_VIVO = [
 
 export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync {
   let enCurso: Promise<ResultadoFlush | null> | null = null;
+  // Algo pidió sincronizar mientras había un ciclo en marcha (p. ej. se envió un pedido): se repite al terminar.
+  let repetir: { soloEnviar: boolean } | null = null;
+  let detenido = false;
   let debounce: ReturnType<typeof setTimeout> | undefined;
   let esperaAviso: ReturnType<typeof setTimeout> | undefined;
   let enVivo = false;
@@ -80,7 +83,10 @@ export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync
   }
 
   function sincronizarAhora(opciones: { soloEnviar?: boolean } = {}): Promise<ResultadoFlush | null> {
-    if (enCurso) return enCurso;
+    if (enCurso) {
+      repetir = { soloEnviar: (repetir ? repetir.soloEnviar : true) && !!opciones.soloEnviar };
+      return enCurso;
+    }
     const ejecutar = async () => {
       // Web Locks: dos pestañas abiertas no envían a la vez (igual sería seguro por idempotencia, pero desperdicia red).
       const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
@@ -92,6 +98,9 @@ export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync
     };
     enCurso = ejecutar().finally(() => {
       enCurso = null;
+      const otra = repetir;
+      repetir = null;
+      if (otra && !detenido) void sincronizarAhora(otra);
     });
     return enCurso;
   }
@@ -159,6 +168,8 @@ export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync
   }
 
   function detener() {
+    detenido = true;
+    repetir = null;
     clearTimeout(debounce);
     clearTimeout(esperaAviso);
     temporizadores.forEach(clearInterval);
@@ -189,10 +200,14 @@ export function solicitarSync(): void {
   }
 }
 
-export function detenerMotor(): void {
-  motorActual?.detener();
-  motorActual = null;
+/** Detiene el motor indicado (o el actual). Detener un motor viejo nunca apaga al que lo reemplazó. */
+export function detenerMotor(motor: MotorSync | null = motorActual): void {
+  motor?.detener();
+  if (motor === motorActual) motorActual = null;
 }
+
+/** ¿Hay un motor en marcha? (pruebas y diagnóstico) */
+export const hayMotorEnMarcha = (): boolean => motorActual !== null;
 
 /** Sincroniza ya (envío + descarga) y devuelve cuando termina. Para botones "Actualizar". */
 export async function sincronizarYa(): Promise<void> {

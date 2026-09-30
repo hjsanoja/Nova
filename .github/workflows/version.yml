@@ -1,0 +1,19 @@
+# Cada PR hacia main publica una versión nueva de NOVA: la agrega arriba en src/novedades.json (ajuste +0.1, cambio
+# grande siguiente entero) y la misma en package.json. Si falta, esta revisión falla y dice qué número poner.
+name: Versión
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/verificar-version.mjs origin/${{ github.base_ref }}

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Usuario } from '../types/pharmacy';
 import { getSupabaseClient } from './supabaseClient';
 import { cargarPerfilUsuario } from './nubeV3';
+import { VERSION } from '../version';
 
 /**
  * Sesión de la app. Con Supabase configurado, entrar exige correo y contraseña de una cuenta ACTIVA en dim_usuarios;
@@ -38,7 +39,7 @@ async function usuarioDesdePerfil(sb: SupabaseClient, id: string, email: string,
   const perfil = await cargarPerfilUsuario(sb, id);
   if (!perfil) throw new Error('Tu cuenta aún no está activada. Pide a un administrador que le asigne rol y equipo.');
   if (!perfil.activo) throw new Error('Tu cuenta está desactivada. Pide a un administrador que la active.');
-  return { id, email, nombre_completo: perfil.nombre_completo, rol: perfil.rol, equipo: perfil.equipo, telefono: perfil.telefono, activo: true, created_at: creado };
+  return { id, email, nombre_completo: perfil.nombre_completo, rol: perfil.rol, equipo: perfil.equipo, telefono: perfil.telefono, activo: true, created_at: creado, guia_vista_en: perfil.guia_vista_en };
 }
 
 /** "Android · Chrome", "Windows · Edge"… (sin datos personales): para el reporte de accesos. */
@@ -54,7 +55,11 @@ function dispositivo(): string {
 function registrarAcceso(evento: 'inicio_sesion' | 'apertura', sb: SupabaseClient | null = getSupabaseClient()): void {
   if (!sb || typeof sb.rpc !== 'function') return;
   try {
-    void Promise.resolve(sb.rpc('registrar_acceso', { p_evento: evento, p_dispositivo: dispositivo() })).catch(() => undefined);
+    const base = { p_evento: evento, p_dispositivo: dispositivo() };
+    // Con la versión de la app (reporte de accesos). Si la base aún no tiene esa columna, se registra sin ella.
+    void Promise.resolve(sb.rpc('registrar_acceso', { ...base, p_version: VERSION }))
+      .then((r) => (r && (r as { error?: unknown }).error ? sb.rpc('registrar_acceso', base) : r))
+      .catch(() => undefined);
   } catch {
     /* el registro de accesos nunca impide entrar */
   }

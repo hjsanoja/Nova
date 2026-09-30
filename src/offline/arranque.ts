@@ -12,15 +12,21 @@ import type { SyncRemote } from './remoto';
  *
  * Con Supabase configurado descarga y envía datos; sin él, siembra datos de demostración y trabaja en local.
  */
-export async function iniciarOffline(crearRemoto: (() => Promise<SyncRemote | null>) | null, usuarioId = 'anonimo'): Promise<() => void> {
+export async function iniciarOffline(crearRemoto: (() => Promise<SyncRemote | null>) | null, usuarioId = 'anonimo', senal?: AbortSignal): Promise<() => void> {
+  const nada = () => undefined;
   const db = obtenerDb();
   const remoto = crearRemoto ? await crearRemoto() : null;
+  // Un arranque que ya no hace falta (la pantalla se volvió a montar, cambió la sesión) no toca nada: si arrancara, podría
+  // apagar al motor del arranque vigente y la cola dejaría de enviarse.
+  if (senal?.aborted) return nada;
   // Otra persona en el mismo dispositivo: se vacía lo local para que no vea el fichero de la anterior.
   await prepararDispositivoPara(db, usuarioId);
+  if (senal?.aborted) return nada;
   if (!remoto) await sembrarDatosDemo(db);
   // Cada sesión refresca por completo la lista de farmacias, los comunicados y las metas: si le quitaron una farmacia del
   // fichero o un comunicado ya no va dirigido a esta persona, deja de aparecer.
   else await db.meta.bulkDelete(['cursor:dim_clientes', 'cursor:comunicados', 'cursor:metas']);
+  if (senal?.aborted) return nada;
 
   // Contadores en vivo para el indicador del encabezado (sin polling).
   const sub = liveQuery(() => db.outbox.toArray()).subscribe({
@@ -32,9 +38,9 @@ export async function iniciarOffline(crearRemoto: (() => Promise<SyncRemote | nu
     error: () => undefined,
   });
 
-  arrancarMotor(db, remoto);
+  const motor = arrancarMotor(db, remoto);
   return () => {
     sub.unsubscribe();
-    detenerMotor();
+    detenerMotor(motor);
   };
 }
