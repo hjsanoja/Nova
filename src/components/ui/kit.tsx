@@ -184,6 +184,14 @@ export function Vacio({ icono: Icono, titulo, texto, accion }: { icono?: LucideI
   );
 }
 
+/** Variación vs. un período anterior: ↑ 12% (verde si subir es bueno). */
+export function Variacion({ pct, periodo, subirEsBueno = true }: { pct: number | null; periodo: string; subirEsBueno?: boolean }) {
+  if (pct === null) return <span className="text-slate-500">Sin datos de {periodo}</span>;
+  const bueno = pct === 0 ? null : (pct > 0) === subirEsBueno;
+  const color = bueno === null ? 'text-slate-500' : bueno ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400';
+  return <span><span className={`font-medium ${color}`}>{pct > 0 ? '↑' : pct < 0 ? '↓' : '='} {Math.abs(pct)}%</span> <span className="text-slate-500">vs {periodo}</span></span>;
+}
+
 /** Indicador: rótulo, cifra y (opcional) variación o nota. */
 export function Dato({ rotulo, valor, tono, nota, icono: Icono }: { rotulo: string; valor: React.ReactNode; tono?: Tono; nota?: React.ReactNode; icono?: LucideIcon }) {
   const t = tono ? (ALIAS_TONO as Record<string, string>)[tono] ?? tono : undefined;
@@ -194,7 +202,7 @@ export function Dato({ rotulo, valor, tono, nota, icono: Icono }: { rotulo: stri
         {Icono && <Icono className="h-3.5 w-3.5" aria-hidden />}
         {rotulo}
       </p>
-      <p className={`mt-1 text-2xl font-bold tabular-nums leading-tight ${color}`}>{valor}</p>
+      <p className={`mt-1 text-2xl font-semibold leading-tight ${color}`}>{valor}</p>
       {nota && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{nota}</p>}
     </div>
   );
