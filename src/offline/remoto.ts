@@ -24,13 +24,18 @@ export interface OpcionesTraer {
   filtro?: Record<string, string>;
   /** Cota inferior sobre una columna (col >= valor): p. ej. solo los últimos meses del consolidado de compras. */
   minimo?: Record<string, string>;
+  /**
+   * Paginación por llave (updated_at, id): filas estrictamente posteriores a esta. Evita atascarse cuando cientos de filas
+   * comparten casi la misma hora (una carga masiva escribe miles en el mismo segundo). Si viene, reemplaza a `desde`.
+   */
+  despuesDe?: { updated_at: string; id: string };
 }
 
 /** Puerto hacia el servidor. La cola y el motor de sync dependen solo de esta interfaz (fácil de probar). */
 export interface SyncRemote {
   /** Ejecuta una mutación (RPC idempotente) y devuelve la respuesta del servidor. */
   ejecutar(tipo: TipoOutbox, payload: Record<string, unknown>): Promise<FilaRemota>;
-  /** Filas modificadas después de `desde` (ordenadas por updated_at ascendente). */
+  /** Filas modificadas después de `desde` (ordenadas por updated_at e id ascendentes). */
   traer(tabla: string, desde: string | null, limite: number, opciones?: OpcionesTraer): Promise<FilaRemota[]>;
   traerPorId(tabla: string, id: string, seleccion?: string): Promise<FilaRemota | null>;
   haySesion(): Promise<boolean>;

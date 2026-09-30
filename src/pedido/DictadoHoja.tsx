@@ -188,7 +188,7 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
                     {l.producto_id && l.confianza < 0.8 && <Etiqueta tono="aviso">Revisar</Etiqueta>}
                     {!l.opciones.length && <Etiqueta tono="peligro">Sin coincidencias</Etiqueta>}
                   </p>
-                  <PasoUnidades valor={l.unidades} onChange={(n) => cambiarLinea(i, { unidades: n })} paso={Math.max(1, porId.get(l.producto_id)?.empaque_minimo ?? 1)} min={1} compacto />
+                  <PasoUnidades valor={l.unidades} onChange={(n) => cambiarLinea(i, { unidades: n })} paso={1} min={1} compacto />
                 </div>
               </li>
             ))}

@@ -64,3 +64,21 @@ describe('varios carritos (uno por farmacia)', () => {
     expect(faltaParaEnviar(listo.carritos[0])).toEqual([]);
   });
 });
+
+describe('descuento manual por línea', () => {
+  it('el vendedor fija el % de una línea y puede volver al automático', async () => {
+    const { descuentoDeLinea } = await import('./useCarritos');
+    let s: EstadoCarritos = reductorCarritos(SIN_CARRITOS, { tipo: 'agregar_varios', cliente_id: 'c1', id: 'k', lineas: [{ producto_id: 'p1', unidades: 1 }, { producto_id: 'p2', unidades: 3 }] });
+    s = reductorCarritos(s, { tipo: 'descuento', carrito_id: 'k', producto_id: 'p1', pct: 7.5 });
+    const [l1, l2] = s.carritos[0].lineas;
+    expect(l1.descuento_pct).toBe(7.5);
+    expect(descuentoDeLinea(l1, 5)).toBe(7.5); // lo manual manda
+    expect(descuentoDeLinea(l2, 5)).toBe(5); // sin escribir: el automático
+    s = reductorCarritos(s, { tipo: 'descuento', carrito_id: 'k', producto_id: 'p1', pct: 0 });
+    expect(descuentoDeLinea(s.carritos[0].lineas[0], 5)).toBeNull(); // 0 = sin descuento
+    s = reductorCarritos(s, { tipo: 'descuento', carrito_id: 'k', producto_id: 'p1', pct: 250 });
+    expect(s.carritos[0].lineas[0].descuento_pct).toBe(100);
+    s = reductorCarritos(s, { tipo: 'descuento', carrito_id: 'k', producto_id: 'p1', pct: null });
+    expect(descuentoDeLinea(s.carritos[0].lineas[0], 5)).toBe(5);
+  });
+});

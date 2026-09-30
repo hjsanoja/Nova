@@ -114,4 +114,20 @@ describe('descuentos por producto', () => {
     const e = evaluarPedido(R, c);
     expect(e.violaciones.map((v) => ('producto_id' in v ? v.producto_id : ''))).toEqual(['2']); // el 15% solo vale para el producto 1
   });
+
+  it('a todos los productos desde un mínimo por SKU: el que no llega queda sin descuento', () => {
+    const T = [regla('todos-10', 5, [], { min_unidades_producto: 10 })];
+    const c = ctx([linea('1', 10), linea('2', 10), linea('3', 12), linea('4', 5)]);
+    const d = descuentosPorProducto(T, c);
+    expect([...d.keys()].sort()).toEqual(['1', '2', '3']);
+    expect(d.get('4')).toBeUndefined();
+    expect(ofertaDeProducto(T, '9', { hoy: '2026-09-30' })).toEqual({ pct: 5, desde: 10 });
+    // El servidor valida igual: 5% en la línea de 5 unidades excede el tope.
+    const e = evaluarPedido(T, ctx([linea('1', 10, 5), linea('4', 5, 5)]));
+    expect(e.violaciones.map((v) => ('producto_id' in v ? v.producto_id : ''))).toEqual(['4']);
+  });
+
+  it('una regla de línea sin productos ni mínimo es solo un tope (no se aplica sola)', () => {
+    expect(descuentosPorProducto([regla('tope', 7, [])], ctx([linea('1', 50)])).size).toBe(0);
+  });
 });

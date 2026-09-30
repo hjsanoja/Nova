@@ -139,4 +139,26 @@ describe('exportación por droguería', () => {
     const r = generarArchivoDrogueria(entrada(FORMATO_CSV, { mapProductos: [{ id: 'm1', drogueria_id: 'cobeca', producto_id: '1', codigo_drogueria: 'A', descripcion_drogueria: '=HYPERLINK("x")' }, { id: 'm2', drogueria_id: 'cobeca', producto_id: '2', codigo_drogueria: 'B', descripcion_drogueria: 'ok' }] }));
     expect(r.texto).toContain(`"'=HYPERLINK(""x"")"`);
   });
+
+  it('escribe los descuentos del producto, del pedido y el total encadenado', () => {
+    const formato: FormatoExport = {
+      ...FORMATO_CSV,
+      entrecomillado: 'nunca',
+      decimal: 'coma',
+      columnas: [
+        { encabezado: 'COD', origen: 'codigo_producto_drogueria' },
+        { encabezado: 'DESC_PROD', origen: 'descuento_linea' },
+        { encabezado: 'DESC_PED', origen: 'descuento_pedido' },
+        { encabezado: 'DESC_TOT', origen: 'descuento_total' },
+        { encabezado: 'DESC_ENT', origen: 'descuento_linea', formato: 'entero' },
+      ],
+    };
+    const e = entrada(formato, {
+      pedido: { correlativo: 'PED-1', created_at: '2026-09-30T10:00:00', observaciones: null, estado: 'enviado_teletransferencia', descuento_pedido_pct: 5 },
+      detalles: [{ ...det('a', 1, '1', 10, null), descuento_pct: 10 }, det('b', 2, '2', 5, null)],
+    });
+    const r = generarArchivoDrogueria(e);
+    expect(r.ok).toBe(true);
+    expect(r.texto.split('\r\n').slice(0, 3)).toEqual(['COD;DESC_PROD;DESC_PED;DESC_TOT;DESC_ENT', 'COB-LOS;10;5;14,5;10', 'COB-ATO;0;5;5;0']);
+  });
 });

@@ -7,7 +7,7 @@ import { calcularSugerido, productosComprados } from '../offline/sugerido';
 import { useLive } from '../offline/useLive';
 import { useEstadoSync } from '../offline/syncStore';
 import type { ReglaComercial } from '../offline/politicas';
-import { ofertaDeProducto } from '../offline/politicas';
+import { esDescuentoPorProducto, ofertaDeProducto } from '../offline/politicas';
 import type { LocalCliente, LocalDrogueria, LocalPlantilla, LocalProducto } from '../offline/types';
 import { codigoDeFarmacia, registrarCodigoFarmacia } from '../offline/homologacion';
 import { eliminarPlantilla, guardarPlantilla } from '../offline/plantillas';
@@ -227,7 +227,7 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
                 { id: 'todos', texto: 'Todos' },
                 ...(cliente ? [{ id: 'sugeridos' as const, texto: `Sugeridos${sugeridos.length ? ` (${sugeridos.length})` : ''}` }, { id: 'comprados' as const, texto: 'Lo que compra' }] : []),
                 { id: 'prioritarios', texto: 'Prioritarios' },
-                ...(reglas.some((r) => r.alcance === 'linea' && (r.productos?.length ?? 0) > 0) ? [{ id: 'ofertas' as const, texto: 'Con descuento' }] : []),
+                ...(reglas.some(esDescuentoPorProducto) ? [{ id: 'ofertas' as const, texto: 'Con descuento' }] : []),
               ]}
             />
           </div>
@@ -348,7 +348,7 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
             onCodigo={async (codigo) => {
               const p = await buscarPorCodigo(db, codigo);
               if (!p) return mostrar({ tipo: 'error', texto: `El código ${codigo} no está en el catálogo.` });
-              agregar(p.id, Math.max(1, p.empaque_minimo));
+              agregar(p.id, 1);
               mostrar({ tipo: 'ok', texto: `Agregado: ${p.nombre_comercial}` });
             }}
           />

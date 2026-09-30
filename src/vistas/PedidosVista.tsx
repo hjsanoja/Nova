@@ -11,7 +11,7 @@ import { reruteoLocal } from '../offline/pedidos';
 import { solicitarSync } from '../offline/motor';
 import { Sheet } from '../components/capture/Sheet';
 import { BarraSeleccion, Boton, Casilla, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useDebounced, useSeleccion } from '../components/ui/kit';
-import { contarPorGrupo, detallesPorPedido, ESTADOS_ETIQUETA, filtrarPedidos, GRUPOS_ESTADO, unidadesDePedido } from './logica';
+import { contarPorGrupo, detallesPorPedido, ESTADOS_ETIQUETA, fechaHoraCorta, filtrarPedidos, GRUPOS_ESTADO, nombreDeProducto, unidadesDePedido } from './logica';
 import type { GrupoEstado } from './logica';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos } from './useDatos';
 
@@ -40,6 +40,8 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
   const productos = useProductos();
   const [grupo, setGrupo] = useState<GrupoEstado>('todos');
   const [texto, setTexto] = useState('');
+  const [filtroCliente, setFiltroCliente] = useState('');
+  const [filtroDrogueria, setFiltroDrogueria] = useState('');
   const q = useDebounced(texto, 150);
   const [abierto, setAbierto] = useState<string | null>(null);
   const { mostrar, nodo } = useAviso();
@@ -55,8 +57,21 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
   }, [clientes]);
   const nombreDrogueria = (id: string) => droguerias.find((d) => d.id === id)?.nombre ?? 'Droguería';
   const porPedido = useMemo(() => detallesPorPedido(detalles), [detalles]);
-  const cuentas = useMemo(() => contarPorGrupo(pedidos), [pedidos]);
-  const lista = useMemo(() => filtrarPedidos(pedidos, { grupo, texto: q }, nombreCliente).slice(0, 200), [pedidos, grupo, q, nombreCliente]);
+  // Opciones de los filtros: solo las farmacias y droguerías que aparecen en estos pedidos.
+  const farmaciasConPedidos = useMemo(
+    () => [...new Set(pedidos.map((p) => p.cliente_id))].map((id) => ({ id, nombre: nombreCliente(id) })).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')),
+    [pedidos, nombreCliente]
+  );
+  const drogueriasConPedidos = useMemo(() => {
+    const ids = new Set(pedidos.map((p) => p.drogueria_id));
+    return droguerias.filter((d) => ids.has(d.id)).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  }, [pedidos, droguerias]);
+  const filtrados = useMemo(
+    () => filtrarPedidos(pedidos, { grupo: 'todos', texto: '', clienteId: filtroCliente || null, drogueriaId: filtroDrogueria || null }, nombreCliente),
+    [pedidos, filtroCliente, filtroDrogueria, nombreCliente]
+  );
+  const cuentas = useMemo(() => contarPorGrupo(filtrados), [filtrados]);
+  const lista = useMemo(() => filtrarPedidos(filtrados, { grupo, texto: q }, nombreCliente).slice(0, 200), [filtrados, grupo, q, nombreCliente]);
   const actual = abierto ? todos.find((p) => p.id === abierto) : undefined;
   const idsLista = lista.map((p) => p.id);
 
@@ -85,9 +100,20 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
       {nodo}
       {nodoConfirmar}
       <Segmentado opciones={GRUPOS_ESTADO.map((g) => ({ id: g.id, texto: g.texto, cuenta: cuentas[g.id] }))} valor={grupo} onChange={setGrupo} />
-      <div className="relative mb-3 max-w-md">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar por número o farmacia" aria-label="Buscar pedido" className={`${estiloInput} pl-9`} />
+      <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar por número o farmacia" aria-label="Buscar pedido" className={`${estiloInput} pl-9`} />
+        </div>
+        <select value={filtroCliente} onChange={(e) => setFiltroCliente(e.target.value)} aria-label="Filtrar por farmacia" className={estiloInput}>
+          <option value="">Todas las farmacias</option>
+          {farmaciasConPedidos.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+        </select>
+        <select value={filtroDrogueria} onChange={(e) => setFiltroDrogueria(e.target.value)} aria-label="Filtrar por droguería" className={estiloInput}>
+          <option value="">Todas las droguerías</option>
+          {drogueriasConPedidos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+        </select>
+        {(filtroCliente || filtroDrogueria) && <Boton variante="fantasma" onClick={() => { setFiltroCliente(''); setFiltroDrogueria(''); }}>Quitar filtros</Boton>}
       </div>
 
       {puedeEliminar && (
@@ -121,7 +147,7 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{nombreCliente(p.cliente_id)}</p>
                       <p className="truncate text-xs text-slate-500">
-                        {p.correlativo} · {nombreDrogueria(p.drogueria_id)} · {u.solicitadas} uds · {new Date(p.created_at).toLocaleDateString('es', { day: '2-digit', month: 'short' })}
+                        {p.correlativo} · {nombreDrogueria(p.drogueria_id)} · {u.solicitadas} uds · {fechaHoraCorta(p.created_at)}
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
@@ -142,7 +168,10 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
             pedido={actual}
             cliente={nombreCliente(actual.cliente_id)}
             drogueria={nombreDrogueria(actual.drogueria_id)}
-            lineas={(porPedido.get(actual.id) ?? []).map((d) => ({ ...d, nombre: productos.find((p) => p.id === d.producto_id)?.nombre_comercial ?? 'Producto', sku: productos.find((p) => p.id === d.producto_id)?.sku ?? '' }))}
+            lineas={(porPedido.get(actual.id) ?? []).map((d) => {
+              const prod = productos.find((p) => p.id === d.producto_id);
+              return { ...d, nombre: nombreDeProducto(prod), sku: [prod?.presentacion ? prod.nombre_comercial : null, prod?.sku].filter(Boolean).join(' · ') };
+            })}
             origen={actual.parent_pedido_id ? todos.find((p) => p.id === actual.parent_pedido_id)?.correlativo : undefined}
             puedeRerutear={(esVendedor && actual.vendedor_id === usuario.id) || usuario.rol === 'admin'}
             otrasDroguerias={droguerias.filter((d) => d.activo && d.id !== actual.drogueria_id)}
@@ -174,7 +203,7 @@ function Detalle({
   pedido: LocalPedido;
   cliente: string;
   drogueria: string;
-  lineas: { id: string; nombre: string; sku: string; unidades_solicitadas: number; unidades_confirmadas: number | null; unidades_pendientes: number; motivo_ajuste: string; remanente_derivado_en?: string | null }[];
+  lineas: { id: string; nombre: string; sku: string; descuento_pct?: number | null; unidades_solicitadas: number; unidades_confirmadas: number | null; unidades_pendientes: number; motivo_ajuste: string; remanente_derivado_en?: string | null }[];
   origen?: string;
   puedeRerutear: boolean;
   otrasDroguerias: { id: string; nombre: string }[];
@@ -196,6 +225,7 @@ function Detalle({
       <p className="text-xs text-slate-500">
         {new Date(p.created_at).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })}
         {p.numero_factura ? ` · Factura ${p.numero_factura}` : ''}
+        {p.descuento_pedido_pct ? ` · Descuento del pedido ${p.descuento_pedido_pct}%` : ''}
         {origen ? ` · Deriva de ${origen}` : ''}
       </p>
 
@@ -215,12 +245,13 @@ function Detalle({
       <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 text-left text-slate-500 dark:bg-slate-800/60">
-            <tr><th className="px-2.5 py-1.5">Producto</th><th className="px-2 text-right">Pedidas</th><th className="px-2 text-right">Confirmadas</th></tr>
+            <tr><th className="px-2.5 py-1.5">Presentación</th><th className="px-2 text-right">Desc.</th><th className="px-2 text-right">Pedidas</th><th className="px-2 text-right">Confirmadas</th></tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {lineas.map((l) => (
               <tr key={l.id}>
                 <td className="px-2.5 py-1.5"><span className="font-semibold">{l.nombre}</span><span className="block text-xs text-slate-400">{l.sku}{l.unidades_pendientes > 0 && l.unidades_confirmadas != null ? ` · ${MOTIVOS[l.motivo_ajuste] ?? ''}` : ''}</span></td>
+                <td className="px-2 text-right">{l.descuento_pct ? `${l.descuento_pct}%` : '—'}</td>
                 <td className="px-2 text-right">{l.unidades_solicitadas}</td>
                 <td className={`px-2 text-right ${l.unidades_confirmadas != null && l.unidades_pendientes > 0 ? 'font-semibold text-amber-600' : ''}`}>{l.unidades_confirmadas ?? '—'}</td>
               </tr>

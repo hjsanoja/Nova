@@ -65,6 +65,12 @@ export interface ResultadoEnvio {
   error?: string;
 }
 
+/** % final de una línea: el que escribió el vendedor manda sobre el automático; 0 = sin descuento. */
+export function descuentoDeLinea(l: { descuento_pct?: number | null }, automatico: number | undefined): number | null {
+  const pct = l.descuento_pct != null ? l.descuento_pct : automatico ?? null;
+  return pct && pct > 0 ? pct : null;
+}
+
 /**
  * Convierte los carritos en pedidos (sin conexión: quedan en la cola y se envían al volver la señal). Cada pedido lleva
  * el descuento de la mejor condición comercial que cumple. Un carrito que falla no impide enviar los demás.
@@ -88,7 +94,7 @@ export async function enviarCarritos(
         {
           cliente_id: c.cliente_id,
           drogueria_id: c.drogueria_id,
-          lineas: c.lineas.map((l) => ({ producto_id: l.producto_id, unidades: l.unidades, descuento_pct: porProducto.get(l.producto_id)?.pct ?? null })),
+          lineas: c.lineas.map((l) => ({ producto_id: l.producto_id, unidades: l.unidades, descuento_pct: descuentoDeLinea(l, porProducto.get(l.producto_id)?.pct) })),
           observaciones: c.observaciones.trim() || null,
           condicion_comercial_id: aplicada?.regla.id ?? null,
           descuento_pedido_pct: aplicada?.pct ?? null,

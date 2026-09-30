@@ -22,26 +22,30 @@ export const TarjetaProducto = memo(function TarjetaProducto({
   oferta?: { pct: number; desde: number | null } | null;
   onAgregar: (unidades: number) => void;
 }) {
-  const paso = Math.max(1, p.empaque_minimo);
-  const [unidades, setUnidades] = useState(sugerido && sugerido > 0 ? sugerido : paso);
+  // Siempre arranca en 1 unidad; el vendedor la cambia. El sugerido se usa tocando su etiqueta.
+  const [unidades, setUnidades] = useState(1);
   return (
     <article className="flex gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
       <Avatar nombre={p.nombre_comercial} foto={p.foto_url} tamano={64} cuadrado />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="min-w-0">
           <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900 dark:text-white">{p.nombre_comercial}</h3>
-          <p className="truncate text-xs text-slate-500">{[p.presentacion, p.sku].filter(Boolean).join(' · ')}</p>
+          <p className="truncate text-xs text-slate-500">{[p.presentacion, p.sku, p.empaque_minimo > 1 ? `Empaque x${p.empaque_minimo}` : null].filter(Boolean).join(' · ')}</p>
           {(p.es_prioritario || loCompra || sugerido || oferta) && (
             <div className="mt-1 flex flex-wrap gap-1">
               {oferta && <Etiqueta tono="exito">−{oferta.pct}%{oferta.desde ? ` desde ${oferta.desde}` : ''}</Etiqueta>}
-              {sugerido ? <Etiqueta tono="marca">Sugerido: {sugerido}</Etiqueta> : null}
+              {sugerido ? (
+                <button type="button" onClick={() => setUnidades(sugerido)} title="Usar las unidades sugeridas" className="rounded-full focus-visible:outline-2 focus-visible:outline-marca-600">
+                  <Etiqueta tono="marca">Sugerido: {sugerido}</Etiqueta>
+                </button>
+              ) : null}
               {loCompra && !sugerido && <Etiqueta tono="neutro">Lo compra</Etiqueta>}
               {p.es_prioritario && <Etiqueta tono="aviso">Prioritario</Etiqueta>}
             </div>
           )}
         </div>
         <div className="mt-auto flex flex-wrap items-center gap-2">
-          <PasoUnidades valor={unidades} onChange={setUnidades} paso={paso} min={paso} compacto etiqueta={`Unidades de ${p.nombre_comercial}`} />
+          <PasoUnidades valor={unidades} onChange={setUnidades} paso={1} min={1} compacto etiqueta={`Unidades de ${p.nombre_comercial}`} />
           <Boton tamano="sm" variante={enCarrito ? 'secundario' : 'primario'} icono={Plus} onClick={() => onAgregar(unidades)} aria-label={`Agregar ${unidades} de ${p.nombre_comercial}`}>
             Agregar
           </Boton>

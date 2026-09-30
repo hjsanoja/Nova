@@ -93,6 +93,10 @@ export type OrigenColumnaExport =
   | 'observaciones'
   | 'linea'
   | 'precio_base'
+  | 'presentacion_producto'
+  | 'descuento_linea'
+  | 'descuento_pedido'
+  | 'descuento_total'
   | 'constante';
 
 export interface ColumnaExport {
