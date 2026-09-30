@@ -1,10 +1,9 @@
-# Publica la app en GitHub Pages en cada cambio de main (https://<usuario>.github.io/<repositorio>/).
-# Requisito, una sola vez: Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# Publica la app en GitHub Pages (https://<usuario>.github.io/<repositorio>/). Se lanza a mano: Actions → este flujo → Run workflow.
+# Requisitos: Settings → Pages → Source: "GitHub Actions"; y el repositorio público o un plan de pago (Pages no funciona
+# con repositorios privados en el plan gratuito). Para publicar en cada cambio de main, añadir `push: branches: [main]`.
 name: Publicar en GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
