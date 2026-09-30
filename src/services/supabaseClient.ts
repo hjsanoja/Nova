@@ -47,58 +47,25 @@ export function crearClienteSinSesion(): SupabaseClient | null {
 }
 
 /**
- * Prueba la conectividad real contra el proyecto Supabase consultando dim_droguerias
+ * Comprueba que el esquema de NOVA esté instalado consultando dim_droguerias (petición HEAD: sin cuerpo en la respuesta,
+ * por eso se decide por el código HTTP y no por el mensaje, que llega vacío).
  */
-export async function probarConexionSupabase(): Promise<{ ok: boolean; mensaje: string }> {
-  const client = getSupabaseClient();
-  if (!client) {
-    return {
-      ok: false,
-      mensaje: 'Faltan credenciales de Supabase (URL o Anon Key no configuradas).',
-    };
-  }
-
+export async function probarConexionSupabase(client: SupabaseClient | null = getSupabaseClient()): Promise<{ ok: boolean; mensaje: string }> {
+  if (!client) return { ok: false, mensaje: 'Faltan la URL o la clave de Supabase.' };
   try {
-    const { error } = await client
-      .from('dim_droguerias')
-      .select('codigo', { count: 'exact', head: true });
-
-    if (error) {
-      if (error.message.includes('Invalid path')) {
-        return {
-          ok: false,
-          mensaje: 'URL de Supabase inválida: pegaste la URL del navegador o una ruta errónea. Debe ser exactamente https://[id-de-tu-proyecto].supabase.co',
-        };
-      }
-      if (error.message.includes('relation') || error.message.includes('schema cache') || error.code === '42P01') {
-        return {
-          ok: true,
-          mensaje: 'Conectado a Supabase, pero la base de datos está vacía: ejecuta src/sql/nova_produccion_v3.sql en Supabase → SQL Editor.',
-        };
-      }
-      // El esquema v3 protege todas las tablas con RLS y no da acceso al rol anónimo: sin sesión, "permission denied"
-      // significa que la URL y la clave son correctas y el esquema existe.
-      if (error.code === '42501' || /permission denied/i.test(error.message)) {
-        return {
-          ok: true,
-          mensaje: 'Conexión correcta. Ya puedes iniciar sesión con tu correo y contraseña.',
-        };
-      }
-      return {
-        ok: false,
-        mensaje: `Error Supabase: ${error.message} (Código: ${error.code || 'N/A'})`,
-      };
+    const { error, status } = await client.from('dim_droguerias').select('codigo', { count: 'exact', head: true });
+    // v3 no da acceso al rol anónimo: sin sesión, 401/403 significa que URL, clave y esquema están bien.
+    if (!error || status === 401 || status === 403 || error.code === '42501' || /permission denied/i.test(error.message ?? '')) {
+      return { ok: true, mensaje: 'Conexión correcta. Ya puedes iniciar sesión con tu correo y contraseña.' };
     }
-
-    return {
-      ok: true,
-      mensaje: 'Conexión exitosa a Supabase PostgreSQL. Esquema y RLS operativos.',
-    };
+    if (status === 404 || error.code === '42P01' || error.code === 'PGRST205' || /relation|schema cache/i.test(error.message ?? '')) {
+      return { ok: false, mensaje: 'Conectado a Supabase, pero NOVA no está instalado en este proyecto: ejecuta src/sql/nova_produccion_v3.sql en Supabase → SQL Editor.' };
+    }
+    if (status === 0 || /fetch|network|load failed/i.test(error.message ?? '')) {
+      return { ok: false, mensaje: `Sin respuesta de Supabase (${error.message || 'error de red'}). Revisa tu internet o la URL.` };
+    }
+    return { ok: false, mensaje: `Supabase respondió con un error HTTP ${status}${error.message ? `: ${error.message}` : ''}${error.code ? ` (código ${error.code})` : ''}.` };
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      mensaje: `Fallo de red o URL inválida: ${errorMsg}`,
-    };
+    return { ok: false, mensaje: `Sin respuesta de Supabase: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
