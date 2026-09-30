@@ -38,5 +38,7 @@ export interface SyncRemote {
    * Avisa en vivo cuando cambia alguna de estas tablas en el servidor (Supabase Realtime). `alEstado` recibe si el canal
    * quedó conectado. Devuelve la función para dejar de escuchar. Opcional: sin ella el motor solo consulta cada cierto tiempo.
    */
+  /** Marca de "datos reiniciados" del servidor (cambia cuando el administrador borra datos). */
+  leerEpoca?(): Promise<string | null>;
   escucharCambios?(tablas: string[], alCambiar: (tabla: string) => void, alEstado: (conectado: boolean) => void): () => void;
 }

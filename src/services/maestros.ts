@@ -4,7 +4,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { FormatoExport } from '../offline/types';
 
-export type TipoMaestro = 'clientes' | 'productos' | 'droguerias' | 'reglas';
+export type TipoMaestro = 'clientes' | 'productos' | 'droguerias' | 'reglas' | 'pedidos';
 
 export interface FilaFarmacia {
   codigo_interno: string;

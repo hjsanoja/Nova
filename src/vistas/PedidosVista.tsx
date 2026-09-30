@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react';
-import { CornerDownRight, RefreshCw, Search, ShoppingBag } from 'lucide-react';
+import { CornerDownRight, RefreshCw, Search, ShoppingBag, Trash2 } from 'lucide-react';
+import { getSupabaseClient } from '../services/supabaseClient';
+import { eliminarRegistros } from '../services/maestros';
+import { sincronizarYa } from '../offline/motor';
 import type { Usuario } from '../types/pharmacy';
 import type { LocalPedido, Violacion } from '../offline/types';
 import { obtenerDb } from '../offline/db';
@@ -7,7 +10,7 @@ import { reintentarAhora } from '../offline/outbox';
 import { reruteoLocal } from '../offline/pedidos';
 import { solicitarSync } from '../offline/motor';
 import { Sheet } from '../components/capture/Sheet';
-import { Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso, useDebounced } from '../components/ui/kit';
+import { BarraSeleccion, Boton, Casilla, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useDebounced, useSeleccion } from '../components/ui/kit';
 import { contarPorGrupo, detallesPorPedido, ESTADOS_ETIQUETA, filtrarPedidos, GRUPOS_ESTADO, unidadesDePedido } from './logica';
 import type { GrupoEstado } from './logica';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos } from './useDatos';
@@ -40,6 +43,10 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
   const q = useDebounced(texto, 150);
   const [abierto, setAbierto] = useState<string | null>(null);
   const { mostrar, nodo } = useAviso();
+  // Solo el administrador puede eliminar pedidos (por ejemplo, los de prueba): se marcan y desaparecen de todos los equipos.
+  const puedeEliminar = usuario.rol === 'admin' && !!getSupabaseClient();
+  const sel = useSeleccion();
+  const { confirmar, nodo: nodoConfirmar } = useConfirmar();
 
   const pedidos = useMemo(() => (esVendedor ? todos.filter((p) => p.vendedor_id === usuario.id) : todos), [todos, esVendedor, usuario.id]);
   const nombreCliente = useMemo(() => {
@@ -51,18 +58,55 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
   const cuentas = useMemo(() => contarPorGrupo(pedidos), [pedidos]);
   const lista = useMemo(() => filtrarPedidos(pedidos, { grupo, texto: q }, nombreCliente).slice(0, 200), [pedidos, grupo, q, nombreCliente]);
   const actual = abierto ? todos.find((p) => p.id === abierto) : undefined;
+  const idsLista = lista.map((p) => p.id);
+
+  const eliminar = async () => {
+    const sb = getSupabaseClient();
+    if (!sb || sel.cantidad === 0) return;
+    const ok = await confirmar(
+      `Eliminar ${sel.cantidad} pedido${sel.cantidad === 1 ? '' : 's'}`,
+      'Desaparecen de la nube y de todos los teléfonos (también sus pedidos derivados). Úsalo para pedidos de prueba o anulados. No se puede deshacer desde la app.',
+      { accion: 'Eliminar', peligro: true }
+    );
+    if (!ok) return;
+    try {
+      const n = await eliminarRegistros(sb, 'pedidos', [...sel.ids]);
+      sel.limpiar();
+      await sincronizarYa();
+      mostrar({ tipo: 'ok', texto: `${n} pedido${n === 1 ? '' : 's'} eliminado${n === 1 ? '' : 's'}.` });
+    } catch (e) {
+      mostrar({ tipo: 'error', texto: e instanceof Error ? e.message : String(e) });
+    }
+  };
 
   return (
     <div>
       <PageHeader titulo={esVendedor ? 'Mis pedidos' : 'Pedidos'} descripcion="Toca un pedido para ver su detalle." />
       {nodo}
+      {nodoConfirmar}
       <Segmentado opciones={GRUPOS_ESTADO.map((g) => ({ id: g.id, texto: g.texto, cuenta: cuentas[g.id] }))} valor={grupo} onChange={setGrupo} />
       <div className="relative mb-3 max-w-md">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Buscar por número o farmacia" aria-label="Buscar pedido" className={`${estiloInput} pl-9`} />
       </div>
 
+      {puedeEliminar && (
+        <BarraSeleccion cantidad={sel.cantidad} onLimpiar={sel.limpiar}>
+          <Boton tamano="sm" variante="peligro" icono={Trash2} onClick={() => void eliminar()}>Eliminar {sel.cantidad}</Boton>
+        </BarraSeleccion>
+      )}
       <Tarjeta className="!p-0">
+        {puedeEliminar && lista.length > 0 && (
+          <div className="flex items-center gap-1 border-b border-slate-100 bg-slate-50 px-1 text-xs font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-950">
+            <Casilla
+              etiqueta="Seleccionar todos los de la lista"
+              marcada={idsLista.every((id) => sel.tiene(id))}
+              parcial={idsLista.some((id) => sel.tiene(id)) && !idsLista.every((id) => sel.tiene(id))}
+              onChange={(v) => sel.fijarTodos(idsLista, v)}
+            />
+            Seleccionar {lista.length} pedido{lista.length === 1 ? '' : 's'} de la lista
+          </div>
+        )}
         {lista.length === 0 ? (
           <Vacio icono={ShoppingBag} titulo="No hay pedidos aquí" texto={pedidos.length === 0 ? (esVendedor ? 'Cuando tomes un pedido aparecerá en esta lista.' : 'Aún no se han tomado pedidos.') : 'Cambia el filtro o la búsqueda.'} />
         ) : (
@@ -71,8 +115,9 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
               const u = unidadesDePedido(porPedido.get(p.id) ?? []);
               const e = ESTADOS_ETIQUETA[p.estado];
               return (
-                <li key={p.id}>
-                  <button type="button" onClick={() => setAbierto(p.id)} className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <li key={p.id} className={`flex items-center ${sel.tiene(p.id) ? 'bg-marca-50 dark:bg-marca-950/60' : ''}`}>
+                  {puedeEliminar && <span className="pl-1"><Casilla etiqueta={`Seleccionar ${p.correlativo}`} marcada={sel.tiene(p.id)} onChange={() => sel.alternar(p.id)} /></span>}
+                  <button type="button" onClick={() => setAbierto(p.id)} className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold">{nombreCliente(p.cliente_id)}</p>
                       <p className="truncate text-xs text-slate-500">

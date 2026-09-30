@@ -65,6 +65,13 @@ export function crearRemotoSupabase(client: SupabaseClient): SyncRemote {
       return !!data.session;
     },
 
+    async leerEpoca() {
+      const { data, error } = await client.from('config_sistema').select('valor').eq('clave', 'epoca_datos').maybeSingle();
+      if (error) throw clasificarError(error as ErrorSupabase);
+      const v = (data as { valor?: unknown } | null)?.valor;
+      return v == null ? null : String(v);
+    },
+
     escucharCambios(tablas, alCambiar, alEstado) {
       // Un solo canal para todas las tablas. El servidor aplica la seguridad por filas: cada quien solo recibe lo que puede ver.
       let canal = client.channel(`nova-cambios-${crypto.randomUUID()}`);

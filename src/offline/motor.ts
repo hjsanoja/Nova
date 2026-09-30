@@ -2,6 +2,7 @@ import type { NovaDB } from './db';
 import { procesarOutbox, reintentarAhora } from './outbox';
 import type { ResultadoFlush } from './outbox';
 import { traerTodo } from './pull';
+import { revisarEpoca } from './epoca';
 import type { SyncRemote } from './remoto';
 import { ErrorRemoto } from './remoto';
 import { actualizarEstadoSync } from './syncStore';
@@ -62,6 +63,8 @@ export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync
       }
       // Descargar solo si el envío no se cortó por la red; así se respeta el orden envío -> descarga.
       if (!flush.detenidoPor && !soloEnviar) {
+        // Si el administrador borró datos en la nube, primero se descarta la copia local de lo borrado.
+        await revisarEpoca(db, remoto);
         await traerTodo(db, remoto);
         ultimoPull = Date.now();
       }

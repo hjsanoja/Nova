@@ -2399,6 +2399,15 @@ BEGIN
   ELSIF p_tipo = 'reglas' THEN
     UPDATE config_reglas_comerciales SET deleted_at = now(), activo = false WHERE deleted_at IS NULL AND id::text = ANY (v_claves);
     GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSIF p_tipo = 'pedidos' THEN
+    -- Baja lógica de pedidos (por id o correlativo) con sus líneas y derivados: desaparecen de todos los dispositivos.
+    UPDATE fact_pedidos SET deleted_at = now()
+     WHERE deleted_at IS NULL AND (id::text = ANY (v_claves) OR correlativo = ANY (v_claves)
+           OR pedido_raiz_id IN (SELECT id FROM fact_pedidos WHERE id::text = ANY (v_claves) OR correlativo = ANY (v_claves)));
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    UPDATE fact_pedido_detalles d SET deleted_at = now()
+      FROM fact_pedidos p WHERE p.id = d.pedido_id AND p.deleted_at IS NOT NULL AND d.deleted_at IS NULL;
+    DELETE FROM pedido_bloqueos b USING fact_pedidos p WHERE p.id = b.pedido_id AND p.deleted_at IS NOT NULL;
   ELSE
     RAISE EXCEPTION 'Tipo inválido: %', p_tipo USING ERRCODE = '22023';
   END IF;
@@ -2526,6 +2535,10 @@ BEGIN
   END IF;
 
   INSERT INTO audit_log (usuario_id, accion, detalle) VALUES (auth.uid(), 'purga_ejecutada', jsonb_build_object('alcance', p_alcance));
+  -- Marca de "datos reiniciados": cada teléfono/computadora la ve al sincronizar, vacía su copia y vuelve a descargar.
+  -- (TRUNCATE no deja rastro que los dispositivos puedan descargar; sin esto seguirían mostrando lo borrado.)
+  INSERT INTO config_sistema (clave, valor) VALUES ('epoca_datos', to_jsonb(floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint))
+  ON CONFLICT (clave) DO UPDATE SET valor = excluded.valor;
   RETURN jsonb_build_object('ok', true, 'alcance', p_alcance);
 END $$;
 

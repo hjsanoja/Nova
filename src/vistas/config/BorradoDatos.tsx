@@ -72,7 +72,7 @@ export function BorradoDatos() {
       {nodo}
       <Tarjeta className="border-rose-200 dark:border-rose-900">
         <p className="mb-2 flex items-center gap-2 text-sm font-bold text-rose-700 dark:text-rose-400"><ShieldAlert className="h-4 w-4" /> Borrar datos de la nube</p>
-        <p className="mb-3 text-xs text-slate-500">No se puede deshacer. Úsalo para vaciar datos de prueba antes de cargar los reales.</p>
+        <p className="mb-3 text-xs text-slate-500">No se puede deshacer. Úsalo para vaciar datos de prueba antes de cargar los reales. Los teléfonos y computadoras de todos se limpian solos en la siguiente sincronización (lo que no habían enviado se conserva). Para quitar solo algunos pedidos, márcalos en <b>Pedidos</b> y toca "Eliminar".</p>
 
         {/* 1. clave */}
         <div className="mb-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/50">
