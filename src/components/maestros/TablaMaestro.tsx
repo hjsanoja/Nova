@@ -1,8 +1,8 @@
-import React, { useDeferredValue, useMemo, useState } from 'react';
+import React, { useDeferredValue, useMemo, useRef, useState } from 'react';
 import { Search, Trash2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { BarraSeleccion, Boton, Casilla, Tarjeta, Vacio, estiloInput, useSeleccion } from '../ui/kit';
-import { filtrarPorTexto } from '../../services/maestros';
+import { normalizarBusqueda } from '../../services/maestros';
 
 export interface Columna<T> {
   titulo: string;
@@ -46,7 +46,15 @@ export function TablaMaestro<T>({
   const q = useDeferredValue(texto);
   const [limite, setLimite] = useState(POR_PAGINA);
   const sel = useSeleccion();
-  const filtradas = useMemo(() => filtrarPorTexto(filas, q, buscarEn), [filas, q, buscarEn]);
+  // Índice de búsqueda normalizado una sola vez por lista (no en cada tecla).
+  const buscarRef = useRef(buscarEn);
+  buscarRef.current = buscarEn;
+  const indice = useMemo(() => filas.map((f) => normalizarBusqueda(buscarRef.current(f).filter(Boolean).join(' '))), [filas]);
+  const filtradas = useMemo(() => {
+    const palabras = normalizarBusqueda(q).split(/\s+/).filter(Boolean);
+    if (palabras.length === 0) return filas;
+    return filas.filter((_, i) => palabras.every((p) => indice[i].includes(p)));
+  }, [filas, indice, q]);
   const visibles = filtradas.slice(0, limite);
   const clavesFiltradas = useMemo(() => filtradas.map(clave), [filtradas, clave]);
   const marcadasFiltradas = clavesFiltradas.filter((k) => sel.tiene(k)).length;
@@ -59,7 +67,7 @@ export function TablaMaestro<T>({
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden />
           <input value={texto} onChange={(e) => { setTexto(e.target.value); setLimite(POR_PAGINA); }} placeholder={placeholder} aria-label={placeholder} className={`${estiloInput} pl-9`} />
         </div>
-        <span className="text-sm text-slate-500">{filtradas.length.toLocaleString()} de {filas.length.toLocaleString()}</span>
+        <span className="text-sm text-slate-500">{filtradas.length.toLocaleString('es-VE')} de {filas.length.toLocaleString('es-VE')}</span>
       </div>
 
       {conSeleccion && (

@@ -54,7 +54,7 @@ async function comoUsuario<T>(uid: string, fn: (c: pg.Client) => Promise<T>): Pr
   }
 }
 
-const TABLAS = new Set(['dim_productos', 'dim_droguerias', 'dim_clientes', 'map_producto_drogueria', 'map_cliente_drogueria', 'config_reglas_comerciales', 'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'fact_compras_mensual', 'plantillas_pedido', 'comunicados', 'metas']);
+const TABLAS = new Set(['dim_productos', 'dim_droguerias', 'dim_clientes', 'map_producto_drogueria', 'map_cliente_drogueria', 'config_reglas_comerciales', 'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'fact_compras_mensual', 'plantillas_pedido', 'comunicados', 'metas', 'crm_visitas']);
 const COLUMNAS_FILTRO = new Set(['pedido_id']);
 const COLUMNAS_MINIMO = new Set(['periodo']);
 

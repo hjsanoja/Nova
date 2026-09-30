@@ -9,6 +9,7 @@ export const TarjetaProducto = memo(function TarjetaProducto({
   enCarrito,
   sugerido,
   loCompra,
+  oferta,
   onAgregar,
 }: {
   producto: LocalProducto;
@@ -17,6 +18,8 @@ export const TarjetaProducto = memo(function TarjetaProducto({
   /** Unidades sugeridas para este cliente (si hay). */
   sugerido?: number;
   loCompra?: boolean;
+  /** Descuento por producto vigente (se aplica solo en el carrito). */
+  oferta?: { pct: number; desde: number | null } | null;
   onAgregar: (unidades: number) => void;
 }) {
   const paso = Math.max(1, p.empaque_minimo);
@@ -28,8 +31,9 @@ export const TarjetaProducto = memo(function TarjetaProducto({
         <div className="min-w-0">
           <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900 dark:text-white">{p.nombre_comercial}</h3>
           <p className="truncate text-xs text-slate-500">{[p.presentacion, p.sku].filter(Boolean).join(' · ')}</p>
-          {(p.es_prioritario || loCompra || sugerido) && (
+          {(p.es_prioritario || loCompra || sugerido || oferta) && (
             <div className="mt-1 flex flex-wrap gap-1">
+              {oferta && <Etiqueta tono="exito">−{oferta.pct}%{oferta.desde ? ` desde ${oferta.desde}` : ''}</Etiqueta>}
               {sugerido ? <Etiqueta tono="marca">Sugerido: {sugerido}</Etiqueta> : null}
               {loCompra && !sugerido && <Etiqueta tono="neutro">Lo compra</Etiqueta>}
               {p.es_prioritario && <Etiqueta tono="aviso">Prioritario</Etiqueta>}

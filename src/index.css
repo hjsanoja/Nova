@@ -69,6 +69,11 @@
     touch-action: manipulation;
   }
 
+  /* App instalada: se desplaza, pero no se hace zoom con los dedos (Android respeta esto; el meta viewport cubre iOS). */
+  html.app-instalada, html.app-instalada body {
+    touch-action: pan-x pan-y;
+  }
+
   :where(button, a, input, select, textarea, summary):focus-visible {
     outline: 2px solid var(--color-marca-600);
     outline-offset: 2px;

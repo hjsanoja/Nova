@@ -50,28 +50,50 @@ export interface FilaDrogueria {
 
 const PAGINA = 1000;
 
-async function todas<T>(consulta: (desde: number, hasta: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>): Promise<T[]> {
-  const salida: T[] = [];
-  for (let p = 0; p < 200; p++) {
-    const { data, error } = await consulta(p * PAGINA, (p + 1) * PAGINA - 1);
-    if (error) throw new Error(error.message);
-    salida.push(...((data ?? []) as T[]));
-    if (!data || data.length < PAGINA) break;
+/**
+ * Trae todas las filas de una consulta paginada. Primero cuenta y luego pide las páginas en paralelo (hasta 6 a la vez):
+ * 23.000 farmacias pasan de ~25 pedidos seguidos a 4 tandas.
+ */
+async function todas<T>(consulta: (desde: number, hasta: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null; count?: number | null }>): Promise<T[]> {
+  const primera = await consulta(0, PAGINA - 1);
+  if (primera.error) throw new Error(primera.error.message);
+  const salida: T[] = [...((primera.data ?? []) as T[])];
+  if (!primera.data || primera.data.length < PAGINA) return salida;
+  const total = primera.count ?? null;
+  if (total === null) {
+    // Sin conteo: se sigue de a una página.
+    for (let p = 1; p < 200; p++) {
+      const { data, error } = await consulta(p * PAGINA, (p + 1) * PAGINA - 1);
+      if (error) throw new Error(error.message);
+      salida.push(...((data ?? []) as T[]));
+      if (!data || data.length < PAGINA) break;
+    }
+    return salida;
   }
-  return salida;
+  const paginas = Array.from({ length: Math.ceil(total / PAGINA) - 1 }, (_, i) => i + 1);
+  const resultados: T[][] = new Array(paginas.length);
+  for (let i = 0; i < paginas.length; i += 6) {
+    const tanda = paginas.slice(i, i + 6);
+    const r = await Promise.all(tanda.map((p) => consulta(p * PAGINA, (p + 1) * PAGINA - 1)));
+    r.forEach((x, k) => {
+      if (x.error) throw new Error(x.error.message);
+      resultados[i + k] = (x.data ?? []) as T[];
+    });
+  }
+  return salida.concat(...resultados);
 }
 
 export const listarFarmacias = (sb: SupabaseClient) =>
   todas<FilaFarmacia>((a, b) =>
     sb.from('dim_clientes')
-      .select('codigo_interno,razon_social,nombre_comercial,rif,brick,municipio,estado_geografico,direccion,telefono,bandera,frecuencia_dias,lat,lon')
-      .is('deleted_at', null).not('codigo_interno', 'is', null).order('nombre_comercial').range(a, b));
+      .select('codigo_interno,razon_social,nombre_comercial,rif,brick,municipio,estado_geografico,direccion,telefono,bandera,frecuencia_dias,lat,lon', { count: a === 0 ? 'exact' : undefined })
+      .is('deleted_at', null).not('codigo_interno', 'is', null).order('nombre_comercial').order('codigo_interno').range(a, b));
 
 export const listarProductos = (sb: SupabaseClient) =>
   todas<FilaProducto>((a, b) =>
     sb.from('dim_productos')
-      .select('sku,nombre_comercial,presentacion,principio_activo,laboratorio,categoria,clase_terapeutica,ean13,empaque_minimo,es_prioritario,activo,foto_url')
-      .is('deleted_at', null).order('nombre_comercial').range(a, b));
+      .select('sku,nombre_comercial,presentacion,principio_activo,laboratorio,categoria,clase_terapeutica,ean13,empaque_minimo,es_prioritario,activo,foto_url', { count: a === 0 ? 'exact' : undefined })
+      .is('deleted_at', null).order('nombre_comercial').order('sku').range(a, b));
 
 export async function listarDroguerias(sb: SupabaseClient): Promise<FilaDrogueria[]> {
   const filas = await todas<FilaDrogueria & { formato_export?: { delimitador?: string } }>((a, b) =>
@@ -148,6 +170,9 @@ export interface FilaRegla {
   min_skus_distintos: number | null;
   min_unidades_totales: number | null;
   drogueria_id: string | null;
+  /** Descuento por producto: productos alcanzados y unidades mínimas de cada uno. */
+  productos: string[];
+  min_unidades_producto: number | null;
   vigente_desde: string;
   vigente_hasta: string | null;
   prioridad: number;
@@ -156,10 +181,10 @@ export interface FilaRegla {
 
 export async function listarReglas(sb: SupabaseClient): Promise<FilaRegla[]> {
   const { data, error } = await sb.from('config_reglas_comerciales')
-    .select('id,nombre,alcance,descuento_max_pct,min_skus_distintos,min_unidades_totales,drogueria_id,vigente_desde,vigente_hasta,prioridad,activo')
+    .select('id,nombre,alcance,descuento_max_pct,min_skus_distintos,min_unidades_totales,drogueria_id,productos,min_unidades_producto,vigente_desde,vigente_hasta,prioridad,activo')
     .is('deleted_at', null).order('descuento_max_pct');
   if (error) throw new Error(error.message);
-  return ((data ?? []) as FilaRegla[]).map((r) => ({ ...r, descuento_max_pct: Number(r.descuento_max_pct) }));
+  return ((data ?? []) as FilaRegla[]).map((r) => ({ ...r, descuento_max_pct: Number(r.descuento_max_pct), productos: r.productos ?? [] }));
 }
 
 /** Crea (sin id) o actualiza una condición comercial. */

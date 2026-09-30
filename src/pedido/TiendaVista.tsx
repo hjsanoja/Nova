@@ -7,6 +7,7 @@ import { calcularSugerido, productosComprados } from '../offline/sugerido';
 import { useLive } from '../offline/useLive';
 import { useEstadoSync } from '../offline/syncStore';
 import type { ReglaComercial } from '../offline/politicas';
+import { ofertaDeProducto } from '../offline/politicas';
 import type { LocalCliente, LocalDrogueria, LocalPlantilla, LocalProducto } from '../offline/types';
 import { codigoDeFarmacia, registrarCodigoFarmacia } from '../offline/homologacion';
 import { eliminarPlantilla, guardarPlantilla } from '../offline/plantillas';
@@ -24,7 +25,7 @@ import { DictadoHoja } from './DictadoHoja';
 
 const ScannerSheet = React.lazy(() => import('../components/capture/ScannerSheet').then((m) => ({ default: m.ScannerSheet })));
 
-type Filtro = 'todos' | 'sugeridos' | 'comprados' | 'prioritarios';
+type Filtro = 'todos' | 'sugeridos' | 'comprados' | 'prioritarios' | 'ofertas';
 const POR_PAGINA = 40;
 
 /**
@@ -100,12 +101,13 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
     if (filtro === 'sugeridos') base = sugeridos.map((s) => s.producto);
     else if (filtro === 'comprados') base = comprados;
     else if (filtro === 'prioritarios') base = productos.filter((p) => p.es_prioritario);
+    else if (filtro === 'ofertas') base = productos.filter((p) => ofertaDeProducto(reglas, p.id, { drogueria_id: activo?.drogueria_id ?? null, segmento: cliente?.segmento }));
     else base = productos;
     const palabras = normalizar(q).split(' ').filter(Boolean);
     const filtrados = palabras.length ? base.filter((p) => palabras.every((w) => p.tokens.some((t) => t.startsWith(w)))) : base;
     if (filtro !== 'todos') return filtrados;
     return [...filtrados].sort((a, b) => Number(b.es_prioritario) - Number(a.es_prioritario) || Number(compradoIds.has(b.id)) - Number(compradoIds.has(a.id)) || a.nombre_comercial.localeCompare(b.nombre_comercial));
-  }, [filtro, sugeridos, comprados, productos, q, compradoIds]);
+  }, [filtro, sugeridos, comprados, productos, q, compradoIds, reglas, activo?.drogueria_id, cliente?.segmento]);
 
   const codigoDe = useCallback((clienteId: string, drogueriaId: string | null) => codigoDeFarmacia(mapClientes, clienteId, drogueriaId), [mapClientes]);
   const guardarCodigo = async (clienteId: string, drogueriaId: string, codigo: string) => {
@@ -225,6 +227,7 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
                 { id: 'todos', texto: 'Todos' },
                 ...(cliente ? [{ id: 'sugeridos' as const, texto: `Sugeridos${sugeridos.length ? ` (${sugeridos.length})` : ''}` }, { id: 'comprados' as const, texto: 'Lo que compra' }] : []),
                 { id: 'prioritarios', texto: 'Prioritarios' },
+                ...(reglas.some((r) => r.alcance === 'linea' && (r.productos?.length ?? 0) > 0) ? [{ id: 'ofertas' as const, texto: 'Con descuento' }] : []),
               ]}
             />
           </div>
@@ -248,6 +251,7 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
                   enCarrito={enCarrito.get(p.id) ?? 0}
                   sugerido={sugeridoPorId.get(p.id)}
                   loCompra={compradoIds.has(p.id)}
+                  oferta={ofertaDeProducto(reglas, p.id, { drogueria_id: activo?.drogueria_id ?? null, segmento: cliente?.segmento })}
                   onAgregar={(n) => agregar(p.id, n)}
                 />
               ))}

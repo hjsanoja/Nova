@@ -14,6 +14,10 @@ export interface ReglaComercial {
   min_unidades_totales?: number | null;
   min_unidades_categoria?: number | null;
   categoria_objetivo?: string | null;
+  /** Descuento por producto: solo estos productos (vacío = regla general). */
+  productos?: string[] | null;
+  /** Descuento por producto: unidades mínimas de ESE producto en la línea. */
+  min_unidades_producto?: number | null;
   bonificacion?: { por_cada: number; gratis: number } | null;
   equipo_id?: string | null;
   drogueria_id?: string | null;
@@ -103,12 +107,20 @@ export function reglaAplica(r: ReglaComercial, ctx: ContextoPedido): boolean {
   return f.skus === 0 && f.unidades === 0 && f.unidades_categoria === 0;
 }
 
+/** ¿Esta regla de línea alcanza a este producto? (lista de productos y mínimo de unidades de la línea) */
+function alcanzaLinea(r: ReglaComercial, linea: LineaEvaluable): boolean {
+  if (r.categoria_objetivo && r.categoria_objetivo !== linea.categoria) return false;
+  if (r.productos?.length && !r.productos.includes(linea.producto_id)) return false;
+  if (r.min_unidades_producto && linea.unidades < r.min_unidades_producto) return false;
+  return true;
+}
+
 export function topeDescuentoLinea(reglas: ReglaComercial[], ctx: ContextoPedido, linea: LineaEvaluable): number {
   let tope = ctx.descuento_base ?? 0;
   let hay = false;
   for (const r of reglas) {
     if (r.alcance !== 'linea') continue;
-    if (r.categoria_objetivo && r.categoria_objetivo !== linea.categoria) continue;
+    if (!alcanzaLinea(r, linea)) continue;
     if (!reglaAplica(r, ctx)) continue;
     tope = hay ? Math.max(tope, r.descuento_max_pct) : r.descuento_max_pct;
     hay = true;
@@ -227,4 +239,36 @@ export function describirRequisitos(r: Pick<ReglaComercial, 'min_skus_distintos'
   if (r.min_skus_distintos) partes.push(`${r.min_skus_distintos} producto${r.min_skus_distintos === 1 ? '' : 's'} distinto${r.min_skus_distintos === 1 ? '' : 's'}`);
   if (r.min_unidades_totales) partes.push(`${r.min_unidades_totales} unidades`);
   return partes.length ? `Desde ${partes.join(' y ')}` : 'Sin mínimo';
+}
+
+// ---------------------------------------------------------------------------- descuentos por producto
+
+export const esDescuentoPorProducto = (r: Pick<ReglaComercial, 'alcance' | 'productos'>) => r.alcance === 'linea' && (r.productos?.length ?? 0) > 0;
+
+/**
+ * Descuento automático de cada línea: el mayor de los "descuentos por producto" vigentes que alcanzan a ese producto
+ * (y cuyo mínimo de unidades del producto y, si los tiene, mínimos del pedido se cumplen).
+ */
+export function descuentosPorProducto(reglas: ReglaComercial[], ctx: ContextoPedido): Map<string, { pct: number; regla: ReglaComercial }> {
+  const salida = new Map<string, { pct: number; regla: ReglaComercial }>();
+  const aplicables = reglas.filter((r) => esDescuentoPorProducto(r) && reglaAplica(r, ctx));
+  for (const l of ctx.lineas) {
+    for (const r of aplicables) {
+      if (!alcanzaLinea(r, l)) continue;
+      const actual = salida.get(l.producto_id);
+      if (!actual || r.descuento_max_pct > actual.pct) salida.set(l.producto_id, { pct: r.descuento_max_pct, regla: r });
+    }
+  }
+  return salida;
+}
+
+/** Oferta que se muestra en el catálogo: el mayor descuento vigente de un producto y desde cuántas unidades. */
+export function ofertaDeProducto(reglas: ReglaComercial[], productoId: string, ctx: Pick<ContextoPedido, 'drogueria_id' | 'segmento' | 'equipo_id' | 'hoy'>): { pct: number; desde: number | null } | null {
+  let mejor: { pct: number; desde: number | null } | null = null;
+  for (const r of reglas) {
+    if (!esDescuentoPorProducto(r) || !r.productos!.includes(productoId)) continue;
+    if (!reglaEnAlcance(r, { ...ctx, cliente_validado: true, lineas: [] })) continue;
+    if (!mejor || r.descuento_max_pct > mejor.pct) mejor = { pct: r.descuento_max_pct, desde: r.min_unidades_producto ?? null };
+  }
+  return mejor;
 }

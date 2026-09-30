@@ -40,7 +40,7 @@ function columna(x: number, y: number, w: number, h: number): string {
 export interface PuntoSerie { clave: string; etiqueta: string; valor: number }
 
 /** Columnas por período (p. ej. unidades por día). Tocar o pasar el cursor muestra el valor; "Ver tabla" lo lista. */
-export function Columnas({ puntos, unidad, titulo }: { puntos: PuntoSerie[]; unidad: string; titulo: string }) {
+export function Columnas({ puntos, unidad, titulo, onSeleccionar }: { puntos: PuntoSerie[]; unidad: string; titulo: string; onSeleccionar?: (p: PuntoSerie) => void }) {
   const { ref, ancho } = useAncho<HTMLDivElement>();
   const [activo, setActivo] = useState<number | null>(null);
   const [tabla, setTabla] = useState(false);
@@ -70,7 +70,11 @@ export function Columnas({ puntos, unidad, titulo }: { puntos: PuntoSerie[]; uni
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-950"><tr><th className="px-3 py-1.5 text-left font-medium">Fecha</th><th className="px-3 py-1.5 text-right font-medium">{unidad}</th></tr></thead>
             <tbody className="divide-y divide-slate-100 tabular-nums dark:divide-slate-800">
-              {[...puntos].reverse().map((p) => <tr key={p.clave}><td className="px-3 py-1">{p.etiqueta}</td><td className="px-3 py-1 text-right">{formato(p.valor)}</td></tr>)}
+              {[...puntos].reverse().map((p) => (
+                <tr key={p.clave} onClick={onSeleccionar ? () => onSeleccionar(p) : undefined} className={onSeleccionar ? 'cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800' : ''}>
+                  <td className="px-3 py-1">{p.etiqueta}</td><td className="px-3 py-1 text-right">{formato(p.valor)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -94,7 +98,9 @@ export function Columnas({ puntos, unidad, titulo }: { puntos: PuntoSerie[]; uni
                       x={EJE_Y + i * banda} y={ARRIBA} width={banda} height={ALTO} fill="transparent"
                       tabIndex={0} role="button" aria-label={`${p.etiqueta}: ${formato(p.valor)} ${unidad}`}
                       onPointerEnter={() => setActivo(i)} onFocus={() => setActivo(i)} onBlur={() => setActivo(null)}
-                      className="cursor-default focus:outline-none"
+                      onClick={onSeleccionar ? () => onSeleccionar(p) : undefined}
+                      onKeyDown={onSeleccionar ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSeleccionar(p); } } : undefined}
+                      className={`${onSeleccionar ? 'cursor-pointer' : 'cursor-default'} focus:outline-none`}
                     />
                     {h > 0 && <path d={columna(x, ARRIBA + ALTO - h, w, h)} className={`pointer-events-none fill-marca-600 ${activo !== null && activo !== i ? 'opacity-50' : ''}`} />}
                   </g>
@@ -112,7 +118,7 @@ export function Columnas({ puntos, unidad, titulo }: { puntos: PuntoSerie[]; uni
               style={{ left: Math.min(Math.max(EJE_Y + activo * banda + banda / 2, 60), ancho - 60) }}
             >
               <p className="text-sm font-semibold text-slate-900 dark:text-white">{formato(puntos[activo].valor)} {unidad}</p>
-              <p className="text-slate-500">{puntos[activo].etiqueta}</p>
+              <p className="text-slate-500">{puntos[activo].etiqueta}{onSeleccionar ? ' · toca para ver' : ''}</p>
             </div>
           )}
         </div>
@@ -122,18 +128,27 @@ export function Columnas({ puntos, unidad, titulo }: { puntos: PuntoSerie[]; uni
 }
 
 /** Ranking en barras horizontales: nombre y valor arriba, barra debajo a lo ancho (se lee igual en móvil y en PC). */
-export function BarrasRanking({ filas, unidad, vacio }: { filas: { clave: string; nombre: string; valor: number }[]; unidad: string; vacio: string }) {
+export function BarrasRanking({ filas, unidad, vacio, onSeleccionar }: { filas: { clave: string; nombre: string; valor: number }[]; unidad: string; vacio: string; onSeleccionar?: (clave: string) => void }) {
   if (filas.length === 0) return <p className="py-6 text-center text-sm text-slate-500">{vacio}</p>;
   const max = Math.max(...filas.map((f) => f.valor), 1);
   return (
     <ol className="flex flex-col gap-3">
       {filas.map((f) => (
         <li key={f.clave} title={`${f.nombre}: ${formato(f.valor)} ${unidad}`}>
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="truncate text-sm text-slate-700 dark:text-slate-200">{f.nombre}</span>
-            <span className="shrink-0 text-sm font-medium tabular-nums text-slate-900 dark:text-white">{formato(f.valor)}</span>
-          </div>
-          <div className="mt-1 h-2 rounded-r bg-marca-600" style={{ width: `${Math.max(1, (f.valor / max) * 100)}%` }} aria-hidden />
+          {(() => {
+            const fila = (
+              <>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="truncate text-sm text-slate-700 dark:text-slate-200">{f.nombre}</span>
+                  <span className="shrink-0 text-sm font-medium tabular-nums text-slate-900 dark:text-white">{formato(f.valor)}</span>
+                </div>
+                <div className="mt-1 h-2 rounded-r bg-marca-600" style={{ width: `${Math.max(1, (f.valor / max) * 100)}%` }} aria-hidden />
+              </>
+            );
+            return onSeleccionar ? (
+              <button type="button" onClick={() => onSeleccionar(f.clave)} aria-label={`${f.nombre}: ${formato(f.valor)} ${unidad}. Ver detalle`} className="-mx-1 block w-[calc(100%+0.5rem)] rounded-lg px-1 py-0.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800">{fila}</button>
+            ) : fila;
+          })()}
         </li>
       ))}
     </ol>
@@ -141,10 +156,11 @@ export function BarrasRanking({ filas, unidad, vacio }: { filas: { clave: string
 }
 
 /** Medidor de avance (p. ej. cobertura del fichero): la pista es un tono claro de la misma marca. */
-export function Medidor({ valor, total, rotulo, nota }: { valor: number; total: number; rotulo: string; nota?: string }) {
+export function Medidor({ valor, total, rotulo, nota, onClick }: { valor: number; total: number; rotulo: string; nota?: string; onClick?: () => void }) {
   const pct = total > 0 ? Math.round((valor / total) * 100) : 0;
+  const Caja = onClick ? 'button' : 'div';
   return (
-    <div>
+    <Caja {...(onClick ? { type: 'button' as const, onClick, 'aria-label': `${rotulo}: ${pct}%. Ver detalle` } : {})} className={onClick ? '-m-1 block w-[calc(100%+0.5rem)] rounded-lg p-1 text-left hover:bg-slate-50 dark:hover:bg-slate-800' : ''}>
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{rotulo}</p>
         <p className="text-sm text-slate-500"><span className="text-lg font-semibold text-slate-900 dark:text-white">{pct}%</span> · {formato(valor)} de {formato(total)}</p>
@@ -153,6 +169,6 @@ export function Medidor({ valor, total, rotulo, nota }: { valor: number; total: 
         <div className="h-full rounded-full bg-marca-600" style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       {nota && <p className="mt-1.5 text-xs text-slate-500">{nota}</p>}
-    </div>
+    </Caja>
   );
 }

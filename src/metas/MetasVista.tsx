@@ -11,7 +11,11 @@ import { SelectorCliente } from '../pedido/SelectorCliente';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { unidadesPorPedido } from '../vistas/indicadores';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useUsuariosNube } from '../vistas/useDatos';
-import { INDICADORES, avanceMeta, describirMeta, indicador, mesSiguiente, periodoDe } from './logica';
+import { INDICADORES, avanceMeta, describirMeta, indicador, mesSiguiente, pedidosDeMeta, periodoDe } from './logica';
+import { DetallePedidos } from '../vistas/DetallePedidos';
+import type { SolicitudDetalle } from '../vistas/DetallePedidos';
+import { detallesPorPedido } from '../vistas/logica';
+import { useProductos } from '../vistas/useDatos';
 
 const formato = (n: number) => n.toLocaleString('es-VE');
 const nombreMes = (periodo: string) => {
@@ -34,6 +38,9 @@ export function MetasVista() {
   const droguerias = useDroguerias();
   const { usuarios } = useUsuariosNube();
   const unidades = useMemo(() => unidadesPorPedido(detalles), [detalles]);
+  const porPedido = useMemo(() => detallesPorPedido(detalles), [detalles]);
+  const productos = useProductos();
+  const [detalle, setDetalle] = useState<SolicitudDetalle | null>(null);
   const [edicion, setEdicion] = useState<Borrador | null>(null);
   const sel = useSeleccion();
   const { mostrar, nodo } = useAviso();
@@ -45,6 +52,11 @@ export function MetasVista() {
     const d = new Map(droguerias.map((x) => [x.id, x.nombre]));
     return { vendedor: (id: string) => u.get(id) ?? 'Representante', cliente: (id: string) => c.get(id) ?? 'Farmacia', drogueria: (id: string) => d.get(id) ?? 'Droguería' };
   }, [usuarios, clientes, droguerias]);
+
+  const nombresDetalle = useMemo(() => {
+    const p = new Map(productos.map((x) => [x.id, x.nombre_comercial]));
+    return { ...nombres, producto: (id: string) => p.get(id) ?? 'Producto' };
+  }, [nombres, productos]);
 
   const filas = useMemo(
     () => metas.map((m) => ({ m, a: avanceMeta(m, pedidos, unidades), texto: describirMeta(m, nombres) })).sort((x, y) => x.texto.localeCompare(y.texto)),
@@ -111,7 +123,8 @@ export function MetasVista() {
             return (
               <li key={m.id} className="flex gap-1 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                 <Casilla etiqueta={`Seleccionar la meta de ${texto}`} marcada={sel.tiene(m.id)} onChange={() => sel.alternar(m.id)} />
-                <button type="button" onClick={() => setEdicion({ ...m })} className="min-w-0 flex-1 text-left">
+                <div className="min-w-0 flex-1">
+                <button type="button" onClick={() => setEdicion({ ...m })} className="w-full text-left">
                   <Medidor
                     valor={a.valor}
                     total={a.objetivo}
@@ -119,12 +132,15 @@ export function MetasVista() {
                     nota={a.valor >= a.objetivo ? 'Meta cumplida.' : a.diasRestantes > 0 ? `Faltan ${formato(a.objetivo - a.valor)}: ${formato(a.porDia)} ${ind.unidad} por día${a.proyeccion !== null ? ` · al ritmo actual cerraría en ${formato(a.proyeccion)}` : ''}.` : `Quedó en ${a.pct}%.`}
                   />
                 </button>
+                <Boton tamano="sm" variante="fantasma" className="mt-1 -ml-3" onClick={() => setDetalle({ titulo: `Meta: ${texto}`, calculo: `Pedidos enviados de ${nombreMes(m.periodo).toLowerCase()}${m.vendedor_id ? ` de ${nombres.vendedor(m.vendedor_id)}` : ''}${m.cliente_id ? ` para ${nombres.cliente(m.cliente_id)}` : ''}${m.drogueria_id ? ` por ${nombres.drogueria(m.drogueria_id)}` : ''} (sin borradores, cancelados ni rechazados). Mide ${ind.texto.toLowerCase()}: ${formato(a.valor)} de ${formato(a.objetivo)}.`, pedidos: pedidosDeMeta(m, pedidos), nota: 'Con los pedidos guardados en este dispositivo (últimos 90 días).' })}>Ver pedidos</Boton>
+                </div>
               </li>
             );
           })}
         </ul>
       )}
 
+      <DetallePedidos solicitud={detalle} porPedido={porPedido} nombres={nombresDetalle} onCerrar={() => setDetalle(null)} />
       {edicion && (
         <FormMeta
           inicial={edicion}

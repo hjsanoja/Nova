@@ -150,5 +150,79 @@ DO $$ BEGIN
   ASSERT (SELECT count(*) FROM metas) = 1, 'v2: solo la suya';
   RAISE NOTICE 'OK 40: metas por representante, farmacia, droguería o combinadas (las ve quien corresponde; las fija la gerencia)';
 END $$;
+-- ---------------------------------------------------------------- 41. descuentos por producto
+SELECT t.como(:admin);
+DO $$
+BEGIN
+  INSERT INTO dim_productos (id, sku, nombre_comercial) VALUES
+    ('f0000000-0000-0000-0000-0000000000a1', 'NP-1', 'Promo Uno'), ('f0000000-0000-0000-0000-0000000000a2', 'NP-2', 'Sin promo');
+  INSERT INTO config_reglas_comerciales (nombre, alcance, descuento_max_pct, productos, min_unidades_producto)
+  VALUES ('Promo Uno', 'linea', 15, '{f0000000-0000-0000-0000-0000000000a1}', 10);
+END $$;
+SELECT t.como(:v1);
+DO $$
+DECLARE r jsonb;
+BEGIN
+  r := sync_crear_pedido('{"id":"b0000000-0000-0000-0000-0000000000a1","cliente_id":"c0000000-0000-0000-0000-0000000000a1","drogueria_id":"d0000000-0000-0000-0000-0000000000a1",
+        "detalles":[{"producto_id":"f0000000-0000-0000-0000-0000000000a1","unidades_solicitadas":12,"descuento_pct":15},
+                    {"producto_id":"f0000000-0000-0000-0000-0000000000a2","unidades_solicitadas":3}]}');
+  ASSERT r->>'estado' = 'enviado_teletransferencia', 'el 15% vale para Promo Uno desde 10 uds: ' || r::text;
+  r := sync_crear_pedido('{"id":"b0000000-0000-0000-0000-0000000000a2","cliente_id":"c0000000-0000-0000-0000-0000000000a1","drogueria_id":"d0000000-0000-0000-0000-0000000000a1",
+        "detalles":[{"producto_id":"f0000000-0000-0000-0000-0000000000a1","unidades_solicitadas":5,"descuento_pct":15},
+                    {"producto_id":"f0000000-0000-0000-0000-0000000000a2","unidades_solicitadas":20,"descuento_pct":15}]}');
+  ASSERT r->>'estado' = 'en_revision' AND jsonb_array_length(r->'motivos_revision') = 2, 'menos de 10 uds y otro producto: dos excesos: ' || r::text;
+  RAISE NOTICE 'OK 41: descuentos por producto (lista de productos y mínimo de unidades del producto)';
+END $$;
+-- ---------------------------------------------------------------- 42. avisos al teléfono
+SELECT t.como(:v1);
+DO $$
+BEGIN
+  PERFORM guardar_suscripcion_push('{"endpoint":"https://push.example/abc","p256dh":"k1","auth":"a1","dispositivo":"Android"}');
+  PERFORM guardar_suscripcion_push('{"endpoint":"https://push.example/abc","p256dh":"k2","auth":"a2"}');   -- renovar no duplica
+  ASSERT (SELECT count(*) FROM push_suscripciones) = 1 AND (SELECT p256dh FROM push_suscripciones) = 'k2';
+  BEGIN PERFORM configurar_avisos('https://x.supabase.co/functions/v1/enviar-push', repeat('s', 40), repeat('p', 87)); ASSERT false; EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+  BEGIN PERFORM * FROM config_avisos; ASSERT false, 'nadie lee la configuración por la API'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END $$;
+SELECT t.como(:v2);
+DO $$ BEGIN ASSERT (SELECT count(*) FROM push_suscripciones) = 0, 'cada quien ve solo las suyas'; END $$;
+SELECT t.como(:admin);
+DO $$
+BEGIN
+  PERFORM configurar_avisos('https://x.supabase.co/functions/v1/enviar-push', repeat('s', 40), repeat('p', 87));
+  ASSERT (estado_avisos()->>'configurado')::boolean AND (estado_avisos()->>'suscripciones')::int = 1, estado_avisos()::text;
+  -- Sin pg_net (esta base de pruebas) el envío se omite sin error: publicar un comunicado sigue funcionando.
+  INSERT INTO comunicados (titulo) VALUES ('Aviso con push');
+END $$;
+SELECT t.como(:t1);
+DO $$
+BEGIN
+  UPDATE fact_pedidos SET estado = 'en_proceso' WHERE id = 'b0000000-0000-0000-0000-0000000000a1';
+  UPDATE fact_pedidos SET estado = 'procesado_total' WHERE id = 'b0000000-0000-0000-0000-0000000000a1';
+END $$;
+RESET ROLE;
+DO $$ BEGIN
+  ASSERT (SELECT count(*) FROM notificaciones WHERE tipo = 'pedido_procesado_total' AND usuario_id = 'a0000000-0000-0000-0000-0000000000c1') = 1, 'el vendedor recibe el aviso del despacho';
+  RAISE NOTICE 'OK 42: avisos al teléfono (suscripciones propias, configuración solo admin, sin pg_net no falla, aviso de despacho)';
+END $$;
+-- ---------------------------------------------------------------- 43. el aviso sale hacia la Edge Function (pg_net simulado)
+RESET ROLE;
+CREATE SCHEMA IF NOT EXISTS net;
+CREATE TABLE t.llamadas (url text, body jsonb, headers jsonb);
+CREATE FUNCTION net.http_post(url text, body jsonb, headers jsonb) RETURNS bigint LANGUAGE sql AS
+  $$ INSERT INTO t.llamadas VALUES (url, body, headers); SELECT 1::bigint $$;
+GRANT USAGE ON SCHEMA net TO authenticated;
+SET ROLE authenticated;
+SELECT t.como(:admin);
+DO $$ BEGIN INSERT INTO comunicados (titulo, mensaje, roles) VALUES ('Solo vendedores', 'Promo', '{vendedor}'); END $$;
+RESET ROLE;
+DO $$
+DECLARE r record;
+BEGIN
+  SELECT * INTO r FROM t.llamadas ORDER BY ctid DESC LIMIT 1;
+  ASSERT r.url = 'https://x.supabase.co/functions/v1/enviar-push' AND r.headers->>'Authorization' = 'Bearer ' || repeat('s', 40), 'llamada: ' || row_to_json(r)::text;
+  ASSERT r.body->>'titulo' = 'Solo vendedores' AND r.body->'usuarios' ? 'a0000000-0000-0000-0000-0000000000c1', 'va al vendedor suscrito: ' || r.body::text;
+  ASSERT NOT (r.body->'usuarios' ? 'a0000000-0000-0000-0000-0000000000b1'), 'no a la mesa';
+  RAISE NOTICE 'OK 43: el aviso se entrega a la Edge Function con la clave y solo a los destinatarios';
+END $$;
 RESET ROLE;
 \echo NOVEDADES: TODOS LOS ESCENARIOS PASARON

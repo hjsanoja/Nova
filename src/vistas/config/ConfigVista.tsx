@@ -7,11 +7,12 @@ import { consumirSeccion, irASeccion } from '../navegacion';
 import { Ayuda } from './Ayuda';
 import { BorradoDatos } from './BorradoDatos';
 import { Sincronizacion } from './Sincronizacion';
+import { AvisosConfig } from '../../avisos/AvisosConfig';
 import { Usuarios } from './Usuarios';
 import { InstalarBaseDatos } from './InstalarBaseDatos';
 
-type Seccion = 'cuenta' | 'sincronizacion' | 'usuarios' | 'basedatos' | 'ayuda';
-const SECCIONES = ['cuenta', 'sincronizacion', 'usuarios', 'basedatos', 'ayuda'] as const;
+type Seccion = 'cuenta' | 'avisos' | 'sincronizacion' | 'usuarios' | 'basedatos' | 'ayuda';
+const SECCIONES = ['cuenta', 'avisos', 'sincronizacion', 'usuarios', 'basedatos', 'ayuda'] as const;
 
 const ETIQUETA_ROL: Record<Usuario['rol'], string> = { admin: 'Administrador', gerente: 'Gerente', vendedor: 'Vendedor', teletransferencista: 'Transferencista' };
 
@@ -30,6 +31,7 @@ export function ConfigVista({ usuario, irATab, esDemo, onCerrarSesion, onConexio
   const [seccion, setSeccion] = useState<Seccion>(() => consumirSeccion('config', SECCIONES, 'cuenta'));
   const opciones = [
     { id: 'cuenta' as const, texto: 'Mi cuenta' },
+    { id: 'avisos' as const, texto: 'Avisos' },
     { id: 'sincronizacion' as const, texto: 'Sincronización' },
     ...(esAdmin ? [{ id: 'usuarios' as const, texto: 'Usuarios' }, { id: 'basedatos' as const, texto: 'Base de datos' }] : []),
     { id: 'ayuda' as const, texto: 'Ayuda' },
@@ -40,6 +42,7 @@ export function ConfigVista({ usuario, irATab, esDemo, onCerrarSesion, onConexio
       <PageHeader titulo="Configuración" />
       <Segmentado opciones={opciones} valor={seccion} onChange={setSeccion} />
       {seccion === 'cuenta' && <Cuenta usuario={usuario} esDemo={esDemo} onCerrarSesion={onCerrarSesion} />}
+      {seccion === 'avisos' && <AvisosConfig esAdmin={esAdmin} esDemo={esDemo} />}
       {seccion === 'sincronizacion' && <Sincronizacion esDemo={esDemo} esAdmin={esAdmin} onCerrarSesion={onCerrarSesion} onConexionCambiada={onConexionCambiada} />}
       {seccion === 'usuarios' && esAdmin && <Usuarios yo={usuario} onFichero={() => irASeccion(irATab, 'datos', 'fichero')} />}
       {seccion === 'basedatos' && esAdmin && (

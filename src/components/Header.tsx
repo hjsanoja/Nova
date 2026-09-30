@@ -45,9 +45,9 @@ export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuario
 
   return (
     <header className="sticky top-0 z-40 h-12 border-b border-slate-200 bg-white pl-safe pr-safe dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex h-full items-center justify-between gap-2 px-3 sm:px-5">
+      <div className="flex h-full min-w-0 items-center justify-between gap-2 px-3 sm:px-5">
         <NovaLogo size="sm" esClaro={esClaro} />
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           {esDemo && <span className="hidden rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 sm:inline dark:bg-amber-950 dark:text-amber-300">Demostración</span>}
           <SyncStatusChip onAbrirConfig={onAbrirConfig} />
           <button

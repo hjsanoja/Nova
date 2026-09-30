@@ -1,17 +1,22 @@
 import { useCallback, useMemo, useState } from 'react';
-import { BadgePercent, Plus, Trash2 } from 'lucide-react';
+import { BadgePercent, Plus, Search, Trash2, X } from 'lucide-react';
 import type { Usuario } from '../types/pharmacy';
 import { Sheet } from '../components/capture/Sheet';
-import { BarraSeleccion, Boton, Campo, Casilla, Etiqueta, PageHeader, Subtitulo, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useSeleccion } from '../components/ui/kit';
+import { BarraSeleccion, Boton, Campo, Casilla, Etiqueta, Grupo, PageHeader, Segmentado, Subtitulo, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useSeleccion } from '../components/ui/kit';
+import { normalizarBusqueda } from '../services/maestros';
+import { useProductos } from './useDatos';
+import type { LocalProducto } from '../offline/types';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { eliminarRegistros, guardarRegla, listarDrogueriasConId, listarReglas } from '../services/maestros';
 import type { FilaRegla } from '../services/maestros';
-import { condicionDelPedido, describirRequisitos } from '../offline/politicas';
+import { condicionDelPedido, describirRequisitos, esDescuentoPorProducto } from '../offline/politicas';
 import type { ReglaComercial } from '../offline/politicas';
 import { useListaNube } from './maestros/comun';
 
 const hoy = () => new Date().toISOString().slice(0, 10);
-const nueva = (): FilaRegla => ({ nombre: '', alcance: 'pedido', descuento_max_pct: 5, min_skus_distintos: null, min_unidades_totales: null, drogueria_id: null, vigente_desde: hoy(), vigente_hasta: null, prioridad: 100, activo: true });
+type Tipo = 'pedido' | 'producto';
+const nueva = (tipo: Tipo): FilaRegla => ({ nombre: '', alcance: tipo === 'pedido' ? 'pedido' : 'linea', descuento_max_pct: 5, min_skus_distintos: null, min_unidades_totales: null, drogueria_id: null, productos: [], min_unidades_producto: null, vigente_desde: hoy(), vigente_hasta: null, prioridad: 100, activo: true });
+const tipoDe = (r: FilaRegla): Tipo | null => (r.alcance === 'pedido' ? 'pedido' : esDescuentoPorProducto(r) ? 'producto' : null);
 
 function estado(r: FilaRegla): { texto: string; tono: 'exito' | 'neutro' | 'aviso' } {
   if (!r.activo) return { texto: 'Pausada', tono: 'neutro' };
@@ -21,9 +26,10 @@ function estado(r: FilaRegla): { texto: string; tono: 'exito' | 'neutro' | 'avis
 }
 
 /**
- * Condiciones comerciales: qué % de descuento recibe un pedido según cuántos productos distintos (SKU) y cuántas
- * unidades lleva. Los criterios se combinan (deben cumplirse todos los que se definan) y, si un pedido cumple varias
- * condiciones, se aplica la de mayor descuento. El carrito del vendedor lo calcula solo y le dice cuánto le falta.
+ * Descuentos, de dos tipos (el carrito del vendedor los aplica solos):
+ *  - Por pedido: % sobre todo el pedido según cuántos productos distintos (SKU) y cuántas unidades lleva. Los mínimos se
+ *    combinan y, si cumple varias condiciones, se aplica la de mayor descuento.
+ *  - Por producto: % para productos elegidos, opcionalmente desde cierta cantidad de ese producto.
  */
 export function CondicionesVista({ usuario }: { usuario: Usuario }) {
   const puedeEditar = usuario.rol === 'admin';
@@ -32,6 +38,10 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
   const { filas, cargando, error, recargar } = useListaNube(cargarReglas);
   const { filas: droguerias } = useListaNube(cargarDroguerias);
   const [edicion, setEdicion] = useState<FilaRegla | null>(null);
+  const [tipo, setTipo] = useState<Tipo>('pedido');
+  const productos = useProductos();
+  const nombreProducto = useMemo(() => new Map(productos.map((p) => [p.id, p.nombre_comercial])), [productos]);
+  const reglasProducto = filas.filter((r) => tipoDe(r) === 'producto');
   const sel = useSeleccion();
   const { mostrar, nodo } = useAviso();
   const { confirmar, nodo: nodoConfirmar } = useConfirmar();
@@ -65,13 +75,15 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
   return (
     <div>
       <PageHeader
-        titulo="Condiciones comerciales"
-        descripcion="Descuento automático del pedido según productos distintos y unidades."
-        acciones={puedeEditar ? <Boton variante="primario" icono={Plus} onClick={() => setEdicion(nueva())}>Nueva condición</Boton> : undefined}
+        titulo="Descuentos"
+        descripcion="Por pedido (según productos distintos y unidades) o por producto. El carrito del vendedor los aplica solos."
+        acciones={puedeEditar ? <Boton variante="primario" icono={Plus} onClick={() => setEdicion(nueva(tipo))}>{tipo === 'pedido' ? 'Nuevo descuento por pedido' : 'Nuevo descuento por producto'}</Boton> : undefined}
       />
       {nodo}
       {nodoConfirmar}
       {error && <p role="alert" className="mb-3 text-sm text-rose-700 dark:text-rose-300">{error}</p>}
+
+      <Segmentado valor={tipo} onChange={(v) => { setTipo(v); sel.limpiar(); }} opciones={[{ id: 'pedido', texto: 'Por pedido', cuenta: reglasPedido.length }, { id: 'producto', texto: 'Por producto', cuenta: reglasProducto.length }]} />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <div>
@@ -83,11 +95,16 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
           <Tarjeta className="!p-0">
             {cargando ? (
               <p className="p-6 text-center text-sm text-slate-500">Cargando…</p>
-            ) : reglasPedido.length === 0 ? (
-              <Vacio icono={BadgePercent} titulo="Todavía no hay condiciones" texto="Crea la primera: por ejemplo, 5% de descuento desde 3 productos distintos, o 8% desde 100 unidades." accion={puedeEditar ? <Boton variante="primario" icono={Plus} onClick={() => setEdicion(nueva())}>Nueva condición</Boton> : undefined} />
+            ) : (tipo === 'pedido' ? reglasPedido : reglasProducto).length === 0 ? (
+              <Vacio
+                icono={BadgePercent}
+                titulo={tipo === 'pedido' ? 'Todavía no hay descuentos por pedido' : 'Todavía no hay descuentos por producto'}
+                texto={tipo === 'pedido' ? 'Por ejemplo: 5% desde 3 productos distintos, o 8% desde 100 unidades.' : 'Por ejemplo: 10% en Losartán 50 mg, o 15% desde 20 unidades.'}
+                accion={puedeEditar ? <Boton variante="primario" icono={Plus} onClick={() => setEdicion(nueva(tipo))}>Nuevo descuento</Boton> : undefined}
+              />
             ) : (
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-                {[...reglasPedido].sort((a, b) => a.descuento_max_pct - b.descuento_max_pct).map((r) => {
+                {[...(tipo === 'pedido' ? reglasPedido : reglasProducto)].sort((a, b) => a.descuento_max_pct - b.descuento_max_pct).map((r) => {
                   const e = estado(r);
                   return (
                     <li key={r.id} className={`flex items-center gap-2 py-3 pl-1 pr-4 ${sel.tiene(r.id!) ? 'bg-marca-50 dark:bg-marca-950/60' : ''}`}>
@@ -96,7 +113,7 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
                       <button type="button" disabled={!puedeEditar} onClick={() => setEdicion(r)} className="min-w-0 flex-1 text-left">
                         <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{r.nombre}</p>
                         <p className="truncate text-sm text-slate-500">
-                          {describirRequisitos(r)} · {r.drogueria_id ? nombreDrogueria.get(r.drogueria_id) ?? 'Una droguería' : 'Todas las droguerías'}
+                          {tipo === 'producto' ? describirProductos(r, (id) => nombreProducto.get(id)) : describirRequisitos(r)} · {r.drogueria_id ? nombreDrogueria.get(r.drogueria_id) ?? 'Una droguería' : 'Todas las droguerías'}
                           {r.vigente_hasta ? ` · hasta ${r.vigente_hasta}` : ''}
                         </p>
                       </button>
@@ -108,17 +125,30 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
               </ul>
             )}
           </Tarjeta>
-          <p className="mt-2 text-xs text-slate-500">Si un pedido cumple varias condiciones, se aplica la de mayor descuento. Un pedido con un descuento mayor al permitido va a Revisión Especial.</p>
+          <p className="mt-2 text-xs text-slate-500">
+            {tipo === 'pedido'
+              ? 'Si un pedido cumple varias condiciones, se aplica la de mayor descuento.'
+              : 'Si un producto tiene varios descuentos, se aplica el mayor. Se suma al descuento por pedido si lo hay.'}{' '}
+            Un pedido con un descuento mayor al permitido va a Revisión Especial.
+          </p>
         </div>
-        <Simulador reglas={reglasPedido} />
+        {tipo === 'pedido' ? (
+          <Simulador reglas={reglasPedido} />
+        ) : (
+          <Tarjeta className="self-start">
+            <Subtitulo>Cómo funciona</Subtitulo>
+            <p className="text-sm text-slate-600 dark:text-slate-300">El vendedor ve la oferta en el catálogo (por ejemplo “−10%” o “−15% desde 20”). Al agregar el producto al carrito, el descuento se aplica solo a esa línea.</p>
+          </Tarjeta>
+        )}
       </div>
 
       {edicion && (
         <FormRegla
           inicial={edicion}
           droguerias={droguerias}
+          productos={productos}
           onCerrar={() => setEdicion(null)}
-          onGuardada={() => { setEdicion(null); mostrar({ tipo: 'ok', texto: 'Condición guardada. Llega a los vendedores en la próxima sincronización.' }); void recargar(); }}
+          onGuardada={() => { setEdicion(null); mostrar({ tipo: 'ok', texto: 'Descuento guardado. Llega a los vendedores en unos segundos.' }); void recargar(); }}
         />
       )}
     </div>
@@ -155,8 +185,57 @@ function Simulador({ reglas }: { reglas: FilaRegla[] }) {
   );
 }
 
-function FormRegla({ inicial, droguerias, onCerrar, onGuardada }: { inicial: FilaRegla; droguerias: { id: string; nombre: string }[]; onCerrar: () => void; onGuardada: () => void }) {
+/** "Losartán 50 mg, Omeprazol 20 mg y 3 más · desde 20 uds" */
+function describirProductos(r: FilaRegla, nombre: (id: string) => string | undefined): string {
+  const nombres = r.productos.map((id) => nombre(id) ?? 'Producto');
+  const lista = nombres.length > 2 ? `${nombres.slice(0, 2).join(', ')} y ${nombres.length - 2} más` : nombres.join(' y ');
+  return `${lista || 'Sin productos'}${r.min_unidades_producto ? ` · desde ${r.min_unidades_producto} uds` : ''}`;
+}
+
+/** Buscar y marcar productos (catálogo del dispositivo). */
+function ElegirProductos({ productos, valor, onChange }: { productos: LocalProducto[]; valor: string[]; onChange: (v: string[]) => void }) {
+  const [q, setQ] = useState('');
+  const porId = useMemo(() => new Map(productos.map((p) => [p.id, p])), [productos]);
+  const resultados = useMemo(() => {
+    const t = normalizarBusqueda(q);
+    if (!t) return [];
+    return productos.filter((p) => !valor.includes(p.id) && normalizarBusqueda(`${p.nombre_comercial} ${p.sku} ${p.principio_activo ?? ''}`).includes(t)).slice(0, 8);
+  }, [q, productos, valor]);
+  return (
+    <div className="flex flex-col gap-2">
+      {valor.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {valor.map((id) => (
+            <span key={id} className="inline-flex items-center gap-1 rounded-full bg-marca-50 py-0.5 pl-2.5 pr-1 text-sm text-marca-900 dark:bg-marca-950 dark:text-marca-100">
+              {porId.get(id)?.nombre_comercial ?? 'Producto'}
+              <button type="button" aria-label={`Quitar ${porId.get(id)?.nombre_comercial ?? 'producto'}`} onClick={() => onChange(valor.filter((x) => x !== id))} className="inline-flex h-6 w-6 items-center justify-center rounded-full hover:bg-marca-100 dark:hover:bg-marca-900"><X className="h-3.5 w-3.5" /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar producto por nombre, código o molécula" aria-label="Buscar producto" className={`${estiloInput} pl-9`} />
+      </div>
+      {resultados.length > 0 && (
+        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+          {resultados.map((p) => (
+            <li key={p.id}>
+              <button type="button" onClick={() => { onChange([...valor, p.id]); setQ(''); }} className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
+                <span className="min-w-0 truncate text-slate-900 dark:text-white">{p.nombre_comercial}</span>
+                <span className="shrink-0 text-xs text-slate-500">{p.sku}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function FormRegla({ inicial, droguerias, productos, onCerrar, onGuardada }: { inicial: FilaRegla; droguerias: { id: string; nombre: string }[]; productos: LocalProducto[]; onCerrar: () => void; onGuardada: () => void }) {
   const [r, setR] = useState(inicial);
+  const porProducto = tipoDe(inicial) === 'producto' || (inicial.alcance === 'linea' && !inicial.id);
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
   const numero = (v: string) => (v.trim() === '' ? null : Math.max(1, Math.round(Number(v)) || 1));
@@ -167,10 +246,11 @@ function FormRegla({ inicial, droguerias, onCerrar, onGuardada }: { inicial: Fil
     if (!sb) return;
     if (!(r.descuento_max_pct > 0 && r.descuento_max_pct <= 100)) return setError('El descuento debe estar entre 0,01% y 100%.');
     if (r.vigente_hasta && r.vigente_hasta < r.vigente_desde) return setError('La fecha final no puede ser anterior a la inicial.');
-    const nombre = r.nombre.trim() || `${r.descuento_max_pct}% ${describirRequisitos(r).toLowerCase()}`;
+    if (porProducto && r.productos.length === 0) return setError('Elige al menos un producto.');
+    const nombre = r.nombre.trim() || (porProducto ? `${r.descuento_max_pct}% en ${r.productos.length} producto${r.productos.length === 1 ? '' : 's'}` : `${r.descuento_max_pct}% ${describirRequisitos(r).toLowerCase()}`);
     setGuardando(true);
     try {
-      await guardarRegla(sb, { ...r, nombre, alcance: 'pedido' });
+      await guardarRegla(sb, porProducto ? { ...r, nombre, alcance: 'linea', min_skus_distintos: null, min_unidades_totales: null } : { ...r, nombre, alcance: 'pedido', productos: [], min_unidades_producto: null });
       onGuardada();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -180,12 +260,21 @@ function FormRegla({ inicial, droguerias, onCerrar, onGuardada }: { inicial: Fil
   };
 
   return (
-    <Sheet abierto titulo={inicial.id ? 'Editar condición' : 'Nueva condición'} onCerrar={onCerrar}>
+    <Sheet abierto titulo={`${inicial.id ? 'Editar' : 'Nuevo'} descuento ${porProducto ? 'por producto' : 'por pedido'}`} onCerrar={onCerrar}>
       <form onSubmit={guardar} className="grid gap-3 sm:grid-cols-2">
-        <Campo rotulo="Descuento del pedido (%)"><input type="number" step="0.5" min={0} max={100} required value={r.descuento_max_pct} onChange={(e) => setR({ ...r, descuento_max_pct: Number(e.target.value) })} className={estiloInput} /></Campo>
-        <Campo rotulo="Nombre" ayuda="Opcional: se arma solo."><input value={r.nombre} onChange={(e) => setR({ ...r, nombre: e.target.value })} placeholder="Ej. Escala 5%" className={estiloInput} /></Campo>
-        <Campo rotulo="Mínimo de productos distintos (SKU)" ayuda="Vacío = no se exige."><input type="number" min={1} value={r.min_skus_distintos ?? ''} onChange={(e) => setR({ ...r, min_skus_distintos: numero(e.target.value) })} className={estiloInput} /></Campo>
-        <Campo rotulo="Mínimo de unidades del pedido" ayuda="Vacío = no se exige."><input type="number" min={1} value={r.min_unidades_totales ?? ''} onChange={(e) => setR({ ...r, min_unidades_totales: numero(e.target.value) })} className={estiloInput} /></Campo>
+        <Campo rotulo={porProducto ? 'Descuento del producto (%)' : 'Descuento del pedido (%)'}><input type="number" step="0.5" min={0} max={100} required value={r.descuento_max_pct} onChange={(e) => setR({ ...r, descuento_max_pct: Number(e.target.value) })} className={estiloInput} /></Campo>
+        <Campo rotulo="Nombre" ayuda="Opcional: se arma solo."><input value={r.nombre} onChange={(e) => setR({ ...r, nombre: e.target.value })} placeholder={porProducto ? 'Ej. Promo Losartán' : 'Ej. Escala 5%'} className={estiloInput} /></Campo>
+        {porProducto ? (
+          <>
+            <Grupo rotulo="Productos con descuento" className="sm:col-span-2"><ElegirProductos productos={productos} valor={r.productos} onChange={(v) => setR({ ...r, productos: v })} /></Grupo>
+            <Campo rotulo="Desde cuántas unidades del producto" ayuda="Vacío = desde 1 unidad." className="sm:col-span-2"><input type="number" min={1} value={r.min_unidades_producto ?? ''} onChange={(e) => setR({ ...r, min_unidades_producto: numero(e.target.value) })} className={estiloInput} /></Campo>
+          </>
+        ) : (
+          <>
+            <Campo rotulo="Mínimo de productos distintos (SKU)" ayuda="Vacío = no se exige."><input type="number" min={1} value={r.min_skus_distintos ?? ''} onChange={(e) => setR({ ...r, min_skus_distintos: numero(e.target.value) })} className={estiloInput} /></Campo>
+            <Campo rotulo="Mínimo de unidades del pedido" ayuda="Vacío = no se exige."><input type="number" min={1} value={r.min_unidades_totales ?? ''} onChange={(e) => setR({ ...r, min_unidades_totales: numero(e.target.value) })} className={estiloInput} /></Campo>
+          </>
+        )}
         <Campo rotulo="Droguería" className="sm:col-span-2">
           <select value={r.drogueria_id ?? ''} onChange={(e) => setR({ ...r, drogueria_id: e.target.value || null })} className={estiloInput}>
             <option value="">Todas las droguerías</option>
@@ -196,7 +285,11 @@ function FormRegla({ inicial, droguerias, onCerrar, onGuardada }: { inicial: Fil
         <Campo rotulo="Vigente hasta" ayuda="Vacío = sin fecha de fin."><input type="date" value={r.vigente_hasta ?? ''} onChange={(e) => setR({ ...r, vigente_hasta: e.target.value || null })} className={estiloInput} /></Campo>
         <label className="inline-flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={r.activo} onChange={(e) => setR({ ...r, activo: e.target.checked })} className="h-4 w-4 accent-marca-700" /> Activa</label>
         <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600 sm:col-span-2 dark:bg-slate-950 dark:text-slate-300">
-          <b>{r.descuento_max_pct || 0}%</b> de descuento · {describirRequisitos(r).toLowerCase()}. Si defines los dos mínimos, el pedido debe cumplir ambos; para que baste uno solo, crea dos condiciones.
+          {porProducto ? (
+            <><b>{r.descuento_max_pct || 0}%</b> en {r.productos.length} producto{r.productos.length === 1 ? '' : 's'}{r.min_unidades_producto ? `, desde ${r.min_unidades_producto} unidades de cada uno` : ''}. Se aplica solo en esas líneas del pedido.</>
+          ) : (
+            <><b>{r.descuento_max_pct || 0}%</b> de descuento · {describirRequisitos(r).toLowerCase()}. Si defines los dos mínimos, el pedido debe cumplir ambos; para que baste uno solo, crea dos descuentos.</>
+          )}
         </p>
         {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300 sm:col-span-2">{error}</p>}
         <div className="flex justify-end gap-2 sm:col-span-2">
