@@ -73,7 +73,7 @@ export async function probarConexionSupabase(): Promise<{ ok: boolean; mensaje: 
       if (error.message.includes('relation') || error.message.includes('schema cache') || error.code === '42P01') {
         return {
           ok: true,
-          mensaje: 'Conectado a Supabase con éxito, pero la base de datos está vacía. Ve a la pestaña "Script SQL" en NOVA y sigue los pasos: ejecuta el esquema v3 (y la migración, si ya tenías datos) en el Supabase SQL Editor.',
+          mensaje: 'Conectado a Supabase, pero la base de datos está vacía: ejecuta src/sql/nova_produccion_v3.sql en Supabase → SQL Editor.',
         };
       }
       // El esquema v3 protege todas las tablas con RLS y no da acceso al rol anónimo: sin sesión, "permission denied"
@@ -81,7 +81,7 @@ export async function probarConexionSupabase(): Promise<{ ok: boolean; mensaje: 
       if (error.code === '42501' || /permission denied/i.test(error.message)) {
         return {
           ok: true,
-          mensaje: 'Conexión correcta. Las tablas están protegidas: inicia sesión con tu usuario (menú de cuenta) para ver y guardar datos.',
+          mensaje: 'Conexión correcta. Ya puedes iniciar sesión con tu correo y contraseña.',
         };
       }
       return {

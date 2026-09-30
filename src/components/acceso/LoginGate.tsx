@@ -33,10 +33,18 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
     try {
       onEntrar(await iniciarSesionNube(email, password));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(explicar(err));
     } finally {
       setCargando(false);
     }
+  };
+
+  /** Sin respuesta del servidor: se dice a qué dirección se intentó llegar y cómo revisarla. */
+  const explicar = (err: unknown) => {
+    const texto = err instanceof Error ? err.message : String(err);
+    return texto.startsWith('No hay conexión con el servidor')
+      ? `No se pudo conectar con ${getStoredSupabaseConfig().url}. Toca «Conexión» y luego «Probar y guardar» para revisar la URL y la clave.`
+      : texto;
   };
 
   const recuperar = async () => {
@@ -46,7 +54,7 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
       await recuperarPasswordNube(email);
       setInfo(`Te enviamos un enlace a ${email.trim()} para crear una contraseña nueva.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(explicar(err));
     }
   };
 

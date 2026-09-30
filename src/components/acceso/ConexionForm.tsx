@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import { clearSupabaseConfig, getStoredSupabaseConfig, probarConexionSupabase, saveSupabaseConfig } from '../../services/supabaseClient';
+import { diagnosticarConexion } from '../../services/diagnosticoConexion';
 import { Boton, estiloInput } from '../ui/kit';
 
 /** Conexión con el proyecto de Supabase (URL y clave pública "anon"). Se usa en el acceso inicial y en Configuración. */
@@ -16,6 +17,12 @@ export const ConexionForm: React.FC<{ onCambio: () => void; permitirQuitar?: boo
     if (!url.trim() || !clave.trim()) return setResultado({ ok: false, mensaje: 'Escribe la URL y la clave "anon" de tu proyecto.' });
     setProbando(true);
     setResultado(null);
+    // Primero se comprueba URL y clave; solo se guardan si funcionan (antes se guardaban aunque la prueba fallara).
+    const diagnostico = await diagnosticarConexion(url, clave);
+    if (!diagnostico.ok) {
+      setProbando(false);
+      return setResultado(diagnostico);
+    }
     saveSupabaseConfig(url, clave);
     const r = await probarConexionSupabase();
     setProbando(false);
@@ -30,10 +37,10 @@ export const ConexionForm: React.FC<{ onCambio: () => void; permitirQuitar?: boo
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://xxxx.supabase.co" autoComplete="off" spellCheck={false} className={`${estiloInput} mt-1`} />
       </label>
       <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
-        Clave pública (anon key)
-        <input value={clave} onChange={(e) => setClave(e.target.value)} placeholder="eyJ…" autoComplete="off" spellCheck={false} className={`${estiloInput} mt-1 font-mono text-xs`} />
+        Clave pública (publishable o anon)
+        <input value={clave} onChange={(e) => setClave(e.target.value)} placeholder="sb_publishable_… o eyJ…" autoComplete="off" spellCheck={false} className={`${estiloInput} mt-1 font-mono text-xs`} />
       </label>
-      <p className="text-[11px] text-slate-500 dark:text-slate-400">En Supabase: Project Settings → API. Usa siempre la clave <b>anon</b>, nunca la service_role.</p>
+      <p className="text-[11px] text-slate-500 dark:text-slate-400">En Supabase: botón <b>Connect</b> del proyecto, o Project Settings → Data API (URL) y API Keys (clave). Usa la clave <b>publishable</b> o <b>anon</b>; nunca la secret ni la service_role.</p>
       {resultado && (
         <p className={`flex items-start gap-1.5 rounded-xl px-3 py-2 text-xs ${resultado.ok ? 'bg-emerald-50 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200' : 'bg-rose-50 text-rose-900 dark:bg-rose-950/40 dark:text-rose-200'}`}>
           {resultado.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />}
