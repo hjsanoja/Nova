@@ -9,7 +9,6 @@ import type {
   LocalCliente,
   LocalDetalle,
   LocalPedido,
-  LocalPlantilla,
   LocalVisita,
   ResultadoVisita,
 } from './types';
@@ -427,29 +426,3 @@ export function distanciaMetros(lat1: number, lon1: number, lat2: number, lon2: 
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-/** Plantilla de reposición: guarda un carrito recurrente para duplicarlo en un toque. */
-export async function guardarPlantillaLocal(
-  db: NovaDB,
-  datos: { nombre: string; cliente_id?: string | null; drogueria_id?: string | null; items: { producto_id: string; unidades: number }[] },
-  sesion: Sesion
-): Promise<LocalPlantilla> {
-  if (datos.items.length === 0) throw new Error('La plantilla no tiene productos');
-  const plantilla: LocalPlantilla = {
-    id: crypto.randomUUID(),
-    vendedor_id: sesion.vendedor_id,
-    cliente_id: datos.cliente_id ?? null,
-    drogueria_id: datos.drogueria_id ?? null,
-    nombre: datos.nombre.trim() || 'Plantilla',
-    items: datos.items,
-    sync_estado: 'pendiente',
-  };
-  await db.transaction('rw', [db.plantillas, db.outbox], async () => {
-    await db.plantillas.add(plantilla);
-    await encolar(db, {
-      tipo: 'plantilla.guardar',
-      entidad_id: plantilla.id,
-      payload: { id: plantilla.id, nombre: plantilla.nombre, cliente_id: plantilla.cliente_id, drogueria_id: plantilla.drogueria_id, items: plantilla.items },
-    });
-  });
-  return plantilla;
-}

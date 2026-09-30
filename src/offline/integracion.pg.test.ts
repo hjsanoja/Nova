@@ -54,7 +54,7 @@ async function comoUsuario<T>(uid: string, fn: (c: pg.Client) => Promise<T>): Pr
   }
 }
 
-const TABLAS = new Set(['dim_productos', 'dim_droguerias', 'dim_clientes', 'map_producto_drogueria', 'map_cliente_drogueria', 'config_reglas_comerciales', 'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'plantillas_reposicion', 'fact_compras_mensual']);
+const TABLAS = new Set(['dim_productos', 'dim_droguerias', 'dim_clientes', 'map_producto_drogueria', 'map_cliente_drogueria', 'config_reglas_comerciales', 'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'fact_compras_mensual']);
 const COLUMNAS_FILTRO = new Set(['pedido_id']);
 const COLUMNAS_MINIMO = new Set(['periodo']);
 
@@ -95,7 +95,7 @@ function remotoPostgres(uid: string): SyncRemote & { caido: boolean } {
           donde.push(`t.${col} >= $${params.length}`);
         }
         params.push(limite);
-        const extra = tabla === 'plantillas_reposicion' ? ", coalesce((SELECT json_agg(json_build_object('producto_id', i.producto_id, 'unidades', i.unidades)) FROM plantilla_items i WHERE i.plantilla_id = t.id), '[]'::json) AS plantilla_items" : '';
+        const extra = '';
         // row_to_json imita a PostgREST: fechas ISO, numéricos como números, jsonb anidado.
         const r = await c.query(`SELECT row_to_json(x) AS f FROM (SELECT t.*${extra} FROM ${tabla} t WHERE ${donde.join(' AND ')} ORDER BY t.updated_at LIMIT $${params.length}) x`, params);
         return r.rows.map((row) => row.f as FilaRemota);
@@ -116,7 +116,6 @@ const RPC: Record<Exclude<TipoOutbox, 'pedido.rerutear'>, string> = {
   'pedido.crear': 'sync_crear_pedido',
   'pedido.modificar': 'sync_modificar_pedido',
   'visita.registrar': 'sync_registrar_visita',
-  'plantilla.guardar': 'sync_guardar_plantilla',
 };
 
 describe.skipIf(!activo)('integración con PostgreSQL + PostGIS', () => {

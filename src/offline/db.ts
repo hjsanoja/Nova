@@ -9,7 +9,6 @@ import type {
   LocalMapProducto,
   LocalNotificacion,
   LocalPedido,
-  LocalPlantilla,
   LocalProducto,
   LocalVisita,
   MetaEntrada,
@@ -33,7 +32,6 @@ export class NovaDB extends Dexie {
   pedidos!: Table<LocalPedido, string>;
   detalles!: Table<LocalDetalle, string>;
   visitas!: Table<LocalVisita, string>;
-  plantillas!: Table<LocalPlantilla, string>;
   notificaciones!: Table<LocalNotificacion, string>;
   outbox!: Table<OutboxItem, number>;
   meta!: Table<MetaEntrada, string>;
@@ -62,6 +60,8 @@ export class NovaDB extends Dexie {
     this.version(2).stores({
       comprasMensual: 'id, [cliente_id+periodo], cliente_id, producto_id',
     });
+    // v3: se retiran las plantillas de reposición (las reemplazan los carritos guardados y el pedido sugerido).
+    this.version(3).stores({ plantillas: null });
   }
 
   async leerMeta<T>(clave: string, defecto: T): Promise<T> {

@@ -11,7 +11,6 @@ import type {
   LocalMapProducto,
   LocalNotificacion,
   LocalPedido,
-  LocalPlantilla,
   LocalProducto,
 } from './types';
 
@@ -75,6 +74,7 @@ export const TABLAS_PULL: TablaPull[] = [
             empaque_minimo: Number(f.empaque_minimo ?? 1),
             es_prioritario: f.es_prioritario === true,
             activo: f.activo !== false,
+            foto_url: strN(f.foto_url),
             updated_at: str(f.updated_at),
             tokens: tokensProducto(base),
           };
@@ -298,29 +298,6 @@ export const TABLAS_PULL: TablaPull[] = [
           pedido_id: strN(f.pedido_id),
           leida: f.leida === true,
           created_at: str(f.created_at),
-        }))
-      );
-    },
-  },
-  {
-    remota: 'plantillas_reposicion',
-    seleccion: '*, plantilla_items(producto_id, unidades)',
-    aplicar: async (db, filas) => {
-      const locales = new Map((await db.plantillas.bulkGet(filas.map((f) => str(f.id)))).filter((p): p is LocalPlantilla => !!p).map((p) => [p.id, p]));
-      const limpias = filas.filter((f) => (locales.get(str(f.id))?.sync_estado ?? 'sincronizado') === 'sincronizado');
-      await db.plantillas.bulkDelete(borrados(limpias));
-      await db.plantillas.bulkPut(
-        vigentes(limpias).map<LocalPlantilla>((f) => ({
-          id: str(f.id),
-          vendedor_id: str(f.vendedor_id),
-          cliente_id: strN(f.cliente_id),
-          drogueria_id: strN(f.drogueria_id),
-          nombre: str(f.nombre),
-          items: ((f.plantilla_items as { producto_id: string; unidades: number }[] | null) ?? []).map((i) => ({
-            producto_id: i.producto_id,
-            unidades: i.unidades,
-          })),
-          sync_estado: 'sincronizado',
         }))
       );
     },

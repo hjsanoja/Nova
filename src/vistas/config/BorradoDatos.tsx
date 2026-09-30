@@ -9,7 +9,7 @@ import { Boton, Tarjeta, estiloInput, useAviso } from '../../components/ui/kit';
 type Alcance = 'historial' | 'pedidos' | 'homologaciones' | 'fichero' | 'clientes' | 'productos' | 'droguerias' | 'todo';
 const ALCANCES: { id: Alcance; titulo: string; texto: string }[] = [
   { id: 'historial', titulo: 'Ventas de droguerías', texto: 'Las ventas reportadas por las droguerías y el consolidado mensual. Todo lo demás se conserva.' },
-  { id: 'pedidos', titulo: 'Pedidos', texto: 'Todos los pedidos, visitas, plantillas y avisos. La numeración vuelve a empezar en PED-1001.' },
+  { id: 'pedidos', titulo: 'Pedidos', texto: 'Todos los pedidos, visitas y avisos. La numeración vuelve a empezar en PED-1001.' },
   { id: 'homologaciones', titulo: 'Homologaciones', texto: 'Los códigos de farmacias y productos en cada droguería. Las ventas se conservan y vuelven a "pendientes de homologar".' },
   { id: 'fichero', titulo: 'Fichero de vendedores', texto: 'Qué farmacias atiende cada vendedor. Farmacias y pedidos se conservan.' },
   { id: 'clientes', titulo: 'Farmacias', texto: 'Todas las farmacias. También se borran los pedidos y visitas (dependen de ellas), el fichero y sus homologaciones. Las ventas se conservan sin farmacia.' },

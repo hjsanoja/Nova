@@ -15,7 +15,7 @@ import { obtenerEstadoSync } from './offline/syncStore';
 
 // Cada módulo se descarga solo cuando se usa (el bundle inicial se reduce a la estructura).
 const Inicio = lazy(() => import('./vistas/Inicio').then((m) => ({ default: m.Inicio })));
-const PedidoCapturaScreen = lazy(() => import('./components/capture/PedidoCapturaScreen').then((m) => ({ default: m.PedidoCapturaScreen })));
+const TiendaVista = lazy(() => import('./pedido/TiendaVista').then((m) => ({ default: m.TiendaVista })));
 const ClientesVista = lazy(() => import('./vistas/ClientesVista').then((m) => ({ default: m.ClientesVista })));
 const PedidosVista = lazy(() => import('./vistas/PedidosVista').then((m) => ({ default: m.PedidosVista })));
 const PorProcesarVista = lazy(() => import('./vistas/PorProcesarVista').then((m) => ({ default: m.PorProcesarVista })));
@@ -145,7 +145,7 @@ function AppContent() {
           <ErrorBoundary compacto resetKey={tabActiva}>
             <Suspense fallback={<Cargando />}>
               {tabActiva === 'inicio' && <Inicio usuario={usuarioActual} irATab={irATab} />}
-              {tabActiva === 'captura' && <PedidoCapturaScreen vendedorId={usuarioActual.id} equipoId={null} />}
+              {tabActiva === 'captura' && <TiendaVista vendedorId={usuarioActual.id} equipoId={null} />}
               {tabActiva === 'clientes' && <ClientesVista usuario={usuarioActual} irATab={irATab} />}
               {tabActiva === 'pedidos' && <PedidosVista usuario={usuarioActual} />}
               {tabActiva === 'por_procesar' && <PorProcesarVista usuario={usuarioActual} irATab={irATab} />}

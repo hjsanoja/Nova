@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ClipboardPlus, MapPin, Phone, Plus, Search, UserMinus, Users } from 'lucide-react';
+import { ClipboardPlus, MapPin, MapPinCheck, Phone, Plus, Search, UserMinus, Users } from 'lucide-react';
 import type { Usuario } from '../types/pharmacy';
 import type { LocalCliente } from '../offline/types';
 import { Sheet } from '../components/capture/Sheet';
@@ -10,6 +10,9 @@ import { prepararPedidoPara } from './navegacion';
 import { AgregarFarmacias } from './AgregarFarmacias';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { cambiarMiFichero, refrescarFarmaciasDelDispositivo } from '../services/ficheroVendedor';
+import { obtenerDb } from '../offline/db';
+import { registrarVisitaLocal } from '../offline/pedidos';
+import { solicitarSync } from '../offline/motor';
 import { ultimaCompraPorCliente, ultimoPedidoPorCliente, useClientes, useCompras, useDroguerias, useMapClientes, usePedidos, useProductos } from './useDatos';
 
 const POR_PAGINA = 60;
@@ -34,6 +37,16 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
   const puedeEditarFichero = esVendedor && !!getSupabaseClient();
   const [agregando, setAgregando] = useState(false);
   const { mostrar, nodo } = useAviso();
+  // Visita (check-in): guarda la ubicación; el servidor calcula si estaba dentro del radio de la farmacia.
+  const registrarVisita = (c: LocalCliente) => {
+    const guardar = async (pos?: GeolocationPosition) => {
+      await registrarVisitaLocal(obtenerDb(), { cliente_id: c.id, lat: pos?.coords.latitude, lon: pos?.coords.longitude, precision_gps_m: pos?.coords.accuracy }, { vendedor_id: usuario.id });
+      solicitarSync();
+      mostrar({ tipo: 'ok', texto: `Visita a ${c.nombre_comercial} registrada${pos ? '' : ' (sin ubicación)'}.` });
+    };
+    if (!navigator.geolocation) return void guardar();
+    navigator.geolocation.getCurrentPosition((p) => void guardar(p), () => void guardar(), { enableHighAccuracy: true, timeout: 10000 });
+  };
   const quitarDeMiFichero = async (c: LocalCliente) => {
     const sb = getSupabaseClient();
     if (!sb || !c.codigo_interno) return;
@@ -142,6 +155,7 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
             puedePedir={usuario.rol === 'vendedor' || usuario.rol === 'admin'}
             onPedido={() => { prepararPedidoPara(seleccionado.id); setAbierto(null); irATab('captura'); }}
             onQuitar={puedeEditarFichero && seleccionado.codigo_interno ? () => void quitarDeMiFichero(seleccionado) : undefined}
+            onVisita={esVendedor ? () => registrarVisita(seleccionado) : undefined}
           />
         )}
       </Sheet>
@@ -158,6 +172,7 @@ function FichaCliente({
   puedePedir,
   onPedido,
   onQuitar,
+  onVisita,
 }: {
   cliente: LocalCliente;
   compras: { producto_id: string; periodo: string; unidades: number }[];
@@ -168,6 +183,7 @@ function FichaCliente({
   onPedido: () => void;
   /** Solo el vendedor, en su propio fichero. */
   onQuitar?: () => void;
+  onVisita?: () => void;
 }) {
   // Lo que más compró en los últimos 3 meses con datos.
   const periodos = Array.from(new Set(compras.map((x) => x.periodo))).sort().reverse().slice(0, 3);
@@ -182,7 +198,8 @@ function FichaCliente({
         {puedePedir && <Boton variante="primario" icono={ClipboardPlus} onClick={onPedido}>Tomar pedido</Boton>}
         {c.telefono && <a href={`tel:${c.telefono}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"><Phone className="h-4 w-4" />{c.telefono}</a>}
         {mapa && <a href={mapa} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"><MapPin className="h-4 w-4" />Cómo llegar</a>}
-        {onQuitar && <Boton variante="suave" icono={UserMinus} onClick={onQuitar}>Quitar de mi fichero</Boton>}
+        {onVisita && <Boton icono={MapPinCheck} onClick={onVisita}>Registrar visita</Boton>}
+        {onQuitar && <Boton variante="fantasma" icono={UserMinus} onClick={onQuitar}>Quitar de mi fichero</Boton>}
       </div>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">

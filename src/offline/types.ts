@@ -49,6 +49,8 @@ export interface LocalProducto {
   empaque_minimo: number;
   es_prioritario: boolean;
   activo: boolean;
+  /** Foto del producto (URL); sin foto se muestran las iniciales. */
+  foto_url?: string | null;
   updated_at?: string;
   /** Palabras normalizadas (multiEntry): búsqueda por prefijo sin recorrer el catálogo. */
   tokens: string[];
@@ -224,16 +226,6 @@ export interface LocalVisita {
   sync_estado: EstadoSync;
 }
 
-export interface LocalPlantilla {
-  id: string;
-  vendedor_id: string;
-  cliente_id?: string | null;
-  drogueria_id?: string | null;
-  nombre: string;
-  items: { producto_id: string; unidades: number }[];
-  sync_estado: EstadoSync;
-}
-
 export interface LocalNotificacion {
   id: string;
   usuario_id: string;
@@ -250,8 +242,7 @@ export type TipoOutbox =
   | 'pedido.crear'
   | 'pedido.modificar'
   | 'pedido.rerutear'
-  | 'visita.registrar'
-  | 'plantilla.guardar';
+  | 'visita.registrar';
 
 export type EstadoOutbox = 'pendiente' | 'error' | 'conflicto';
 

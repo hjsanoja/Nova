@@ -203,7 +203,10 @@ export function Dato({ rotulo, valor, tono, nota, icono: Icono }: { rotulo: stri
 /** Iniciales o foto. Sirve para personas y, con `cuadrado`, para productos. */
 export function Avatar({ nombre, foto, tamano = 40, cuadrado = false }: { nombre: string; foto?: string | null; tamano?: number; cuadrado?: boolean }) {
   const [fallo, setFallo] = useState(false);
-  const iniciales = nombre.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('') || '?';
+  // Personas: iniciales de nombre y apellido. Productos (cuadrado): las dos primeras letras del nombre ("Losartán 50" -> LO).
+  const iniciales = (cuadrado
+    ? nombre.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ]/g, '').slice(0, 2)
+    : nombre.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]).join('')).toUpperCase() || '?';
   const forma = cuadrado ? 'rounded-lg' : 'rounded-full';
   const estilo = { width: tamano, height: tamano, fontSize: Math.max(11, Math.round(tamano * 0.36)) };
   if (foto && !fallo) {
@@ -268,7 +271,7 @@ export function PasoUnidades({ valor, onChange, paso = 1, min = 0, etiqueta = 'U
   const alto = compacto ? 'h-8' : 'h-10';
   return (
     <div className={`inline-flex ${alto} items-stretch overflow-hidden rounded-lg border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-900`}>
-      <button type="button" aria-label={`Quitar ${paso}`} onClick={() => onChange(Math.max(min, valor - paso))} className="inline-flex w-9 items-center justify-center text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+      <button type="button" aria-label={`Quitar ${paso}`} onClick={() => onChange(Math.max(min, valor - paso))} className={`inline-flex ${compacto ? 'w-8' : 'w-9'} items-center justify-center text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800`}>
         <Minus className="h-4 w-4" />
       </button>
       <input
@@ -276,9 +279,9 @@ export function PasoUnidades({ valor, onChange, paso = 1, min = 0, etiqueta = 'U
         aria-label={etiqueta}
         value={valor}
         onChange={(e) => { const n = parseInt(e.target.value.replace(/\D/g, ''), 10); onChange(Number.isFinite(n) ? Math.max(min, n) : min); }}
-        className="w-12 border-x border-slate-200 bg-transparent text-center text-sm font-semibold tabular-nums focus:outline-none dark:border-slate-700"
+        className={`${compacto ? 'w-10' : 'w-12'} border-x border-slate-200 bg-transparent text-center text-sm font-semibold tabular-nums focus:outline-none dark:border-slate-700`}
       />
-      <button type="button" aria-label={`Sumar ${paso}`} onClick={() => onChange(valor + paso)} className="inline-flex w-9 items-center justify-center text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+      <button type="button" aria-label={`Sumar ${paso}`} onClick={() => onChange(valor + paso)} className={`inline-flex ${compacto ? 'w-8' : 'w-9'} items-center justify-center text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800`}>
         <Plus className="h-4 w-4" />
       </button>
     </div>

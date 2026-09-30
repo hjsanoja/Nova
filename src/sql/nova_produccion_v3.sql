@@ -27,7 +27,7 @@ BEGIN
   SELECT string_agg(t.nombre, ', ' ORDER BY t.nombre) INTO v_tablas
     FROM unnest(ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias','dim_productos',
                       'map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto','config_reglas_comerciales',
-                      'fact_pedidos','fact_pedido_detalles','fact_compras_mensual','crm_visitas','plantillas_reposicion',
+                      'fact_pedidos','fact_pedido_detalles','fact_compras_mensual','crm_visitas',
                       'notificaciones','alertas_comerciales']) AS t(nombre)
    WHERE to_regclass('public.' || t.nombre) IS NOT NULL
      AND NOT EXISTS (SELECT 1 FROM information_schema.columns c
@@ -696,26 +696,9 @@ CREATE INDEX IF NOT EXISTS idx_visitas_cliente ON crm_visitas (cliente_id, check
 CREATE INDEX IF NOT EXISTS idx_visitas_ubicacion ON crm_visitas USING gist (checkin_ubicacion);
 CREATE INDEX IF NOT EXISTS idx_visitas_updated ON crm_visitas (updated_at);
 
-CREATE TABLE IF NOT EXISTS plantillas_reposicion (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  vendedor_id   uuid NOT NULL REFERENCES dim_usuarios(id) ON DELETE CASCADE,
-  cliente_id    uuid REFERENCES dim_clientes(id) ON DELETE CASCADE,   -- nula = plantilla general
-  drogueria_id  uuid REFERENCES dim_droguerias(id),
-  nombre        text NOT NULL,
-  created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT clock_timestamp(),
-  row_version   integer NOT NULL DEFAULT 1,
-  deleted_at    timestamptz
-);
-CREATE INDEX IF NOT EXISTS idx_plantillas_vendedor ON plantillas_reposicion (vendedor_id, cliente_id);
-CREATE INDEX IF NOT EXISTS idx_plantillas_updated ON plantillas_reposicion (updated_at);
-
-CREATE TABLE IF NOT EXISTS plantilla_items (
-  plantilla_id uuid NOT NULL REFERENCES plantillas_reposicion(id) ON DELETE CASCADE,
-  producto_id  uuid NOT NULL REFERENCES dim_productos(id),
-  unidades     integer NOT NULL CHECK (unidades > 0),
-  PRIMARY KEY (plantilla_id, producto_id)
-);
+-- Plantillas de reposición: retiradas (las reemplazan los carritos guardados en el dispositivo y el pedido sugerido).
+DROP FUNCTION IF EXISTS sync_guardar_plantilla(jsonb);
+DROP TABLE IF EXISTS plantilla_items, plantillas_reposicion CASCADE;
 
 CREATE TABLE IF NOT EXISTS notificaciones (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -770,7 +753,7 @@ DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias',
     'dim_productos','map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto',
-    'config_reglas_comerciales','fact_pedidos','fact_pedido_detalles','crm_visitas','plantillas_reposicion',
+    'config_reglas_comerciales','fact_pedidos','fact_pedido_detalles','crm_visitas',
     'notificaciones','alertas_comerciales','fact_compras_mensual']
   LOOP
     EXECUTE format('DROP TRIGGER IF EXISTS trg_touch ON %I', t);
@@ -1202,21 +1185,6 @@ BEGIN
                             'dentro_de_radio', v_row.dentro_de_radio, 'row_version', v_row.row_version);
 END $$;
 
-CREATE OR REPLACE FUNCTION sync_guardar_plantilla(p jsonb) RETURNS jsonb
-LANGUAGE plpgsql SET search_path = public AS $$
-DECLARE v_id uuid := (p->>'id')::uuid; i jsonb;
-BEGIN
-  INSERT INTO plantillas_reposicion (id, vendedor_id, cliente_id, drogueria_id, nombre)
-  VALUES (v_id, auth.uid(), nullif(p->>'cliente_id','')::uuid, nullif(p->>'drogueria_id','')::uuid, p->>'nombre')
-  ON CONFLICT (id) DO UPDATE SET nombre = excluded.nombre, drogueria_id = excluded.drogueria_id
-    WHERE plantillas_reposicion.vendedor_id = auth.uid();
-  DELETE FROM plantilla_items WHERE plantilla_id = v_id;
-  FOR i IN SELECT * FROM jsonb_array_elements(coalesce(p->'items', '[]'::jsonb)) LOOP
-    INSERT INTO plantilla_items (plantilla_id, producto_id, unidades)
-    VALUES (v_id, (i->>'producto_id')::uuid, (i->>'unidades')::integer);
-  END LOOP;
-  RETURN jsonb_build_object('id', v_id);
-END $$;
 
 -- ------------------------------------------------------------------------------
 -- 11. MESA DE TRANSFERENCIAS: BLOQUEO, CONFIRMACIÓN Y SPLIT ORDERS
@@ -2096,7 +2064,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY['dim_equipos','dim_usuarios','dim_clientes','rel_cliente_vendedor','dim_droguerias',
     'dim_productos','map_producto_drogueria','map_cliente_drogueria','precios_drogueria_producto',
     'config_reglas_comerciales','config_sistema','secretos_sistema','fact_pedidos','fact_pedido_detalles',
-    'pedido_bloqueos','crm_visitas','plantillas_reposicion','plantilla_items','notificaciones',
+    'pedido_bloqueos','crm_visitas','notificaciones',
     'alertas_comerciales','audit_log','import_lotes','fact_ventas_drogueria','fact_compras_mensual']
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
@@ -2201,13 +2169,6 @@ CREATE POLICY visitas_propias ON crm_visitas FOR ALL TO authenticated
 DROP POLICY IF EXISTS visitas_staff ON crm_visitas;
 CREATE POLICY visitas_staff ON crm_visitas FOR SELECT TO authenticated USING ((SELECT app.es_staff()));
 
-DROP POLICY IF EXISTS plantillas_propias ON plantillas_reposicion;
-CREATE POLICY plantillas_propias ON plantillas_reposicion FOR ALL TO authenticated
-  USING (vendedor_id = (SELECT auth.uid())) WITH CHECK (vendedor_id = (SELECT auth.uid()));
-DROP POLICY IF EXISTS plantilla_items_propios ON plantilla_items;
-CREATE POLICY plantilla_items_propios ON plantilla_items FOR ALL TO authenticated
-  USING (EXISTS (SELECT 1 FROM plantillas_reposicion pl WHERE pl.id = plantilla_id AND pl.vendedor_id = (SELECT auth.uid())))
-  WITH CHECK (EXISTS (SELECT 1 FROM plantillas_reposicion pl WHERE pl.id = plantilla_id AND pl.vendedor_id = (SELECT auth.uid())));
 
 DROP POLICY IF EXISTS notif_propias ON notificaciones;
 CREATE POLICY notif_propias ON notificaciones FOR SELECT TO authenticated USING (usuario_id = (SELECT auth.uid()));
@@ -2470,7 +2431,7 @@ GRANT EXECUTE ON FUNCTION eliminar_registros(text, text[]), admin_eliminar_usuar
 -- la de inicio de sesión) + máximo 5 intentos fallidos cada 15 minutos. Cada uso queda en audit_log.
 -- Nunca se tocan usuarios, equipos, configuración, secretos ni auditoría.
 --   alcance 'historial'       -> ventas reportadas por las droguerías, sus lotes y el consolidado mensual
---   alcance 'pedidos'         -> pedidos, detalles, visitas, plantillas, notificaciones y alertas (el correlativo reinicia)
+--   alcance 'pedidos'         -> pedidos, detalles, visitas, notificaciones y alertas (el correlativo reinicia)
 --   alcance 'homologaciones'  -> códigos de farmacias y productos por droguería; las ventas vuelven a "sin homologar"
 --   alcance 'fichero'         -> asignación de farmacias a vendedores
 --   alcance 'clientes'        -> farmacias + pedidos (dependen de ellas), fichero y homologaciones de farmacias;
@@ -2533,8 +2494,8 @@ BEGIN
     TRUNCATE fact_compras_mensual, fact_ventas_drogueria, import_lotes RESTART IDENTITY CASCADE;
   END IF;
   IF p_alcance IN ('pedidos', 'clientes', 'productos', 'droguerias', 'todo') THEN
-    TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, plantilla_items,
-             plantillas_reposicion, alertas_comerciales, fact_pedidos RESTART IDENTITY CASCADE;
+    TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, alertas_comerciales,
+             fact_pedidos RESTART IDENTITY CASCADE;
     PERFORM setval('seq_correlativo_pedido', 1001, false);
   END IF;
   IF p_alcance = 'homologaciones' THEN
