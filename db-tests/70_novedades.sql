@@ -204,6 +204,24 @@ DO $$ BEGIN
   ASSERT (SELECT count(*) FROM notificaciones WHERE tipo = 'pedido_procesado_total' AND usuario_id = 'a0000000-0000-0000-0000-0000000000c1') = 1, 'el vendedor recibe el aviso del despacho';
   RAISE NOTICE 'OK 42: avisos al teléfono (suscripciones propias, configuración solo admin, sin pg_net no falla, aviso de despacho)';
 END $$;
+-- ---------------------------------------------------------------- 44. eliminar pedidos de prueba (propaga a los dispositivos)
+SELECT t.como(:v1);
+DO $$ BEGIN
+  BEGIN PERFORM eliminar_registros('pedidos', ARRAY['b0000000-0000-0000-0000-0000000000a2']); ASSERT false, 'solo admin'; EXCEPTION WHEN sqlstate '42501' THEN NULL; END;
+END $$;
+SELECT t.como(:admin);
+DO $$
+DECLARE v_corr text := (SELECT correlativo FROM fact_pedidos WHERE id = 'b0000000-0000-0000-0000-0000000000a2');
+BEGIN
+  ASSERT eliminar_registros('pedidos', ARRAY[v_corr]) = 1, 'por correlativo';
+  ASSERT (SELECT deleted_at IS NOT NULL FROM fact_pedidos WHERE id = 'b0000000-0000-0000-0000-0000000000a2');
+  ASSERT (SELECT bool_and(deleted_at IS NOT NULL) FROM fact_pedido_detalles WHERE pedido_id = 'b0000000-0000-0000-0000-0000000000a2'), 'y sus líneas';
+  ASSERT (SELECT deleted_at IS NULL FROM fact_pedidos WHERE id = 'b0000000-0000-0000-0000-0000000000a1'), 'los demás quedan';
+  -- El borrado masivo (40/60) dejó la marca que hace que cada dispositivo vacíe su copia.
+  ASSERT EXISTS (SELECT 1 FROM config_sistema WHERE clave = 'epoca_datos'), 'marca de datos reiniciados';
+  RAISE NOTICE 'OK 44: eliminar pedidos seleccionados (solo admin; con sus líneas) y marca de datos reiniciados';
+END $$;
+
 -- ---------------------------------------------------------------- 43. el aviso sale hacia la Edge Function (pg_net simulado)
 RESET ROLE;
 CREATE SCHEMA IF NOT EXISTS net;

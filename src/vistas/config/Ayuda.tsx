@@ -41,6 +41,7 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
     titulo: 'Para administradores',
     items: [
       'Datos maestros: carga o edita droguerías, productos, farmacias y ventas. Marca uno o varios registros para borrarlos.',
+      'Pedidos de prueba: en Pedidos marca los que quieras y toca "Eliminar"; para vaciar todos usa Configuración → Base de datos → Pedidos. Los teléfonos se limpian solos al sincronizar.',
       'Archivo de pedido de cada droguería: Datos maestros → Droguerías → toca la droguería → "Formato del archivo de pedido". Arma las columnas, el separador y el nombre del archivo, con vista previa.',
       'Fichero: asigna a cada vendedor las farmacias que atiende. Homologación: relaciona los códigos de cada droguería con tus farmacias y productos.',
       'Descuentos: por pedido (productos distintos y unidades, juntos o por separado) o por producto (lista de productos y, si quieres, desde cuántas unidades).',
