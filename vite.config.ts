@@ -2,6 +2,11 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import {defineConfig} from 'vitest/config';
 import type {Plugin} from 'vite';
+import {readFileSync, writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+
+// Versión de NOVA: la primera entrada de src/novedades.json (se lee aquí sin importar código de la app).
+const VERSION: string = JSON.parse(readFileSync(new URL('./src/novedades.json', import.meta.url), 'utf8'))[0].version;
 
 /** Lista de todos los archivos con hash del build: el Service Worker los precachea para trabajar sin conexión. */
 const manifiestoServiceWorker = (): Plugin => ({
@@ -13,10 +18,32 @@ const manifiestoServiceWorker = (): Plugin => ({
   },
 });
 
+/**
+ * Versión publicada: version.json (la app lo consulta para avisar que hay una versión nueva) y el nombre de la caché del
+ * Service Worker (cada versión instala la suya y borra la anterior).
+ */
+const versionPublicada = (): Plugin => {
+  let salida = 'dist';
+  return {
+    name: 'nova-version',
+    apply: 'build',
+    configResolved(config) {
+      salida = join(config.root, config.build.outDir);
+    },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version: VERSION }) });
+    },
+    closeBundle() {
+      const ruta = join(salida, 'sw.js');
+      writeFileSync(ruta, readFileSync(ruta, 'utf8').replace("'nova-__VERSION_APP__'", `'nova-${VERSION}'`));
+    },
+  };
+};
+
 export default defineConfig({
   // Rutas relativas: el build funciona igual en GitHub Pages (subruta) que en Cloud Run.
   base: './',
-  plugins: [react(), tailwindcss(), manifiestoServiceWorker()],
+  plugins: [react(), tailwindcss(), manifiestoServiceWorker(), versionPublicada()],
   build: {
     target: 'es2022',
     // El escáner de códigos (html5-qrcode, ~370 kB) se descarga solo al abrir la cámara.

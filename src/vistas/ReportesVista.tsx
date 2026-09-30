@@ -5,6 +5,7 @@ import { getSupabaseClient } from '../services/supabaseClient';
 import { Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso } from '../components/ui/kit';
 import { aCsv, cumplimientoPorDrogueria, descargarTexto, detallesPorPedido, ESTADOS_ETIQUETA, filtrarPedidos, GRUPOS_ESTADO, MS_DIA, unidadesDePedido } from './logica';
 import type { GrupoEstado } from './logica';
+import { VERSION, compararVersiones } from '../version';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
 
 type Seccion = 'pedidos' | 'cumplimiento' | 'alertas' | 'accesos';
@@ -199,7 +200,7 @@ function Alertas({ esAdmin }: { esAdmin: boolean }) {
   );
 }
 
-interface FilaAcceso { usuario_id: string; nombre: string; email: string; rol: string; inicios_sesion: number; aperturas: number; dias_activos: number; ultimo_acceso: string | null }
+interface FilaAcceso { usuario_id: string; nombre: string; email: string; rol: string; inicios_sesion: number; aperturas: number; dias_activos: number; ultimo_acceso: string | null; version_app?: string | null }
 type Rango = 'hoy' | '7' | '30' | 'mes';
 const ROL_TEXTO: Record<string, string> = { vendedor: 'Vendedor', transferencista: 'Transferencista', gerente: 'Gerente', admin: 'Administrador' };
 
@@ -224,7 +225,7 @@ function Accesos() {
   const [rango, setRango] = useState<Rango>('7');
   const [filas, setFilas] = useState<FilaAcceso[] | null>(null);
   const [error, setError] = useState('');
-  const [detalle, setDetalle] = useState<{ fila: FilaAcceso; eventos: { created_at: string; evento: string; dispositivo: string | null }[] | null } | null>(null);
+  const [detalle, setDetalle] = useState<{ fila: FilaAcceso; eventos: { created_at: string; evento: string; dispositivo: string | null; version_app?: string | null }[] | null } | null>(null);
 
   useEffect(() => {
     const sb = getSupabaseClient();
@@ -241,14 +242,15 @@ function Accesos() {
     setDetalle({ fila, eventos: null });
     const sb = getSupabaseClient();
     if (!sb) return;
-    const { data } = await sb.from('registro_accesos').select('created_at,evento,dispositivo').eq('usuario_id', fila.usuario_id).order('created_at', { ascending: false }).limit(50);
-    setDetalle({ fila, eventos: (data ?? []) as { created_at: string; evento: string; dispositivo: string | null }[] });
+    const { data } = await sb.from('registro_accesos').select('*').eq('usuario_id', fila.usuario_id).order('created_at', { ascending: false }).limit(50);
+    setDetalle({ fila, eventos: (data ?? []) as { created_at: string; evento: string; dispositivo: string | null; version_app?: string | null }[] });
   };
 
   const activos = (filas ?? []).filter((f) => f.inicios_sesion + f.aperturas > 0).length;
+  const desactualizados = (filas ?? []).filter((f) => f.version_app && compararVersiones(f.version_app, VERSION) < 0).length;
   const total = (filas ?? []).reduce((a, f) => a + f.inicios_sesion + f.aperturas, 0);
   const exportar = () =>
-    filas && descargarTexto(`accesos_${fechaSql(new Date())}.csv`, aCsv(['Persona', 'Correo', 'Rol', 'Inicios de sesion', 'Aperturas', 'Dias activos', 'Ultimo acceso'], filas.map((f) => [f.nombre, f.email, ROL_TEXTO[f.rol] ?? f.rol, f.inicios_sesion, f.aperturas, f.dias_activos, f.ultimo_acceso ?? ''])));
+    filas && descargarTexto(`accesos_${fechaSql(new Date())}.csv`, aCsv(['Persona', 'Correo', 'Rol', 'Inicios de sesion', 'Aperturas', 'Dias activos', 'Ultimo acceso', 'Version'], filas.map((f) => [f.nombre, f.email, ROL_TEXTO[f.rol] ?? f.rol, f.inicios_sesion, f.aperturas, f.dias_activos, f.ultimo_acceso ?? '', f.version_app ?? ''])));
 
   return (
     <div className="mt-4 flex flex-col gap-3">
@@ -262,7 +264,7 @@ function Accesos() {
         <Tarjeta><Vacio titulo="Cargando…" /></Tarjeta>
       ) : (
         <>
-          <p className="text-sm text-slate-600 dark:text-slate-300"><b>{activos}</b> de {filas.length} personas entraron · <b>{total.toLocaleString('es-VE')}</b> accesos en el período.</p>
+          <p className="text-sm text-slate-600 dark:text-slate-300"><b>{activos}</b> de {filas.length} personas entraron · <b>{total.toLocaleString('es-VE')}</b> accesos en el período · versión actual: <b>v{VERSION}</b>{desactualizados > 0 ? <> · <b>{desactualizados}</b> {desactualizados === 1 ? 'persona usa' : 'personas usan'} una versión anterior</> : null}.</p>
           <Tarjeta className="!p-0 overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs text-slate-500 dark:bg-slate-950">
@@ -273,6 +275,7 @@ function Accesos() {
                   <th className="px-3 py-2 text-right font-medium">Aperturas</th>
                   <th className="px-3 py-2 text-right font-medium">Días activos</th>
                   <th className="px-3 py-2 font-medium">Último acceso</th>
+                  <th className="px-3 py-2 font-medium">Versión</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -287,6 +290,13 @@ function Accesos() {
                     <td className="px-3 py-2 text-right tabular-nums">{f.aperturas}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{f.dias_activos}</td>
                     <td className="px-3 py-2">{f.inicios_sesion + f.aperturas === 0 ? <Etiqueta tono="aviso">Sin accesos</Etiqueta> : <span className="text-slate-600 dark:text-slate-300">{haceCuanto(f.ultimo_acceso)}</span>}</td>
+                    <td className="px-3 py-2">
+                      {f.version_app ? (
+                        <Etiqueta tono={compararVersiones(f.version_app, VERSION) >= 0 ? 'exito' : 'aviso'}>v{f.version_app}{compararVersiones(f.version_app, VERSION) < 0 ? ' · anterior' : ''}</Etiqueta>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -305,7 +315,7 @@ function Accesos() {
               {detalle.eventos.map((e, i) => (
                 <li key={i} className="flex flex-wrap justify-between gap-2 py-1.5">
                   <span>{new Date(e.created_at).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })}</span>
-                  <span className="text-slate-500">{e.evento === 'inicio_sesion' ? 'Inició sesión' : 'Abrió la app'}{e.dispositivo ? ` · ${e.dispositivo}` : ''}</span>
+                  <span className="text-slate-500">{e.evento === 'inicio_sesion' ? 'Inició sesión' : 'Abrió la app'}{e.dispositivo ? ` · ${e.dispositivo}` : ''}{e.version_app ? ` · v${e.version_app}` : ''}</span>
                 </li>
               ))}
             </ul>

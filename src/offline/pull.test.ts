@@ -43,4 +43,27 @@ describe('descarga por páginas', () => {
     await traerTabla(db, remotoCon(filas), clientes);
     expect(await db.clientes.count()).toBe(1200);
   });
+
+  it('lo ya descargado no se vuelve a bajar en cada sincronización', async () => {
+    const db = crearDbTemporal();
+    const ahora = Date.parse('2026-09-30T12:00:00Z');
+    const viejo = '2026-09-29T03:17:03.000000+00:00'; // carga masiva de ayer
+    const remoto = remotoCon(Array.from({ length: 1300 }, (_, i) => farmacia(i, viejo)));
+    expect(await traerTabla(db, remoto, clientes, ahora)).toBe(1300);
+    expect(await traerTabla(db, remoto, clientes, ahora)).toBe(0);
+    expect(await traerTabla(db, remoto, clientes, ahora)).toBe(0);
+  });
+
+  it('un cursor reciente se repasa una vez (commits atrasados) y después ya no', async () => {
+    const db = crearDbTemporal();
+    const ahora = Date.parse('2026-09-30T12:00:00Z');
+    const filas = Array.from({ length: 700 }, (_, i) => farmacia(i, '2026-09-30T11:59:58.000000+00:00'));
+    const remoto = remotoCon(filas);
+    expect(await traerTabla(db, remoto, clientes, ahora)).toBe(700);
+    // Una transacción que escribió un segundo antes confirma tarde: el repaso la encuentra.
+    const tarde = remotoCon([...filas, farmacia(9999, '2026-09-30T11:59:57.500000+00:00')]);
+    expect(await traerTabla(db, tarde, clientes, ahora + 20_000)).toBe(701);
+    expect(await db.clientes.get('c-09999')).toBeTruthy();
+    expect(await traerTabla(db, tarde, clientes, ahora + 40_000)).toBe(0);
+  });
 });

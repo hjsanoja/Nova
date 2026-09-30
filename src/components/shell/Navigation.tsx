@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { MoreHorizontal, X } from 'lucide-react';
 import type { TabDef } from './navConfig';
+import { FirmaVersion } from '../version/Version';
 
 interface NavProps {
   tabs: TabDef[];
@@ -62,6 +63,10 @@ export const SideNav: React.FC<NavProps> = ({ tabs, tabActiva, onCambiarTab }) =
           </ul>
         </div>
       ))}
+      <div className="mt-auto border-t border-slate-100 pt-2 dark:border-slate-800">
+        <FirmaVersion variante="minima" className="flex w-full justify-center px-1 py-2 xl:hidden" />
+        <FirmaVersion variante="completa" className="hidden w-full px-3 py-2 xl:block" />
+      </div>
     </nav>
   );
 };
@@ -128,6 +133,9 @@ export const BottomNav: React.FC<NavProps> = ({ tabs, tabActiva, onCambiarTab })
                   </button>
                 );
               })}
+            </div>
+            <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800">
+              <FirmaVersion variante="completa" className="w-full px-2 py-1.5" />
             </div>
           </div>
         </div>

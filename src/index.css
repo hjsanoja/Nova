@@ -7,8 +7,10 @@
  * SISTEMA DE DISEÑO DE NOVA — punto único de verdad.
  *
  *  Color      · marca (acciones, selección, enlaces) + neutros slate para todo lo demás.
- *               Semánticos SOLO para estados: exito (emerald), aviso (amber), peligro (rose).
- *               No se usan otros tonos (índigo, morado, celeste...) ni degradados.
+ *               Semánticos SOLO para estados: exito (emerald), aviso (amber), peligro (rose). El verde queda para
+ *               lo que salió bien; la marca es azul (o verde azulado si la persona elige la paleta clásica).
+ *               Gráficos: `grafico` para una serie y `serie-1…6` para categorías (validados en claro y oscuro,
+ *               incluso para daltonismo). No se usan otros tonos ni degradados.
  *  Tipografía · Inter en toda la app. Escala: 12 (detalle) · 14 (texto) · 16 (destacado) · 20 (título) · 24 (cifra).
  *               Pesos: 400 texto, 500 rótulos, 600 títulos y botones, 700 solo cifras.
  *  Forma      · radio 8px (controles: botones, campos, chips de filtro) y 12px (tarjetas, hojas, diálogos).
@@ -20,18 +22,31 @@
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --animate-nova-in: nova-in 0.16s ease-out;
 
-  /* Marca: verde azulado. marca-700 es el color de acción (contraste AA con texto blanco). */
-  --color-marca-50: #f0fdfa;
-  --color-marca-100: #ccfbf1;
-  --color-marca-200: #99f6e4;
-  --color-marca-300: #5eead4;
-  --color-marca-400: #2dd4bf;
-  --color-marca-500: #14b8a6;
-  --color-marca-600: #0d9488;
-  --color-marca-700: #0f766e;
-  --color-marca-800: #115e59;
-  --color-marca-900: #134e4a;
-  --color-marca-950: #042f2e;
+  /*
+   * Marca: azul cobalto (OKLCH, tono 262). marca-700 es el color de acción: 7:1 con texto blanco; marca-600 marca los
+   * gráficos (5,2:1 sobre blanco) y marca-300 es el texto de marca en oscuro (9,7:1 sobre slate-900).
+   */
+  --color-marca-50: #f1f5fd;
+  --color-marca-100: #dfeafd;
+  --color-marca-200: #c6dafe;
+  --color-marca-300: #9ec0fd;
+  --color-marca-400: #6b9efd;
+  --color-marca-500: #427ff7;
+  --color-marca-600: #2a66db;
+  --color-marca-700: #1e53bc;
+  --color-marca-800: #184296;
+  --color-marca-900: #173877;
+  --color-marca-950: #0c224e;
+
+  /* Gráficos. Una serie: el color de la marca. Categorías (p. ej. droguerías en un anillo): orden fijo, nunca por
+     posición en el ranking; validado con el verificador de paletas (claro sobre #fff, oscuro sobre slate-900). */
+  --color-grafico: var(--color-marca-600);
+  --color-serie-1: #2a66db;
+  --color-serie-2: #eb6834;
+  --color-serie-3: #1baf7a;
+  --color-serie-4: #eda100;
+  --color-serie-5: #e87ba4;
+  --color-serie-6: #008300;
 
   @keyframes nova-in {
     from { opacity: 0; transform: translateY(4px); }
@@ -46,6 +61,28 @@
 .dark {
   --color-slate-500: #8b98ad;
   --color-slate-950: #070c18;
+  /* Los mismos tonos, un paso más claros para el fondo oscuro (>= 3:1 sobre slate-900). */
+  --color-grafico: var(--color-marca-500);
+  --color-serie-1: #427ff7;
+  --color-serie-2: #d95926;
+  --color-serie-3: #199e70;
+  --color-serie-4: #c98500;
+  --color-serie-5: #d55181;
+}
+
+/* Paleta clásica (verde azulado de las primeras versiones): se elige en Configuración → Mi cuenta. */
+:root[data-paleta="clasica"] {
+  --color-marca-50: #f0fdfa;
+  --color-marca-100: #ccfbf1;
+  --color-marca-200: #99f6e4;
+  --color-marca-300: #5eead4;
+  --color-marca-400: #2dd4bf;
+  --color-marca-500: #14b8a6;
+  --color-marca-600: #0d9488;
+  --color-marca-700: #0f766e;
+  --color-marca-800: #115e59;
+  --color-marca-900: #134e4a;
+  --color-marca-950: #042f2e;
 }
 
 @layer base {

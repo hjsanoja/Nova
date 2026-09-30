@@ -1,0 +1,134 @@
+[
+  {
+    "version": "7.0",
+    "fecha": "2026-09-30",
+    "tipo": "mayor",
+    "titulo": "Versión visible, guía de bienvenida y colores nuevos",
+    "cambios": [
+      "La versión de NOVA se ve en el menú, en el inicio de sesión y en Configuración → Acerca de, junto a quienes la hacen.",
+      "Aviso cuando hay una versión nueva publicada, con un botón para actualizar.",
+      "Sincronización más confiable: un pedido enviado mientras la app se actualizaba ya no queda en espera, y lo cargado en bloque (por ejemplo, miles de farmacias) no se vuelve a descargar en cada ciclo.",
+      "Guía de bienvenida paso a paso en el primer inicio de sesión. Se puede volver a ver desde Ayuda.",
+      "Colores nuevos: azul como color principal y verde solo para lo que salió bien. En Mi cuenta se puede volver al verde azulado.",
+      "Gráficos de línea para la evolución por día y por mes, y de anillo para el reparto por droguería.",
+      "El reporte de accesos muestra qué versión usa cada persona."
+    ]
+  },
+  {
+    "version": "6.2",
+    "fecha": "2026-09-30",
+    "tipo": "menor",
+    "pr": 10,
+    "titulo": "Mesa completa, descuentos por SKU y filtros de pedidos",
+    "cambios": [
+      "La mesa descarga todas las farmacias y sus códigos (antes podía quedarse en las primeras 500).",
+      "Productos por Presentación, descuento visible en cada línea y archivo sin los productos que no tienen código.",
+      "Cada producto arranca en 1 unidad y el vendedor puede escribir su % en cada producto.",
+      "Descuento para todos los productos desde un mínimo de unidades de cada uno.",
+      "Mis pedidos con hora y filtros por farmacia y droguería; columnas de descuento en el archivo de la droguería."
+    ]
+  },
+  {
+    "version": "6.1",
+    "fecha": "2026-09-30",
+    "tipo": "menor",
+    "pr": 9,
+    "titulo": "Borrar pedidos de prueba",
+    "cambios": [
+      "Al borrar datos en la nube, cada teléfono y computadora también limpia su copia.",
+      "El administrador puede eliminar pedidos seleccionados desde Pedidos."
+    ]
+  },
+  {
+    "version": "6.0",
+    "fecha": "2026-09-30",
+    "tipo": "mayor",
+    "pr": 8,
+    "titulo": "Descuentos por producto, ruta del día y avisos al teléfono",
+    "cambios": [
+      "Descuentos por producto además de los descuentos por pedido.",
+      "Mi ruta: mapa con las farmacias del día y visita registrada por GPS.",
+      "Avisos al teléfono aunque la app esté cerrada.",
+      "Cada cifra y gráfico del Resumen se abre con los pedidos que la forman.",
+      "Aviso de cambios guardados solo en el dispositivo; la contraseña se puede guardar y ver."
+    ]
+  },
+  {
+    "version": "5.0",
+    "fecha": "2026-09-30",
+    "tipo": "mayor",
+    "pr": 7,
+    "titulo": "Nuevo diseño, tienda con carritos y pedido por voz",
+    "cambios": [
+      "Diseño unificado y menús agrupados.",
+      "Tienda con un carrito por farmacia y pedido dictado por voz, con plantillas.",
+      "Resumen con indicadores, metas y gráficos.",
+      "Actualización en vivo, comunicados por rol, equipo o zona y reporte de accesos.",
+      "Código de la farmacia desde el pedido y formato de archivo por droguería."
+    ]
+  },
+  {
+    "version": "4.0",
+    "fecha": "2026-09-29",
+    "tipo": "mayor",
+    "pr": 6,
+    "titulo": "Fichero del vendedor y cargas con progreso",
+    "cambios": [
+      "El vendedor arma su propio fichero de farmacias.",
+      "Cargas de Excel con confirmación, progreso y resultado; borrado por tabla.",
+      "La app se publica sola en cada cambio."
+    ]
+  },
+  {
+    "version": "3.2",
+    "fecha": "2026-09-29",
+    "tipo": "menor",
+    "pr": 5,
+    "titulo": "Conexión con Supabase",
+    "cambios": [
+      "La prueba de conexión revisa la URL y la clave antes de guardarlas."
+    ]
+  },
+  {
+    "version": "3.1",
+    "fecha": "2026-09-29",
+    "tipo": "menor",
+    "pr": 4,
+    "titulo": "Instalación de la base de datos",
+    "cambios": [
+      "El script SQL se instala sobre un proyecto con una versión anterior y el alta de usuarios es más robusta."
+    ]
+  },
+  {
+    "version": "3.0",
+    "fecha": "2026-09-29",
+    "tipo": "mayor",
+    "pr": 3,
+    "titulo": "Menús por rol y acceso con cuenta",
+    "cambios": [
+      "Cada rol ve solo lo suyo y entrar exige una cuenta activa.",
+      "Fichero por vendedor y borrado de datos."
+    ]
+  },
+  {
+    "version": "2.0",
+    "fecha": "2026-09-29",
+    "tipo": "mayor",
+    "pr": 2,
+    "titulo": "Trabajo sin conexión",
+    "cambios": [
+      "Los pedidos se guardan en el teléfono y se envían solos al volver la señal.",
+      "Homologación por droguería: varios códigos por farmacia y por producto."
+    ]
+  },
+  {
+    "version": "1.0",
+    "fecha": "2026-09-29",
+    "tipo": "mayor",
+    "pr": 1,
+    "titulo": "Primera versión",
+    "cambios": [
+      "Carga rápida, importación masiva y navegación adaptada a teléfono, tablet y computadora."
+    ]
+  }
+]

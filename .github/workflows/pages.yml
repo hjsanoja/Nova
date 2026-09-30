@@ -44,3 +44,22 @@ jobs:
           path: dist
       - id: despliegue
         uses: actions/deploy-pages@v4
+
+  # Deja la versión publicada en GitHub → Releases (la marcada "Latest" es la activa). Si no se puede (permisos del
+  # repositorio), la publicación de la app no se ve afectada.
+  version:
+    needs: publicar
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publicar la versión en Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(node -p "require('./src/novedades.json')[0].version")
+          if gh release view "v$V" >/dev/null 2>&1; then echo "La v$V ya está publicada."; exit 0; fi
+          node scripts/verificar-version.mjs --notas > notas.md
+          gh release create "v$V" --target "$GITHUB_SHA" --title "NOVA v$V" --notes-file notas.md

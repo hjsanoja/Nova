@@ -5,6 +5,7 @@ import { getStoredSupabaseConfig } from '../../services/supabaseConfig';
 import { iniciarSesionNube, recuperarPasswordNube, USUARIO_DEMO } from '../../services/sesion';
 import { useTheme } from '../../context/ThemeContext';
 import { NovaLogo } from '../NovaLogo';
+import { FirmaVersion } from '../version/Version';
 import { Boton, estiloInput } from '../ui/kit';
 import { ConexionForm } from './ConexionForm';
 
@@ -167,6 +168,9 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
           )}
         </div>
         <p className="mt-4 text-center text-xs text-slate-500">Si no tienes cuenta, pídesela a un administrador.</p>
+        <div className="mt-6 flex justify-center">
+          <FirmaVersion variante="completa" className="px-3 py-2 text-center [&_span]:justify-center" />
+        </div>
       </div>
     </div>
   );

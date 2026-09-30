@@ -7,7 +7,7 @@ import { useLive } from '../offline/useLive';
 import { useEstadoSync } from '../offline/syncStore';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { Boton, Dato, Etiqueta, PageHeader, Segmentado, Subtitulo, Tarjeta, Vacio, Variacion } from '../components/ui/kit';
-import { BarrasRanking, Columnas, Medidor } from '../components/graficos/Graficos';
+import { Anillo, BarrasRanking, Linea, MAX_PARTES_ANILLO, Medidor } from '../components/graficos/Graficos';
 import type { LocalCompraMensual, LocalMeta, LocalNotificacion } from '../offline/types';
 import { avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe } from '../metas/logica';
 import { DetallePedidos } from './DetallePedidos';
@@ -129,6 +129,11 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   }, [pedidos, detalles, productos]);
   const porVendedor = useMemo(() => rankingMes(pedidos, unidades, (p) => p.vendedor_id, nombres.vendedor, 5), [pedidos, unidades, nombres]);
   const porDrogueria = useMemo(() => rankingMes(pedidos, unidades, (p) => p.drogueria_id, nombres.drogueria, 5), [pedidos, unidades, nombres]);
+  // Reparto del mes por droguería en un anillo: cada droguería conserva su color (orden alfabético de todas, no su puesto
+  // del mes). Con más de 6 droguerías, o con una sola, se usan las barras.
+  const colorDrogueria = useMemo(() => new Map([...droguerias].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map((d, i) => [d.id, i])), [droguerias]);
+  const repartoDrogueria = useMemo(() => rankingMes(pedidos, unidades, (p) => p.drogueria_id, nombres.drogueria, 99), [pedidos, unidades, nombres]);
+  const anilloDrogueria = droguerias.length <= MAX_PARTES_ANILLO && repartoDrogueria.length >= 2 && repartoDrogueria.every((f) => colorDrogueria.has(f.clave));
 
   const porProcesar = pedidos.filter((p) => perteneceAGrupo(p.estado, 'por_procesar')).length;
   const enRevision = pedidos.filter((p) => p.estado === 'en_revision').length;
@@ -180,7 +185,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
       {total30 > 0 ? (
         <>
           {selectorMetrica}
-          <Columnas
+          <Linea
             puntos={serie}
             unidad={metrica}
             titulo={`${TITULO_METRICA[metrica]} por día · últimos 30 días`}
@@ -198,7 +203,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
 
   const graficoMeses = (
     <Tarjeta className="lg:col-span-2">
-      <Columnas
+      <Linea
         puntos={serieMes}
         unidad={metrica}
         titulo={`${TITULO_METRICA[metrica]} por mes${mensualNube ? '' : ' · con los datos del dispositivo'}`}
@@ -402,7 +407,15 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
             {masPedidos}
             <Tarjeta>
               <Subtitulo>Unidades por droguería · este mes</Subtitulo>
-              <BarrasRanking filas={porDrogueria} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} enviados a esta droguería. Suma de unidades pedidas.`, delMes.filter((p) => p.drogueria_id === id))} />
+              {anilloDrogueria ? (
+                <Anillo
+                  partes={repartoDrogueria.map((f) => ({ ...f, color: colorDrogueria.get(f.clave) ?? 0 }))}
+                  unidad="unidades"
+                  onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} enviados a esta droguería. Suma de unidades pedidas.`, delMes.filter((p) => p.drogueria_id === id))}
+                />
+              ) : (
+                <BarrasRanking filas={porDrogueria} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} enviados a esta droguería. Suma de unidades pedidas.`, delMes.filter((p) => p.drogueria_id === id))} />
+              )}
             </Tarjeta>
           </Fila>
           {ultimos}

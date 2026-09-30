@@ -9,6 +9,8 @@ export interface Usuario {
   telefono?: string;
   activo: boolean;
   created_at: string;
+  /** Cuándo vio la guía de bienvenida (null: aún no; ausente: la base todavía no lo registra). */
+  guia_vista_en?: string | null;
 }
 
 export interface Cliente {

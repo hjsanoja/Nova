@@ -414,7 +414,12 @@ export const TABLAS_PULL: TablaPull[] = [
   },
 ];
 
+// Todas las claves empiezan con "cursor:" (al reiniciar los datos se borran juntas).
 const claveCursor = (tabla: string) => `cursor:${tabla}`;
+const claveCursorId = (tabla: string) => `cursor:${tabla}:id`;
+const claveRepaso = (tabla: string) => `cursor:${tabla}:repaso`;
+/** Solo un cursor reciente puede tener commits atrasados; uno viejo (p. ej. una carga de ayer) no se repasa. */
+const REPASO_VENTANA_MS = 5 * 60_000;
 
 /** Primer día del mes de hace `meses` meses (YYYY-MM-DD). */
 function inicioMes(meses: number, ahora = new Date()): string {
@@ -422,33 +427,49 @@ function inicioMes(meses: number, ahora = new Date()): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Baja los cambios de una tabla hasta agotarla. Devuelve cuántas filas aplicó. */
-export async function traerTabla(db: NovaDB, remoto: SyncRemote, t: TablaPull): Promise<number> {
+/**
+ * Baja los cambios de una tabla hasta agotarla y devuelve cuántas filas aplicó. El cursor es la pareja (updated_at, id)
+ * de la última fila recibida, y las páginas avanzan por esa pareja (miles de filas con la misma hora no atascan):
+ *  - sin cursor: se baja todo (acotado por fechas donde corresponde);
+ *  - cursor nuevo y reciente: se repasa UNA vez el margen SOLAPE_MS anterior al cursor, por si una transacción escribió
+ *    con una hora anterior y confirmó después de la lectura;
+ *  - cursor ya repasado (o viejo): se sigue estrictamente después de él, sin volver a bajar nada.
+ * Así una carga masiva se descarga completa y no se vuelve a descargar en cada ciclo.
+ */
+export async function traerTabla(db: NovaDB, remoto: SyncRemote, t: TablaPull, ahora = Date.now()): Promise<number> {
   let cursor = await db.leerMeta<string | null>(claveCursor(t.remota), null);
-  const creadoDesde = t.acotarHistorial ? new Date(Date.now() - DIAS_HISTORIAL * 86_400_000).toISOString() : undefined;
+  let cursorId = await db.leerMeta<string | null>(claveCursorId(t.remota), null);
+  const repasado = await db.leerMeta<string | null>(claveRepaso(t.remota), null);
+  const creadoDesde = t.acotarHistorial ? new Date(ahora - DIAS_HISTORIAL * 86_400_000).toISOString() : undefined;
   const minimo = t.acotarMeses ? { [t.acotarMeses]: inicioMes(MESES_COMPRAS) } : undefined;
   const completa = cursor === null;
+  const inicial = cursor;
+  // Sin id guardado (equipo que viene de una versión anterior) también se repasa una vez: así completa lo que le faltó.
+  const repaso = !!cursor && repasado !== cursor && (!cursorId || ahora - new Date(cursor).getTime() < REPASO_VENTANA_MS);
+  let despuesDe: { updated_at: string; id: string } | undefined = cursor && !repaso && cursorId ? { updated_at: cursor, id: cursorId } : undefined;
+  const desde = !cursor ? null : repaso ? new Date(new Date(cursor).getTime() - SOLAPE_MS).toISOString() : cursor;
   const vistos = new Set<string>();
   let total = 0;
-  // La primera página repite un margen (SOLAPE_MS) por commits fuera de orden; las siguientes avanzan por (updated_at, id),
-  // así nunca se vuelve a pedir la misma página aunque miles de filas tengan la misma hora.
-  let despuesDe: { updated_at: string; id: string } | undefined;
   for (;;) {
-    const desde = cursor ? new Date(new Date(cursor).getTime() - SOLAPE_MS).toISOString() : null;
-    const filas = await remoto.traer(t.remota, desde, PAGINA, { creadoDesde, seleccion: t.seleccion, minimo, despuesDe });
+    const filas = await remoto.traer(t.remota, despuesDe ? null : desde, PAGINA, { creadoDesde, seleccion: t.seleccion, minimo, despuesDe });
     if (filas.length === 0) break;
     await t.aplicar(db, filas);
     if (t.podarNoVistos) filas.forEach((f) => vistos.add(str(f.id)));
     total += filas.length;
     const final = filas[filas.length - 1];
     const ultimo = str(final.updated_at);
-    despuesDe = { updated_at: ultimo, id: str(final.id) };
-    if (!cursor || ultimo > cursor) {
+    const ultimoId = str(final.id);
+    despuesDe = { updated_at: ultimo, id: ultimoId };
+    if (!cursor || ultimo > cursor || (ultimo === cursor && ultimoId > (cursorId ?? ''))) {
       cursor = ultimo;
+      cursorId = ultimoId;
       await db.guardarMeta(claveCursor(t.remota), cursor);
+      await db.guardarMeta(claveCursorId(t.remota), cursorId);
     }
     if (filas.length < PAGINA) break;
   }
+  // El margen de este cursor ya se repasó. Si el cursor avanzó, el nuevo se repasa en la próxima sincronización.
+  if (repaso && cursor === inicial) await db.guardarMeta(claveRepaso(t.remota), inicial);
   if (t.podar && total > 0) await t.podar(db);
   if (t.podarNoVistos && completa) await t.podarNoVistos(db, vistos);
   return total;

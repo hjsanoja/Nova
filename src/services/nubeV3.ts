@@ -160,6 +160,7 @@ export interface PerfilUsuario {
   equipo: EquipoVentas;
   telefono?: string;
   activo: boolean;
+  guia_vista_en?: string | null;
 }
 
 /**
@@ -168,7 +169,8 @@ export interface PerfilUsuario {
  * Devuelve null si la cuenta no tiene fila (aún no fue dada de alta).
  */
 export async function cargarPerfilUsuario(sb: SupabaseClient, id: string): Promise<PerfilUsuario | null> {
-  const { data, error } = await sb.from('dim_usuarios').select('nombre_completo, rol, activo, telefono, dim_equipos(codigo)').eq('id', id).maybeSingle();
+  // "*" y no una lista: así una columna nueva (p. ej. guia_vista_en) no rompe el acceso si la base aún no la tiene.
+  const { data, error } = await sb.from('dim_usuarios').select('*, dim_equipos(codigo)').eq('id', id).maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return null;
   const equipo = (data as { dim_equipos?: { codigo?: string } | null }).dim_equipos;
@@ -178,6 +180,7 @@ export async function cargarPerfilUsuario(sb: SupabaseClient, id: string): Promi
     equipo: equipoDesdeV3(equipo?.codigo),
     telefono: (data.telefono as string | null) ?? undefined,
     activo: data.activo === true,
+    guia_vista_en: 'guia_vista_en' in data ? ((data.guia_vista_en as string | null) ?? null) : undefined,
   };
 }
 

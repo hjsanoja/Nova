@@ -222,6 +222,28 @@ BEGIN
   RAISE NOTICE 'OK 44: eliminar pedidos seleccionados (solo admin; con sus líneas) y marca de datos reiniciados';
 END $$;
 
+-- ---------------------------------------------------------------- 45. versión de la app en los accesos y guía de bienvenida
+SELECT t.como(:v1);
+DO $$
+BEGIN
+  PERFORM registrar_acceso('apertura', 'Android · Chrome', '7.0');     -- dentro de los 30 min: corrige la versión del último acceso
+  PERFORM registrar_acceso('inicio_sesion', 'Android · Chrome', '7.1');
+  PERFORM registrar_acceso('apertura', 'Android · Chrome');            -- una app anterior (sin versión) no borra la versión
+  PERFORM marcar_guia_vista();
+  PERFORM marcar_guia_vista();                                          -- la segunda vez no cambia nada
+END $$;
+SELECT t.como(:admin);
+DO $$
+DECLARE r record;
+BEGIN
+  SELECT * INTO r FROM reporte_accesos(current_date - 7, current_date) WHERE usuario_id = 'a0000000-0000-0000-0000-0000000000c1';
+  ASSERT r.version_app = '7.1', 'versión del último acceso: ' || row_to_json(r)::text;
+  ASSERT (SELECT version_app FROM reporte_accesos(current_date - 7, current_date) WHERE usuario_id = 'a0000000-0000-0000-0000-0000000000c2') IS NULL, 'sin accesos no hay versión';
+  ASSERT (SELECT guia_vista_en IS NOT NULL FROM dim_usuarios WHERE id = 'a0000000-0000-0000-0000-0000000000c1'), 'guía marcada como vista';
+  ASSERT (SELECT guia_vista_en IS NULL FROM dim_usuarios WHERE id = 'a0000000-0000-0000-0000-0000000000c2'), 'solo para quien la vio';
+  RAISE NOTICE 'OK 45: versión de la app en el reporte de accesos y guía de bienvenida vista una sola vez';
+END $$;
+
 -- ---------------------------------------------------------------- 43. el aviso sale hacia la Edge Function (pg_net simulado)
 RESET ROLE;
 CREATE SCHEMA IF NOT EXISTS net;

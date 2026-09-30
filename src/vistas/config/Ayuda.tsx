@@ -1,5 +1,7 @@
 import type { RolUsuario } from '../../types/pharmacy';
-import { Tarjeta } from '../../components/ui/kit';
+import { PlayCircle } from 'lucide-react';
+import { Boton, Tarjeta } from '../../components/ui/kit';
+import { abrirGuia } from '../../components/guia/estadoGuia';
 
 const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
   vendedor: {
@@ -63,6 +65,15 @@ export function Ayuda({ rol }: { rol: RolUsuario }) {
   const g = PASOS[rol];
   return (
     <div className="space-y-3">
+      <Tarjeta>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-bold">Guía de bienvenida</h2>
+            <p className="text-sm text-slate-600 dark:text-slate-300">El recorrido paso a paso que viste al entrar por primera vez.</p>
+          </div>
+          <Boton variante="primario" icono={PlayCircle} onClick={abrirGuia}>Ver la guía</Boton>
+        </div>
+      </Tarjeta>
       <Tarjeta>
         <h2 className="mb-2 text-sm font-bold">{g.titulo}</h2>
         <ol className="list-decimal space-y-1.5 pl-5 text-sm text-slate-700 dark:text-slate-300">

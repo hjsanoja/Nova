@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { KeyRound, LogOut } from 'lucide-react';
+import { Check, KeyRound, LogOut, Palette } from 'lucide-react';
 import type { Usuario } from '../../types/pharmacy';
 import { cambiarPasswordNube } from '../../services/sesion';
 import { Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, estiloInput, useAviso } from '../../components/ui/kit';
@@ -10,9 +10,13 @@ import { Sincronizacion } from './Sincronizacion';
 import { AvisosConfig } from '../../avisos/AvisosConfig';
 import { Usuarios } from './Usuarios';
 import { InstalarBaseDatos } from './InstalarBaseDatos';
+import { EstadoVersiones, ListaNovedades } from '../../components/version/Version';
+import { useVersionPublicada } from '../../pwa/versionPublicada';
+import { useTheme } from '../../context/ThemeContext';
+import type { Paleta } from '../../context/ThemeContext';
 
-type Seccion = 'cuenta' | 'avisos' | 'sincronizacion' | 'usuarios' | 'basedatos' | 'ayuda';
-const SECCIONES = ['cuenta', 'avisos', 'sincronizacion', 'usuarios', 'basedatos', 'ayuda'] as const;
+type Seccion = 'cuenta' | 'avisos' | 'sincronizacion' | 'usuarios' | 'basedatos' | 'ayuda' | 'acerca';
+const SECCIONES = ['cuenta', 'avisos', 'sincronizacion', 'usuarios', 'basedatos', 'ayuda', 'acerca'] as const;
 
 const ETIQUETA_ROL: Record<Usuario['rol'], string> = { admin: 'Administrador', gerente: 'Gerente', vendedor: 'Vendedor', teletransferencista: 'Transferencista' };
 
@@ -35,6 +39,7 @@ export function ConfigVista({ usuario, irATab, esDemo, onCerrarSesion, onConexio
     { id: 'sincronizacion' as const, texto: 'Sincronización' },
     ...(esAdmin ? [{ id: 'usuarios' as const, texto: 'Usuarios' }, { id: 'basedatos' as const, texto: 'Base de datos' }] : []),
     { id: 'ayuda' as const, texto: 'Ayuda' },
+    { id: 'acerca' as const, texto: 'Acerca de' },
   ];
 
   return (
@@ -52,6 +57,7 @@ export function ConfigVista({ usuario, irATab, esDemo, onCerrarSesion, onConexio
         </div>
       )}
       {seccion === 'ayuda' && <Ayuda rol={usuario.rol} />}
+      {seccion === 'acerca' && <AcercaDe />}
     </div>
   );
 }
@@ -97,6 +103,8 @@ function Cuenta({ usuario, esDemo, onCerrarSesion }: { usuario: Usuario; esDemo:
         <Boton className="mt-4" icono={LogOut} onClick={onCerrarSesion}>Cerrar sesión</Boton>
       </Tarjeta>
 
+      <Apariencia />
+
       {!esDemo && (
         <Tarjeta>
           <p className="mb-2 flex items-center gap-1.5 text-sm font-bold"><KeyRound className="h-4 w-4" /> Cambiar contraseña</p>
@@ -108,5 +116,66 @@ function Cuenta({ usuario, esDemo, onCerrarSesion }: { usuario: Usuario; esDemo:
         </Tarjeta>
       )}
     </div>
+  );
+}
+
+/** Versión en uso y publicada, quienes hacen NOVA y el historial de versiones. */
+function AcercaDe() {
+  const { publicada, hayNueva } = useVersionPublicada();
+  return (
+    <div className="grid gap-3 lg:grid-cols-[minmax(0,360px)_1fr]">
+      <Tarjeta className="self-start">
+        <p className="mb-3 text-sm font-bold">NOVA · Comercial & Teletransferencia</p>
+        <EstadoVersiones publicada={publicada} hayNueva={hayNueva} />
+      </Tarjeta>
+      <Tarjeta>
+        <p className="mb-3 text-sm font-bold">Historial de versiones</p>
+        <p className="mb-3 text-xs text-slate-500">Cada actualización publicada tiene su número: los ajustes suben un decimal (v6.1 → v6.2) y los cambios grandes pasan al siguiente número (v6.2 → v7.0).</p>
+        <ListaNovedades publicada={publicada} />
+      </Tarjeta>
+    </div>
+  );
+}
+
+const PALETAS: { id: Paleta; nombre: string; nota: string; muestra: string[] }[] = [
+  { id: 'azul', nombre: 'Azul', nota: 'Predeterminado desde la v7.0', muestra: ['#1e53bc', '#2a66db', '#c6dafe'] },
+  { id: 'clasica', nombre: 'Verde azulado', nota: 'El de las primeras versiones', muestra: ['#0f766e', '#0d9488', '#99f6e4'] },
+];
+
+/** Tema claro/oscuro y color principal de la app (se guarda en este equipo). */
+function Apariencia() {
+  const { esClaro, toggleTema, paleta, setPaleta } = useTheme();
+  return (
+    <Tarjeta>
+      <p className="mb-3 flex items-center gap-1.5 text-sm font-bold"><Palette className="h-4 w-4" /> Apariencia</p>
+      <p className="mb-1.5 text-xs font-medium text-slate-500">Tema</p>
+      <Segmentado valor={esClaro ? 'claro' : 'oscuro'} onChange={(v) => (v === 'claro') !== esClaro && toggleTema()} opciones={[{ id: 'claro', texto: 'Claro' }, { id: 'oscuro', texto: 'Oscuro' }]} />
+      <p className="mb-1.5 text-xs font-medium text-slate-500">Color de la app</p>
+      <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Color de la app">
+        {PALETAS.map((p) => {
+          const activa = paleta === p.id;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              role="radio"
+              aria-checked={activa}
+              onClick={() => setPaleta(p.id)}
+              className={`flex items-center gap-3 rounded-xl border p-3 text-left ${activa ? 'border-marca-600 bg-marca-50 dark:border-marca-400 dark:bg-marca-950' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800'}`}
+            >
+              <span className="flex shrink-0 -space-x-1.5" aria-hidden>
+                {p.muestra.map((c) => <span key={c} className="h-6 w-6 rounded-full border-2 border-white dark:border-slate-900" style={{ background: c }} />)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-slate-900 dark:text-white">{p.nombre}</span>
+                <span className="block text-xs text-slate-500">{p.nota}</span>
+              </span>
+              {activa && <Check className="h-4 w-4 shrink-0 text-marca-700 dark:text-marca-300" aria-hidden />}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-xs text-slate-500">El verde queda para lo que salió bien (pedidos procesados, metas cumplidas).</p>
+    </Tarjeta>
   );
 }
