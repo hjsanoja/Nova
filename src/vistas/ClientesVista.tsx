@@ -250,7 +250,7 @@ function FichaCliente({
             {pedidos.map((p) => (
               <li key={p.id} className="flex items-center justify-between gap-2">
                 <span>{p.correlativo} · {diasDesde(p.created_at)} d</span>
-                <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono}>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
+                <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono} punto>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
               </li>
             ))}
           </ul>

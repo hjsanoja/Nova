@@ -11,36 +11,49 @@
  *               lo que salió bien; la marca es azul (o verde azulado si la persona elige la paleta clásica).
  *               Gráficos: `grafico` para una serie y `serie-1…6` para categorías (validados en claro y oscuro,
  *               incluso para daltonismo). No se usan otros tonos ni degradados.
- *  Tipografía · Inter en toda la app. Escala: 12 (detalle) · 14 (texto) · 16 (destacado) · 20 (título) · 24 (cifra).
+ *  Tipografía · Plus Jakarta Sans en toda la app. Escala: 12 (detalle) · 14 (texto) · 16 (destacado) · 20 (título) · 24 (cifra).
  *               Pesos: 400 texto, 500 rótulos, 600 títulos y botones, 700 solo cifras.
- *  Forma      · radio 8px (controles: botones, campos, chips de filtro) y 12px (tarjetas, hojas, diálogos).
+ *  Forma      · radio 12px en controles (botones, campos), 16px en tarjetas, hojas y diálogos; pastillas redondas en
+ *               estados, distintivos y chips de filtro.
  *               Redondo completo solo en avatares, contadores y etiquetas.
- *  Elevación  · tarjetas planas con borde. Sombra solo en lo que flota: hojas, diálogos y menús (shadow-xl).
+ *  Elevación  · tarjetas blancas con borde fino y sombra ambiental (shadow-tarjeta); lo que flota usa shadow-elevada
+ *               o shadow-xl. Fondo de la página gris muy claro para que las tarjetas resalten.
  *  Tamaños    · control 40px (36px compacto); objetivo táctil mínimo 44px en móvil.
  */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --animate-nova-in: nova-in 0.16s ease-out;
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --animate-nova-in: nova-in 0.18s ease-out;
 
   /*
-   * Marca: azul cobalto (OKLCH, tono 262). marca-700 es el color de acción: 7:1 con texto blanco; marca-600 marca los
-   * gráficos (5,2:1 sobre blanco) y marca-300 es el texto de marca en oscuro (9,7:1 sobre slate-900).
+   * Marca "Bosque" (desde la v8.0): verde bosque profundo para acciones y superficies destacadas, verde esmeralda para
+   * lo positivo. marca-700 (#0b4628) es el color de acción: 10,9:1 con texto blanco; marca-300 es el texto de marca en
+   * oscuro (11,5:1 sobre slate-900).
    */
-  --color-marca-50: #f1f5fd;
-  --color-marca-100: #dfeafd;
-  --color-marca-200: #c6dafe;
-  --color-marca-300: #9ec0fd;
-  --color-marca-400: #6b9efd;
-  --color-marca-500: #427ff7;
-  --color-marca-600: #2a66db;
-  --color-marca-700: #1e53bc;
-  --color-marca-800: #184296;
-  --color-marca-900: #173877;
-  --color-marca-950: #0c224e;
+  --color-marca-50: #effaf2;
+  --color-marca-100: #dcf5e3;
+  --color-marca-200: #b5f0c6;
+  --color-marca-300: #86e3a4;
+  --color-marca-400: #4cc77a;
+  --color-marca-500: #1f9d55;
+  --color-marca-600: #137a3e;
+  --color-marca-700: #0b4628;
+  --color-marca-800: #083a21;
+  --color-marca-900: #052c18;
+  --color-marca-950: #00210f;
+  /* Acento lima para distintivos ("NUEVO", "EN VIVO") y el botón destacado sobre fondos oscuros. */
+  --color-acento: #7cf994;
+  --color-acento-texto: #00531f;
 
-  /* Gráficos. Una serie: el color de la marca. Categorías (p. ej. droguerías en un anillo): orden fijo, nunca por
-     posición en el ranking; validado con el verificador de paletas (claro sobre #fff, oscuro sobre slate-900). */
-  --color-grafico: var(--color-marca-600);
+  /* Elevación: tarjetas blancas con sombra ambiental muy suave; lo que flota, un poco más. */
+  --shadow-tarjeta: 0 1px 3px 0 rgb(0 0 0 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.02);
+  --shadow-elevada: 0 10px 15px -3px rgb(0 0 0 / 0.06), 0 4px 6px -4px rgb(0 0 0 / 0.03);
+
+  /* Gráficos. Una serie: línea del verde de acción. Barras + tendencia: barras claras, la señalada intensa, la línea
+     oscura. Categorías (p. ej. droguerías en un anillo): orden fijo por entidad, validado para daltonismo. */
+  --color-grafico: var(--color-marca-700);
+  --color-barra: var(--color-marca-300);
+  --color-barra-activa: var(--color-marca-600);
+  --color-linea: var(--color-marca-800);
   --color-serie-1: #2a66db;
   --color-serie-2: #eb6834;
   --color-serie-3: #1baf7a;
@@ -62,7 +75,10 @@
   --color-slate-500: #8b98ad;
   --color-slate-950: #070c18;
   /* Los mismos tonos, un paso más claros para el fondo oscuro (>= 3:1 sobre slate-900). */
-  --color-grafico: var(--color-marca-500);
+  --color-grafico: var(--color-marca-300);
+  --color-barra: var(--color-marca-500);
+  --color-barra-activa: var(--color-marca-300);
+  --color-linea: var(--color-marca-200);
   --color-serie-1: #427ff7;
   --color-serie-2: #d95926;
   --color-serie-3: #199e70;
@@ -70,7 +86,21 @@
   --color-serie-5: #d55181;
 }
 
-/* Paleta clásica (verde azulado de las primeras versiones): se elige en Configuración → Mi cuenta. */
+/* Otras paletas (Configuración → Mi cuenta → Apariencia): el azul de la v7 y el verde azulado de las primeras versiones. */
+:root[data-paleta="azul"] {
+  --color-marca-50: #f1f5fd;
+  --color-marca-100: #dfeafd;
+  --color-marca-200: #c6dafe;
+  --color-marca-300: #9ec0fd;
+  --color-marca-400: #6b9efd;
+  --color-marca-500: #427ff7;
+  --color-marca-600: #2a66db;
+  --color-marca-700: #1e53bc;
+  --color-marca-800: #184296;
+  --color-marca-900: #173877;
+  --color-marca-950: #0c224e;
+}
+
 :root[data-paleta="clasica"] {
   --color-marca-50: #f0fdfa;
   --color-marca-100: #ccfbf1;

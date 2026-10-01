@@ -10,7 +10,7 @@ import { reintentarAhora } from '../offline/outbox';
 import { reruteoLocal } from '../offline/pedidos';
 import { solicitarSync } from '../offline/motor';
 import { Sheet } from '../components/capture/Sheet';
-import { BarraSeleccion, Boton, Casilla, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useDebounced, useSeleccion } from '../components/ui/kit';
+import { Avatar, BarraSeleccion, Boton, Casilla, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useDebounced, useSeleccion } from '../components/ui/kit';
 import { contarPorGrupo, detallesPorPedido, ESTADOS_ETIQUETA, fechaHoraCorta, filtrarPedidos, GRUPOS_ESTADO, nombreDeProducto, unidadesDePedido } from './logica';
 import type { GrupoEstado } from './logica';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos } from './useDatos';
@@ -143,15 +143,16 @@ export function PedidosVista({ usuario }: { usuario: Usuario }) {
               return (
                 <li key={p.id} className={`flex items-center ${sel.tiene(p.id) ? 'bg-marca-50 dark:bg-marca-950/60' : ''}`}>
                   {puedeEliminar && <span className="pl-1"><Casilla etiqueta={`Seleccionar ${p.correlativo}`} marcada={sel.tiene(p.id)} onChange={() => sel.alternar(p.id)} /></span>}
-                  <button type="button" onClick={() => setAbierto(p.id)} className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                    <div className="min-w-0">
+                  <button type="button" onClick={() => setAbierto(p.id)} className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-3 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <Avatar nombre={nombreCliente(p.cliente_id)} tamano={38} />
+                    <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold">{nombreCliente(p.cliente_id)}</p>
                       <p className="truncate text-xs text-slate-500">
                         {p.correlativo} · {nombreDrogueria(p.drogueria_id)} · {u.solicitadas} uds · {fechaHoraCorta(p.created_at)}
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      <Etiqueta tono={e.tono}>{e.texto}</Etiqueta>
+                      <Etiqueta tono={e.tono} punto>{e.texto}</Etiqueta>
                       {p.sync_estado !== 'sincronizado' && <Etiqueta tono={p.sync_estado === 'pendiente' ? 'ambar' : 'rojo'}>{p.sync_estado === 'pendiente' ? 'Sin enviar' : 'Con error'}</Etiqueta>}
                     </div>
                   </button>
@@ -218,7 +219,7 @@ function Detalle({
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <Etiqueta tono={e.tono}>{e.texto}</Etiqueta>
+        <Etiqueta tono={e.tono} punto>{e.texto}</Etiqueta>
         <span className="font-semibold">{cliente}</span>
         <span className="text-slate-500">· {drogueria}</span>
       </div>

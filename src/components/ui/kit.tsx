@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Check, ChevronRight, Minus, Plus, X } from 'lucide-react';
+import { ArrowUpRight, Check, Minus, Plus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 /**
- * Piezas de interfaz de NOVA. Las reglas del sistema de diseño están en src/index.css: un color de marca, neutros slate,
- * semánticos solo para estados, radio 8px en controles y 12px en tarjetas, tarjetas planas y sombra solo en lo que flota.
+ * Piezas de interfaz de NOVA (diseño "Bosque", v8.0). Las reglas están en src/index.css: verde bosque para acciones,
+ * neutros slate, semánticos solo para estados (siempre con punto o icono), radio 12px en controles y 16px en tarjetas,
+ * tarjetas blancas con sombra ambiental y pastillas redondas en estados y filtros.
  * Todas las pantallas deben construirse con estas piezas en lugar de clases sueltas.
  */
 
 // ---------------------------------------------------------------------------- campos
 
 export const estiloInput =
-  'w-full min-h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 transition-colors focus:border-marca-600 focus:outline-none focus:ring-2 focus:ring-marca-600/20 disabled:bg-slate-50 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:disabled:bg-slate-800';
+  'w-full min-h-10 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-900 placeholder:text-slate-400 transition-all focus:border-marca-600 focus:bg-white focus:outline-none focus:ring-2 focus:ring-marca-600/15 disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:focus:bg-slate-900 dark:disabled:bg-slate-800';
 
 /** Campo con rótulo arriba y ayuda o error abajo. */
 export function Campo({ rotulo, ayuda, error, children, className = '' }: { rotulo: string; ayuda?: string; error?: string; children: React.ReactNode; className?: string }) {
@@ -41,7 +42,7 @@ export function PageHeader({ titulo, descripcion, acciones }: { titulo: string; 
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
       <div className="min-w-0">
-        <h1 className="truncate text-xl font-semibold leading-tight text-slate-900 dark:text-white">{titulo}</h1>
+        <h1 className="truncate text-2xl font-bold leading-tight tracking-tight text-marca-900 dark:text-white">{titulo}</h1>
         {descripcion && <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{descripcion}</p>}
       </div>
       {acciones && <div className="flex flex-wrap items-center gap-2">{acciones}</div>}
@@ -50,14 +51,54 @@ export function PageHeader({ titulo, descripcion, acciones }: { titulo: string; 
 }
 
 export function Tarjeta({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <div className={`rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 ${className}`}>{children}</div>;
+  return <div className={`rounded-2xl border border-slate-200/70 bg-white p-4 shadow-tarjeta sm:p-5 dark:border-slate-800 dark:bg-slate-900 ${className}`}>{children}</div>;
+}
+
+/**
+ * Banner destacado verde bosque (inicio de cada pantalla importante): icono, título, texto y acciones a la derecha.
+ * El halo de fondo es decorativo.
+ */
+export function Destacado({ icono: Icono, titulo, texto, distintivo, acciones, children }: { icono?: LucideIcon; titulo: React.ReactNode; texto?: React.ReactNode; distintivo?: string; acciones?: React.ReactNode; children?: React.ReactNode }) {
+  return (
+    <section className="animate-in relative overflow-hidden rounded-2xl bg-marca-700 p-4 text-white shadow-tarjeta sm:p-5 dark:bg-marca-900">
+      <div className="pointer-events-none absolute -bottom-16 -right-12 h-64 w-64 rounded-full bg-acento/10 blur-2xl" aria-hidden />
+      <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+          {Icono && (
+            <span className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/15 backdrop-blur">
+              <Icono className="h-6 w-6 text-acento" aria-hidden />
+            </span>
+          )}
+          <div className="min-w-0">
+            <p className="flex flex-wrap items-center gap-2 text-lg font-bold leading-tight tracking-tight sm:text-xl">
+              {titulo}
+              {distintivo && <span className="rounded-full bg-acento px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider text-acento-texto">{distintivo}</span>}
+            </p>
+            {texto && <p className="mt-0.5 text-sm text-marca-200">{texto}</p>}
+          </div>
+        </div>
+        {acciones && <div className="flex shrink-0 flex-wrap items-center gap-2">{acciones}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Botón blanco en forma de pastilla, para usar sobre el banner verde. */
+export function BotonClaro({ icono: Icono, children, className = '', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icono?: LucideIcon }) {
+  return (
+    <button type="button" {...props} className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-white px-5 text-sm font-semibold text-marca-800 shadow-tarjeta transition-all hover:bg-marca-50 active:scale-95 ${className}`}>
+      {Icono && <Icono className="h-4 w-4" aria-hidden />}
+      {children}
+    </button>
+  );
 }
 
 /** Título de sección dentro de una tarjeta o página. */
 export function Subtitulo({ children, accion }: { children: React.ReactNode; accion?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center justify-between gap-2">
-      <h2 className="text-sm font-semibold text-slate-900 dark:text-white">{children}</h2>
+      <h2 className="text-base font-semibold text-slate-900 dark:text-white">{children}</h2>
       {accion}
     </div>
   );
@@ -65,33 +106,45 @@ export function Subtitulo({ children, accion }: { children: React.ReactNode; acc
 
 // ---------------------------------------------------------------------------- etiquetas
 
+// Pares de color de los estados (fondo claro + texto oscuro, AA) y el color de su punto.
 const TONOS = {
   neutro: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
   marca: 'bg-marca-50 text-marca-800 dark:bg-marca-950 dark:text-marca-300',
-  exito: 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
-  aviso: 'bg-amber-50 text-amber-900 dark:bg-amber-950 dark:text-amber-300',
-  peligro: 'bg-rose-50 text-rose-800 dark:bg-rose-950 dark:text-rose-300',
+  exito: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300',
+  aviso: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300',
+  peligro: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300',
+  info: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300',
 } as const;
+const PUNTOS: Record<keyof typeof TONOS, string> = {
+  neutro: 'bg-slate-500', marca: 'bg-marca-600', exito: 'bg-emerald-600', aviso: 'bg-amber-600', peligro: 'bg-rose-600', info: 'bg-indigo-600',
+};
 /** Nombres anteriores de los tonos (se conservan para no romper pantallas). */
 const ALIAS_TONO = { gris: 'neutro', verde: 'exito', ambar: 'aviso', rojo: 'peligro', azul: 'marca', teal: 'marca' } as const;
 export type Tono = keyof typeof TONOS | keyof typeof ALIAS_TONO;
-const clasesTono = (t: Tono) => TONOS[(ALIAS_TONO as Record<string, keyof typeof TONOS>)[t] ?? (t as keyof typeof TONOS)];
+const tonoBase = (t: Tono) => (ALIAS_TONO as Record<string, keyof typeof TONOS>)[t] ?? (t as keyof typeof TONOS);
 
-export function Etiqueta({ tono = 'neutro', children }: { tono?: Tono; children: React.ReactNode }) {
-  return <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${clasesTono(tono)}`}>{children}</span>;
+/** Pastilla de estado o distintivo. `punto`: un punto de color antes del texto (estados de pedidos, stock...). */
+export function Etiqueta({ tono = 'neutro', punto = false, children }: { tono?: Tono; punto?: boolean; children: React.ReactNode }) {
+  const t = tonoBase(tono);
+  return (
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${TONOS[t]}`}>
+      {punto && <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${PUNTOS[t]}`} aria-hidden />}
+      {children}
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------------------- botones
 
 type Variante = 'primario' | 'secundario' | 'fantasma' | 'peligro' | 'suave';
 const VARIANTES: Record<Variante, string> = {
-  primario: 'bg-marca-700 text-white hover:bg-marca-800 disabled:bg-marca-700/50 dark:bg-marca-600 dark:hover:bg-marca-500 dark:disabled:bg-marca-600/40',
-  secundario: 'border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800',
+  primario: 'bg-marca-700 text-white shadow-tarjeta hover:bg-marca-800 hover:shadow-elevada disabled:bg-marca-700/50 dark:bg-marca-600 dark:hover:bg-marca-500 dark:disabled:bg-marca-600/40',
+  secundario: 'border border-slate-200 bg-white text-slate-800 shadow-tarjeta hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800',
   fantasma: 'text-marca-700 hover:bg-marca-50 dark:text-marca-300 dark:hover:bg-marca-950',
   peligro: 'bg-rose-700 text-white hover:bg-rose-800 disabled:bg-rose-700/50 dark:bg-rose-600 dark:hover:bg-rose-500',
   suave: 'text-marca-700 hover:bg-marca-50 dark:text-marca-300 dark:hover:bg-marca-950',
 };
-const TAMANOS = { md: 'min-h-10 px-4 text-sm', sm: 'min-h-8 px-3 text-xs' } as const;
+const TAMANOS = { md: 'min-h-10 rounded-xl px-4 text-sm', sm: 'min-h-8 rounded-lg px-3 text-xs' } as const;
 
 export function Boton({
   variante = 'secundario',
@@ -105,7 +158,7 @@ export function Boton({
     <button
       type="button"
       {...props}
-      className={`inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${TAMANOS[tamano]} ${VARIANTES[variante]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 font-semibold transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100 ${TAMANOS[tamano]} ${VARIANTES[variante]} ${className}`}
     >
       {Icono && <Icono className="h-4 w-4 shrink-0" aria-hidden />}
       {children}
@@ -121,7 +174,7 @@ export function BotonIcono({ icono: Icono, etiqueta, className = '', ...props }:
       aria-label={etiqueta}
       title={etiqueta}
       {...props}
-      className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800 ${className}`}
+      className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800 ${className}`}
     >
       <Icono className="h-5 w-5" aria-hidden />
     </button>
@@ -139,20 +192,45 @@ export function Segmentado<T extends string>({
   onChange: (id: T) => void;
 }) {
   return (
-    <div role="tablist" className="mb-4 flex max-w-full gap-1 overflow-x-auto border-b border-slate-200 scrollbar-none dark:border-slate-800">
+    <div role="tablist" className="mb-4 flex max-w-full gap-1 overflow-x-auto scrollbar-none">
+      {opciones.map((o) => {
+        const activa = valor === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            role="tab"
+            aria-selected={activa}
+            onClick={() => onChange(o.id)}
+            className={`inline-flex min-h-9 shrink-0 items-center whitespace-nowrap rounded-xl px-3.5 text-sm font-semibold transition-all ${
+              activa ? 'bg-marca-700 text-white shadow-tarjeta dark:bg-marca-600' : 'text-slate-600 hover:bg-white hover:text-slate-900 hover:shadow-tarjeta dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-white'
+            }`}
+          >
+            {o.texto}
+            {o.cuenta !== undefined && (
+              <span className={`ml-1.5 rounded-full px-1.5 text-xs tabular-nums ${activa ? 'bg-white/20 text-white' : 'bg-slate-200/70 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>{o.cuenta}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Selector compacto (como 7D · 30D · 90D): para cambiar lo que muestra un gráfico o una tarjeta. */
+export function Pildoras<T extends string>({ opciones, valor, onChange, etiqueta }: { opciones: { id: T; texto: string }[]; valor: T; onChange: (id: T) => void; etiqueta: string }) {
+  return (
+    <div role="radiogroup" aria-label={etiqueta} className="inline-flex rounded-xl bg-slate-100 p-0.5 dark:bg-slate-800">
       {opciones.map((o) => (
         <button
           key={o.id}
           type="button"
-          role="tab"
-          aria-selected={valor === o.id}
+          role="radio"
+          aria-checked={valor === o.id}
           onClick={() => onChange(o.id)}
-          className={`-mb-px min-h-10 shrink-0 whitespace-nowrap border-b-2 px-3 text-sm font-medium transition-colors ${
-            valor === o.id ? 'border-marca-700 text-marca-800 dark:border-marca-400 dark:text-marca-300' : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
-          }`}
+          className={`min-h-8 rounded-lg px-3 text-xs font-semibold transition-all ${valor === o.id ? 'bg-white text-marca-800 shadow-tarjeta dark:bg-slate-900 dark:text-marca-300' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white'}`}
         >
           {o.texto}
-          {o.cuenta !== undefined && <span className="ml-1.5 rounded-full bg-slate-100 px-1.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">{o.cuenta}</span>}
         </button>
       ))}
     </div>
@@ -169,10 +247,10 @@ export function Filtros<T extends string>({ opciones, valor, onChange }: { opcio
           type="button"
           aria-pressed={valor === o.id}
           onClick={() => onChange(o.id)}
-          className={`min-h-8 shrink-0 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition-colors ${
+          className={`min-h-8 shrink-0 whitespace-nowrap rounded-full border px-3.5 text-xs font-semibold transition-all ${
             valor === o.id
-              ? 'border-marca-700 bg-marca-700 text-white dark:border-marca-600 dark:bg-marca-600'
-              : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
+              ? 'border-marca-900 bg-marca-900 text-white shadow-tarjeta dark:border-marca-600 dark:bg-marca-600'
+              : 'border-slate-200 bg-white text-slate-600 shadow-tarjeta hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
           }`}
         >
           {o.texto}
@@ -197,30 +275,65 @@ export function Vacio({ icono: Icono, titulo, texto, accion }: { icono?: LucideI
 
 /** Variación vs. un período anterior: ↑ 12% (verde si subir es bueno). */
 export function Variacion({ pct, periodo, subirEsBueno = true }: { pct: number | null; periodo: string; subirEsBueno?: boolean }) {
-  if (pct === null) return <span className="text-slate-500">Sin datos de {periodo}</span>;
+  if (pct === null) return <span className="text-slate-500">Sin datos {periodo.startsWith('el ') ? `del ${periodo.slice(3)}` : `de ${periodo}`}</span>;
   const bueno = pct === 0 ? null : (pct > 0) === subirEsBueno;
-  const color = bueno === null ? 'text-slate-500' : bueno ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400';
-  return <span><span className={`font-medium ${color}`}>{pct > 0 ? '↑' : pct < 0 ? '↓' : '='} {Math.abs(pct)}%</span> <span className="text-slate-500">vs {periodo}</span></span>;
+  const color = bueno === null ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' : bueno ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300';
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      <span className={`rounded-full px-1.5 py-px text-xs font-semibold ${color}`}>{pct > 0 ? '▲' : pct < 0 ? '▼' : '='} {Math.abs(pct)}%</span>
+      <span className="text-slate-500">vs {periodo}</span>
+    </span>
+  );
 }
 
-/** Indicador: rótulo, cifra y (opcional) variación o nota. Con `onClick` se puede tocar para ver el detalle. */
-export function Dato({ rotulo, valor, tono, nota, icono: Icono, onClick }: { rotulo: string; valor: React.ReactNode; tono?: Tono; nota?: React.ReactNode; icono?: LucideIcon; onClick?: () => void }) {
+/** Mini tendencia (sparkline) de una serie: solo la forma, sin ejes. El último punto se marca. */
+export function MiniTendencia({ serie, tono = 'marca', className = '' }: { serie: number[]; tono?: 'marca' | 'exito' | 'peligro' | 'aviso'; className?: string }) {
+  if (serie.length < 2) return null;
+  const max = Math.max(...serie);
+  const min = Math.min(...serie);
+  const rango = max - min || 1;
+  const x = (i: number) => (i / (serie.length - 1)) * 96 + 2;
+  const y = (v: number) => 30 - ((v - min) / rango) * 26;
+  const d = serie.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const color = tono === 'peligro' ? 'stroke-rose-500' : tono === 'aviso' ? 'stroke-amber-500' : tono === 'exito' ? 'stroke-emerald-600' : 'stroke-marca-600 dark:stroke-marca-400';
+  return (
+    <svg viewBox="0 0 100 34" className={`h-9 w-24 overflow-visible ${className}`} aria-hidden>
+      <path d={d} fill="none" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className={color} />
+      <circle cx={x(serie.length - 1)} cy={y(serie[serie.length - 1])} r={3} className={`fill-white ${color}`} strokeWidth={2} />
+    </svg>
+  );
+}
+
+/**
+ * Indicador (KPI): icono en círculo, rótulo, cifra destacada, variación o nota y, si hay, una mini tendencia.
+ * Con `onClick` se puede tocar para ver el detalle (flecha arriba a la derecha).
+ */
+export function Dato({ rotulo, valor, tono, nota, icono: Icono, onClick, serie }: { rotulo: string; valor: React.ReactNode; tono?: Tono; nota?: React.ReactNode; icono?: LucideIcon; onClick?: () => void; serie?: number[] }) {
   const t = tono ? (ALIAS_TONO as Record<string, string>)[tono] ?? tono : undefined;
   const color = t === 'peligro' ? 'text-rose-700 dark:text-rose-400' : t === 'aviso' ? 'text-amber-700 dark:text-amber-400' : t === 'exito' ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-900 dark:text-white';
+  const fondoIcono = t === 'peligro' ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300' : t === 'aviso' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' : 'bg-marca-50 text-marca-700 dark:bg-marca-950 dark:text-marca-300';
+  const tonoSerie = t === 'peligro' ? 'peligro' : t === 'aviso' ? 'aviso' : 'marca';
   const contenido = (
     <>
-      <p className="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
-        {Icono && <Icono className="h-3.5 w-3.5" aria-hidden />}
-        <span className="flex-1">{rotulo}</span>
-        {onClick && <ChevronRight className="h-3.5 w-3.5 opacity-60" aria-hidden />}
-      </p>
-      <p className={`mt-1 text-2xl font-semibold leading-tight ${color}`}>{valor}</p>
-      {nota && <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{nota}</p>}
+      <div className="flex items-start justify-between gap-2">
+        {Icono ? (
+          <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${fondoIcono}`}>
+            <Icono className="h-5 w-5" aria-hidden />
+          </span>
+        ) : <span />}
+        {onClick && <ArrowUpRight className="h-4 w-4 text-slate-400 transition-colors group-hover:text-marca-700 dark:group-hover:text-marca-300" aria-hidden />}
+      </div>
+      <p className="mt-3 text-xs font-semibold text-slate-500 dark:text-slate-400">{rotulo}</p>
+      <div className="mt-0.5 flex items-end justify-between gap-2">
+        <p className={`text-2xl font-bold leading-tight tracking-tight ${color}`}>{valor}</p>
+        {serie && <MiniTendencia serie={serie} tono={tonoSerie} className="hidden shrink-0 sm:block" />}
+      </div>
+      {nota && <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{nota}</div>}
     </>
   );
-  const base = 'rounded-xl border border-slate-200 bg-white p-4 text-left dark:border-slate-800 dark:bg-slate-900';
+  const base = 'group rounded-2xl border border-slate-200/70 bg-white p-4 text-left shadow-tarjeta dark:border-slate-800 dark:bg-slate-900';
   return onClick ? (
-    <button type="button" onClick={onClick} aria-label={`${rotulo}: ver detalle`} className={`${base} transition-colors hover:border-marca-600 dark:hover:border-marca-500`}>{contenido}</button>
+    <button type="button" onClick={onClick} aria-label={`${rotulo}: ver detalle`} className={`${base} transition-all hover:-translate-y-0.5 hover:shadow-elevada`}>{contenido}</button>
   ) : (
     <div className={base}>{contenido}</div>
   );
@@ -258,7 +371,7 @@ export function Casilla({ marcada, parcial = false, onChange, etiqueta }: { marc
       onClick={(e) => { e.stopPropagation(); onChange(!marcada); }}
       className="inline-flex h-10 w-10 shrink-0 items-center justify-center"
     >
-      <span className={`inline-flex h-5 w-5 items-center justify-center rounded border transition-colors ${marcada || parcial ? 'border-marca-700 bg-marca-700 text-white' : 'border-slate-400 bg-white dark:border-slate-600 dark:bg-slate-900'}`}>
+      <span className={`inline-flex h-5 w-5 items-center justify-center rounded-md border transition-colors ${marcada || parcial ? 'border-marca-700 bg-marca-700 text-white' : 'border-slate-400 bg-white dark:border-slate-600 dark:bg-slate-900'}`}>
         {parcial ? <Minus className="h-3.5 w-3.5" /> : marcada ? <Check className="h-3.5 w-3.5" /> : null}
       </span>
     </button>
@@ -269,7 +382,7 @@ export function Casilla({ marcada, parcial = false, onChange, etiqueta }: { marc
 export function BarraSeleccion({ cantidad, onLimpiar, children }: { cantidad: number; onLimpiar: () => void; children: React.ReactNode }) {
   if (cantidad === 0) return null;
   return (
-    <div role="region" aria-label="Acciones sobre la selección" className="animate-in sticky top-14 z-20 mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-marca-200 bg-marca-50 px-3 py-2 dark:border-marca-900 dark:bg-marca-950">
+    <div role="region" aria-label="Acciones sobre la selección" className="animate-in sticky top-16 z-20 mb-3 flex flex-wrap items-center gap-2 rounded-2xl border border-marca-200 bg-marca-50 px-3 py-2 shadow-elevada dark:border-marca-900 dark:bg-marca-950">
       <span className="text-sm font-semibold text-marca-900 dark:text-marca-200">{cantidad} seleccionado{cantidad === 1 ? '' : 's'}</span>
       <Boton tamano="sm" variante="fantasma" icono={X} onClick={onLimpiar}>Quitar selección</Boton>
       <div className="ml-auto flex flex-wrap gap-2">{children}</div>
@@ -296,7 +409,7 @@ export function useSeleccion() {
 export function PasoUnidades({ valor, onChange, paso = 1, min = 0, etiqueta = 'Unidades', compacto = false }: { valor: number; onChange: (n: number) => void; paso?: number; min?: number; etiqueta?: string; compacto?: boolean }) {
   const alto = compacto ? 'h-8' : 'h-10';
   return (
-    <div className={`inline-flex ${alto} items-stretch overflow-hidden rounded-lg border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-900`}>
+    <div className={`inline-flex ${alto} items-stretch overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900`}>
       <button type="button" aria-label={`Quitar ${paso}`} onClick={() => onChange(Math.max(min, valor - paso))} className={`inline-flex ${compacto ? 'w-8' : 'w-9'} items-center justify-center text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800`}>
         <Minus className="h-4 w-4" />
       </button>

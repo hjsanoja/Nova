@@ -117,7 +117,7 @@ export function CondicionesVista({ usuario }: { usuario: Usuario }) {
                           {r.vigente_hasta ? ` · hasta ${r.vigente_hasta}` : ''}
                         </p>
                       </button>
-                      <Etiqueta tono={e.tono}>{e.texto}</Etiqueta>
+                      <Etiqueta tono={e.tono} punto>{e.texto}</Etiqueta>
                       {puedeEditar && <Boton tamano="sm" variante="fantasma" onClick={() => void alternarActiva(r)}>{r.activo ? 'Pausar' : 'Activar'}</Boton>}
                     </li>
                   );

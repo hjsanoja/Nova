@@ -10,7 +10,7 @@ import { codigoDeFarmacia, registrarCodigoFarmacia } from '../offline/homologaci
 import { CodigoFarmacia } from '../pedido/CodigoFarmacia';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { Sheet } from '../components/capture/Sheet';
-import { Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso } from '../components/ui/kit';
+import { Avatar, Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso } from '../components/ui/kit';
 import { descargarTexto, detallesPorPedido, diasDesde, ESTADOS_ETIQUETA, fechaHoraCorta, nombreDeProducto, unidadesDePedido } from './logica';
 import { aplicarConfirmacionLocal, estadoTrasConfirmar, validarConfirmaciones } from './mesa';
 import type { Confirmacion } from './mesa';
@@ -129,13 +129,14 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
                 const espera = diasDesde(p.created_at);
                 return (
                   <li key={p.id}>
-                    <button type="button" onClick={() => setAbierto(p.id)} className={`flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 ${abierto === p.id ? 'bg-marca-50 dark:bg-marca-950/30' : ''}`}>
-                      <div className="min-w-0">
+                    <button type="button" onClick={() => setAbierto(p.id)} className={`flex w-full items-center justify-between gap-3 px-3 py-3 text-left transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50 ${abierto === p.id ? 'bg-marca-50 dark:bg-marca-950/30' : ''}`}>
+                      <Avatar nombre={cliente(p.cliente_id)?.nombre_comercial ?? 'Farmacia'} tamano={38} />
+                      <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-semibold">{cliente(p.cliente_id)?.nombre_comercial ?? 'Farmacia'}</p>
                         <p className="truncate text-xs text-slate-500">{p.correlativo} · {droguerias.find((d) => d.id === p.drogueria_id)?.nombre ?? ''} · {u.solicitadas} uds</p>
                         <p className="truncate text-xs text-slate-400">{vendedor(p.vendedor_id) || 'Vendedor'} · {fechaHoraCorta(p.created_at)}{espera ? ` (hace ${espera} d)` : ''}</p>
                       </div>
-                      <Etiqueta tono={e.tono}>{e.texto}</Etiqueta>
+                      <Etiqueta tono={e.tono} punto>{e.texto}</Etiqueta>
                     </button>
                   </li>
                 );
@@ -245,7 +246,7 @@ function Procesar({
       <div>
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-base font-bold">{cliente?.nombre_comercial ?? 'Farmacia'}</h2>
-          <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono}>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
+          <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono} punto>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
         </div>
         <p className="text-xs text-slate-500">
           {p.correlativo} · {drogueria?.nombre ?? 'Droguería'} · {vendedor || 'Vendedor'} · {new Date(p.created_at).toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' })}

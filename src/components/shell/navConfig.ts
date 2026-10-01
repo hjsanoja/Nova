@@ -62,3 +62,9 @@ export const TAB_INICIAL: Record<RolUsuario, string> = {
   gerente: 'inicio',
   admin: 'inicio',
 };
+
+const ETIQUETA_ROL: Record<RolUsuario, string> = { admin: 'Administrador', gerente: 'Gerente', vendedor: 'Vendedor', teletransferencista: 'Transferencista' };
+
+/** "Vendedor · OTC", "Administrador"… */
+export const etiquetaRol = (rol: RolUsuario, equipo?: string): string =>
+  rol === 'vendedor' && equipo && equipo !== 'TODOS' ? `${ETIQUETA_ROL[rol]} · ${equipo}` : ETIQUETA_ROL[rol];

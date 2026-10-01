@@ -1,5 +1,19 @@
 [
   {
+    "version": "8.0",
+    "fecha": "2026-10-01",
+    "tipo": "mayor",
+    "titulo": "Diseño nuevo «Bosque»",
+    "cambios": [
+      "Interfaz renovada: verde bosque, tipografía Plus Jakarta Sans, tarjetas redondeadas con sombras suaves y pequeñas animaciones.",
+      "Menú lateral a toda la altura con el botón «Tomar pedido», grupos y la persona que usa la app al pie.",
+      "Resumen con banner de bienvenida, indicadores con mini tendencia y el gráfico de pedidos por día con su promedio de 7 días.",
+      "Centro de avisos: lo último de tus pedidos (despachado, parcial, rechazado), con opción de marcarlos como leídos.",
+      "Estados de los pedidos en pastillas de color con punto, y últimos pedidos en tabla (PC) o tarjetas (teléfono).",
+      "Los créditos muestran a Hernando Sanoja y Dubralis Fajardo como responsables. Las paletas Azul y Verde azulado siguen disponibles en Mi cuenta."
+    ]
+  },
+  {
     "version": "7.0",
     "fecha": "2026-09-30",
     "tipo": "mayor",
@@ -12,7 +26,8 @@
       "Colores nuevos: azul como color principal y verde solo para lo que salió bien. En Mi cuenta se puede volver al verde azulado.",
       "Gráficos de línea para la evolución por día y por mes, y de anillo para el reparto por droguería.",
       "El reporte de accesos muestra qué versión usa cada persona."
-    ]
+    ],
+    "pr": 11
   },
   {
     "version": "6.2",

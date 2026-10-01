@@ -92,7 +92,7 @@ function ReportePedidos() {
                     <td className="max-w-48 truncate">{nombreCliente(p.cliente_id)}</td>
                     <td>{droguerias.find((d) => d.id === p.drogueria_id)?.nombre}</td>
                     <td className="max-w-32 truncate">{nombreVend(p.vendedor_id)}</td>
-                    <td><Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono}>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta></td>
+                    <td><Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono} punto>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta></td>
                     <td className="pr-3 text-right">{unidadesDePedido(porPedido.get(p.id) ?? []).solicitadas}</td>
                   </tr>
                 ))}

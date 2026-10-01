@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
-import { Activity, AlertTriangle, ArrowRight, CalendarDays, CalendarRange, ClipboardPlus, Clock, Link2, Package, ShoppingBag, Store, Target, UserCheck, Users } from 'lucide-react';
+import { Activity, CalendarDays, CalendarRange, ClipboardPlus, Clock, Link2, Package, ShoppingBag, Sparkles, Store, Target, UserCheck, Users } from 'lucide-react';
 import type { Usuario } from '../types/pharmacy';
 import { obtenerDb } from '../offline/db';
 import { useLive } from '../offline/useLive';
 import { useEstadoSync } from '../offline/syncStore';
 import { getSupabaseClient } from '../services/supabaseClient';
-import { Boton, Dato, Etiqueta, PageHeader, Segmentado, Subtitulo, Tarjeta, Vacio, Variacion } from '../components/ui/kit';
-import { Anillo, BarrasRanking, Linea, MAX_PARTES_ANILLO, Medidor } from '../components/graficos/Graficos';
-import type { LocalCompraMensual, LocalMeta, LocalNotificacion } from '../offline/types';
+import { Avatar, Boton, BotonClaro, Dato, Destacado, Etiqueta, Pildoras, Subtitulo, Tarjeta, Vacio, Variacion } from '../components/ui/kit';
+import { CentroAvisos } from '../avisos/CentroAvisos';
+import { Anillo, BarrasRanking, BarrasTendencia, Linea, MAX_PARTES_ANILLO, Medidor } from '../components/graficos/Graficos';
+import type { LocalCompraMensual, LocalMeta } from '../offline/types';
 import { avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe } from '../metas/logica';
 import { DetallePedidos } from './DetallePedidos';
 import type { SolicitudDetalle } from './DetallePedidos';
@@ -85,7 +85,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const esVendedor = usuario.rol === 'vendedor';
   const esAdmin = usuario.rol === 'admin';
   const puedeMetas = esAdmin || usuario.rol === 'gerente';
-  const { pendientes, errores } = useEstadoSync();
+  const { pendientes, errores, enVivo } = useEstadoSync();
   const clientes = useClientes();
   const productos = useProductos();
   const droguerias = useDroguerias();
@@ -94,7 +94,6 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   // El consolidado de compras (grande para la gerencia) solo hace falta para "clientes por atender" del vendedor.
   const compras = useLive(() => (esVendedor ? db.comprasMensual.toArray() : []), [esVendedor], [] as LocalCompraMensual[]);
   const { usuarios } = useUsuariosNube();
-  const avisos = useLive(() => db.notificaciones.filter((n) => !n.leida).toArray(), [], [] as LocalNotificacion[]);
   const metas = useLive(() => db.metas.where('periodo').equals(periodoDe(new Date())).toArray(), [], [] as LocalMeta[]);
   const conteos = useConteosAdmin(esAdmin);
   const mensualNube = useMensualNube(esVendedor ? usuario.id : null);
@@ -115,6 +114,11 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const diario = useMemo(() => serieDiaria(pedidos, unidades, 30), [pedidos, unidades]);
   const serie = diario.map((p) => ({ clave: p.fecha, etiqueta: etiquetaDia(p.fecha), valor: p[metrica] }));
   const total30 = diario.reduce((a, p) => a + p.pedidos, 0);
+  // Mini tendencias de los indicadores: últimas 2 semanas por día.
+  const tendencia = useMemo(() => {
+    const ult = diario.slice(-14);
+    return { pedidos: ult.map((p) => p.pedidos), unidades: ult.map((p) => p.unidades), farmacias: ult.map((p) => p.farmacias) };
+  }, [diario]);
   const mensual = useMemo(() => mensualNube ?? serieMensual(pedidos, unidades, 3), [mensualNube, pedidos, unidades]);
   const serieMes = mensual.map((m) => ({ clave: m.mes, etiqueta: etiquetaMes(m.mes), valor: m[metrica] }));
   const cerrados = mensual.slice(0, -1).filter((m) => m.pedidos > 0);
@@ -178,20 +182,17 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
     <button type="button" onClick={() => irATab(tab)} className="text-xs font-medium text-marca-700 hover:underline dark:text-marca-300">{texto}</button>
   );
 
-  const selectorMetrica = <Segmentado valor={metrica} onChange={(v) => setMetrica(v as Metrica)} opciones={METRICAS} />;
-
   const grafico30 = (
-    <Tarjeta className="lg:col-span-2">
+    <Tarjeta>
       {total30 > 0 ? (
-        <>
-          {selectorMetrica}
-          <Linea
-            puntos={serie}
-            unidad={metrica}
-            titulo={`${TITULO_METRICA[metrica]} por día · últimos 30 días`}
-            onSeleccionar={(pt) => abrir(`${TITULO_METRICA[metrica]} · ${pt.etiqueta}`, `${QUE_CUENTA} creados el ${pt.etiqueta}. ${metrica === 'farmacias' ? 'Se cuentan farmacias distintas.' : metrica === 'unidades' ? 'Suma de las unidades pedidas.' : 'Número de pedidos.'} Total del día: ${formato(pt.valor)}.`, pedidos.filter((p) => cuenta(p) && diaDe(p.created_at) === pt.clave))}
-          />
-        </>
+        <BarrasTendencia
+          puntos={serie}
+          unidad={metrica}
+          titulo={`${TITULO_METRICA[metrica]} por día`}
+          subtitulo="Últimos 30 días · toca un día para ver sus pedidos"
+          acciones={<Pildoras valor={metrica} onChange={setMetrica} opciones={METRICAS} etiqueta="Qué medir" />}
+          onSeleccionar={(pt) => abrir(`${TITULO_METRICA[metrica]} · ${pt.etiqueta}`, `${QUE_CUENTA} creados el ${pt.etiqueta}. ${metrica === 'farmacias' ? 'Se cuentan farmacias distintas.' : metrica === 'unidades' ? 'Suma de las unidades pedidas.' : 'Número de pedidos.'} Total del día: ${formato(pt.valor)}.`, pedidos.filter((p) => cuenta(p) && diaDe(p.created_at) === pt.clave))}
+        />
       ) : (
         <>
           <Subtitulo>Pedidos por día</Subtitulo>
@@ -202,7 +203,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   );
 
   const graficoMeses = (
-    <Tarjeta className="lg:col-span-2">
+    <Tarjeta>
       <Linea
         puntos={serieMes}
         unidad={metrica}
@@ -239,22 +240,54 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   );
 
   const ultimos = (
-    <Tarjeta>
-      <Subtitulo accion={verTodos('pedidos')}>{esVendedor ? 'Mis últimos pedidos' : 'Últimos pedidos'}</Subtitulo>
+    <Tarjeta className="!p-0">
+      <div className="px-4 pt-4 sm:px-5 sm:pt-5"><Subtitulo accion={verTodos('pedidos')}>{esVendedor ? 'Mis últimos pedidos' : 'Últimos pedidos'}</Subtitulo></div>
       {recientes.length === 0 ? (
         <Vacio titulo="Aún no hay pedidos" />
       ) : (
-        <ul className="-my-2 divide-y divide-slate-100 dark:divide-slate-800">
-          {recientes.map((p) => (
-            <li key={p.id} className="flex items-center justify-between gap-2 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{nombreCliente.get(p.cliente_id) ?? 'Farmacia'}</p>
-                <p className="text-xs text-slate-500">{p.correlativo} · {formato(unidadesDePedido(porPedido.get(p.id) ?? []).solicitadas)} uds</p>
-              </div>
-              <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono}>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="hidden overflow-x-auto px-3 pb-3 md:block">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="text-xs text-slate-500">
+                  <th className="rounded-l-xl bg-slate-50 px-3 py-2.5 font-semibold dark:bg-slate-800/60">Pedido</th>
+                  <th className="bg-slate-50 px-3 py-2.5 font-semibold dark:bg-slate-800/60">Farmacia</th>
+                  <th className="bg-slate-50 px-3 py-2.5 font-semibold dark:bg-slate-800/60">Fecha</th>
+                  <th className="bg-slate-50 px-3 py-2.5 text-right font-semibold dark:bg-slate-800/60">Unidades</th>
+                  <th className="rounded-r-xl bg-slate-50 px-3 py-2.5 font-semibold dark:bg-slate-800/60">Estado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {recientes.map((p) => (
+                  <tr key={p.id} onClick={() => abrir(`Pedido ${p.correlativo}`, `${nombreCliente.get(p.cliente_id) ?? 'Farmacia'} · ${nombres.drogueria(p.drogueria_id)}`, [p])} className="cursor-pointer transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                    <td className="px-3 py-3 font-semibold text-slate-900 dark:text-white">{p.correlativo}</td>
+                    <td className="max-w-56 truncate px-3 py-3 text-slate-700 dark:text-slate-200">{nombreCliente.get(p.cliente_id) ?? 'Farmacia'}</td>
+                    <td className="whitespace-nowrap px-3 py-3 text-slate-500">{new Date(p.created_at).toLocaleString('es', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</td>
+                    <td className="px-3 py-3 text-right font-semibold tabular-nums text-slate-900 dark:text-white">{formato(unidadesDePedido(porPedido.get(p.id) ?? []).solicitadas)}</td>
+                    <td className="px-3 py-3"><Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono} punto>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ul className="flex flex-col gap-2 px-3 pb-3 md:hidden">
+            {recientes.map((p) => (
+              <li key={p.id}>
+                <button type="button" onClick={() => abrir(`Pedido ${p.correlativo}`, `${nombreCliente.get(p.cliente_id) ?? 'Farmacia'} · ${nombres.drogueria(p.drogueria_id)}`, [p])} className="flex w-full items-center gap-3 rounded-xl bg-slate-50 p-3 text-left transition-colors active:bg-slate-100 dark:bg-slate-800/50">
+                  <Avatar nombre={nombreCliente.get(p.cliente_id) ?? 'Farmacia'} tamano={40} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-slate-900 dark:text-white">{nombreCliente.get(p.cliente_id) ?? 'Farmacia'}</span>
+                    <span className="block text-xs text-slate-500"><span className="font-semibold text-marca-700 dark:text-marca-300">{p.correlativo}</span> · {new Date(p.created_at).toLocaleString('es', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</span>
+                  </span>
+                  <span className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="text-sm font-bold tabular-nums text-slate-900 dark:text-white">{formato(unidadesDePedido(porPedido.get(p.id) ?? []).solicitadas)} uds</span>
+                    <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono} punto>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </Tarjeta>
   );
@@ -284,31 +317,29 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   );
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
+    <div className="flex flex-col gap-4 lg:gap-5">
+      <Destacado
+        icono={Sparkles}
         titulo={`${saludo()}, ${usuario.nombre_completo.split(' ')[0]}`}
-        descripcion={esVendedor ? 'Así va tu mes.' : 'Así va el mes del equipo.'}
-        acciones={tomarPedido}
+        distintivo={enVivo ? 'En vivo' : undefined}
+        texto={`${esVendedor ? 'Tu' : 'El equipo en'} ${nombreMes}: ${formato(resumen.actual.pedidos)} pedido${resumen.actual.pedidos === 1 ? '' : 's'} · ${formato(resumen.actual.unidades)} unidades · ${formato(resumen.actual.clientes)} farmacias`}
+        acciones={
+          <>
+            <span className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-white/10 px-3 text-xs font-semibold text-white"><CalendarDays className="h-3.5 w-3.5" aria-hidden />{new Date().toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+            {(esVendedor || esAdmin) && <BotonClaro icono={ClipboardPlus} onClick={() => irATab('captura')}>Tomar pedido</BotonClaro>}
+            {!esVendedor && porProcesar + enRevision > 0 && (esAdmin || usuario.rol === 'teletransferencista') && (
+              <BotonClaro icono={Clock} onClick={() => irATab('por_procesar')}>Por procesar · {porProcesar + enRevision}</BotonClaro>
+            )}
+          </>
+        }
       />
 
-      {avisos.length > 0 && esVendedor && (
-        <button
-          type="button"
-          onClick={() => irATab('pedidos')}
-          className="flex w-full items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-left text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-        >
-          <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
-          <span className="flex-1">{avisos[0].titulo}{avisos.length > 1 ? ` (+${avisos.length - 1} más)` : ''}</span>
-          <ArrowRight className="h-4 w-4" aria-hidden />
-        </button>
-      )}
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Dato icono={ShoppingBag} rotulo="Pedidos del mes" valor={formato(resumen.actual.pedidos)} nota={<Variacion pct={variacion(resumen.actual.pedidos, resumen.anterior.pedidos)} periodo={mesAnterior} />} onClick={() => abrir(`Pedidos de ${nombreMes}`, `${QUE_CUENTA} creados desde el 1 de ${nombreMes}: ${formato(resumen.actual.pedidos)}. El mes pasado: ${formato(resumen.anterior.pedidos)}.`, delMes)} />
-        <Dato icono={Package} rotulo="Unidades del mes" valor={formato(resumen.actual.unidades)} nota={<Variacion pct={variacion(resumen.actual.unidades, resumen.anterior.unidades)} periodo={mesAnterior} />} onClick={() => abrir(`Unidades de ${nombreMes}`, `Suma de las unidades pedidas en cada pedido de ${nombreMes}: ${formato(resumen.actual.unidades)}. El mes pasado: ${formato(resumen.anterior.unidades)}. ${QUE_CUENTA}.`, delMes)} />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
+        <Dato icono={ShoppingBag} serie={tendencia.pedidos} rotulo="Pedidos del mes" valor={formato(resumen.actual.pedidos)} nota={<Variacion pct={variacion(resumen.actual.pedidos, resumen.anterior.pedidos)} periodo={mesAnterior} />} onClick={() => abrir(`Pedidos de ${nombreMes}`, `${QUE_CUENTA} creados desde el 1 de ${nombreMes}: ${formato(resumen.actual.pedidos)}. El mes pasado: ${formato(resumen.anterior.pedidos)}.`, delMes)} />
+        <Dato icono={Package} serie={tendencia.unidades} rotulo="Unidades del mes" valor={formato(resumen.actual.unidades)} nota={<Variacion pct={variacion(resumen.actual.unidades, resumen.anterior.unidades)} periodo={mesAnterior} />} onClick={() => abrir(`Unidades de ${nombreMes}`, `Suma de las unidades pedidas en cada pedido de ${nombreMes}: ${formato(resumen.actual.unidades)}. El mes pasado: ${formato(resumen.anterior.unidades)}. ${QUE_CUENTA}.`, delMes)} />
         <Dato icono={Activity} rotulo="Promedio por día" valor={`${formato(promDiaUnidades)} uds`} nota={`${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día`} onClick={() => abrir('Promedio por día', `${formato(resumen.actual.unidades)} unidades ÷ ${diasDelMes} días transcurridos de ${nombreMes} = ${formato(promDiaUnidades)} unidades por día. ${formato(resumen.actual.pedidos)} pedidos ÷ ${diasDelMes} días = ${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día.`, delMes)} />
-        <Dato icono={Store} rotulo="Farmacias con pedido hoy" valor={formato(resumen.hoy.clientes)} nota={`${formato(resumen.actual.clientes)} en el mes · ${formato(resumen.hoy.pedidos)} pedido${resumen.hoy.pedidos === 1 ? '' : 's'} hoy`} onClick={() => abrir('Pedidos de hoy', `Farmacias distintas con al menos un pedido hoy: ${formato(resumen.hoy.clientes)} (${formato(resumen.hoy.pedidos)} pedidos). En el mes: ${formato(resumen.actual.clientes)} farmacias. ${QUE_CUENTA}.`, deHoy)} />
-        <Dato icono={CalendarRange} rotulo="Promedio por mes" valor={promedioMensual === null ? '—' : `${formato(promedioMensual)} uds`} nota={cerrados.length ? `Últimos ${cerrados.length} mes${cerrados.length === 1 ? '' : 'es'} cerrados` : 'Aún sin meses cerrados'} onClick={() => abrir('Promedio por mes', cerrados.length ? `Promedio de unidades de los meses cerrados con pedidos: ${cerrados.map((m) => `${etiquetaMes(m.mes)} ${formato(m.unidades)}`).join(' + ')} = ${formato(cerrados.reduce((a, m) => a + m.unidades, 0))} ÷ ${cerrados.length} = ${formato(promedioMensual ?? 0)}. No incluye el mes en curso.` : 'Todavía no hay meses cerrados con pedidos.', pedidos.filter((p) => cuenta(p) && cerrados.some((m) => diaDe(p.created_at).startsWith(m.mes))), { nota: NOTA_LOCAL })} />
+        <Dato icono={Store} serie={tendencia.farmacias} rotulo="Farmacias con pedido hoy" valor={formato(resumen.hoy.clientes)} nota={`${formato(resumen.actual.clientes)} en el mes · ${formato(resumen.hoy.pedidos)} pedido${resumen.hoy.pedidos === 1 ? '' : 's'} hoy`} onClick={() => abrir('Pedidos de hoy', `Farmacias distintas con al menos un pedido hoy: ${formato(resumen.hoy.clientes)} (${formato(resumen.hoy.pedidos)} pedidos). En el mes: ${formato(resumen.actual.clientes)} farmacias. ${QUE_CUENTA}.`, deHoy)} />
+        <Dato icono={CalendarRange} serie={mensual.length > 1 ? mensual.map((m) => m.unidades) : undefined} rotulo="Promedio por mes" valor={promedioMensual === null ? '—' : `${formato(promedioMensual)} uds`} nota={cerrados.length ? `Últimos ${cerrados.length} mes${cerrados.length === 1 ? '' : 'es'} cerrados` : 'Aún sin meses cerrados'} onClick={() => abrir('Promedio por mes', cerrados.length ? `Promedio de unidades de los meses cerrados con pedidos: ${cerrados.map((m) => `${etiquetaMes(m.mes)} ${formato(m.unidades)}`).join(' + ')} = ${formato(cerrados.reduce((a, m) => a + m.unidades, 0))} ÷ ${cerrados.length} = ${formato(promedioMensual ?? 0)}. No incluye el mes en curso.` : 'Todavía no hay meses cerrados con pedidos.', pedidos.filter((p) => cuenta(p) && cerrados.some((m) => diaDe(p.created_at).startsWith(m.mes))), { nota: NOTA_LOCAL })} />
         {esVendedor ? (
           pendientes > 0 ? (
             <Dato icono={Clock} rotulo="Por enviar" valor={pendientes} tono={errores > 0 ? 'peligro' : 'aviso'} nota={errores > 0 ? 'Hay pedidos con error' : 'Se envían al tener señal'} />
@@ -338,18 +369,11 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         </Tarjeta>
       )}
 
-      <Fila>
-        {grafico30}
-        {tarjetaMetas}
-      </Fila>
-
-      {esVendedor ? (
-        <>
-          <Fila>
-            {graficoMeses}
-            {miFichero}
-          </Fila>
-          <Fila>
+      <div className="grid items-start gap-4 lg:gap-5 xl:grid-cols-12">
+        <div className="flex min-w-0 flex-col gap-4 lg:gap-5 xl:col-span-8">
+          {grafico30}
+          {ultimos}
+          {esVendedor ? (
             <Tarjeta>
               <Subtitulo>Clientes por atender</Subtitulo>
               {atender.length === 0 ? (
@@ -370,14 +394,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
                 </ul>
               )}
             </Tarjeta>
-            {masPedidos}
-            {ultimos}
-          </Fila>
-        </>
-      ) : (
-        <>
-          <Fila>
-            {graficoMeses}
+          ) : (
             <Tarjeta>
               <Subtitulo accion={(esAdmin || usuario.rol === 'teletransferencista') && antiguos.length > 0 ? verTodos('por_procesar', 'Ir a procesar') : undefined}>
                 Esperando más tiempo
@@ -392,19 +409,28 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
                         <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{nombreCliente.get(p.cliente_id) ?? 'Farmacia'}</p>
                         <p className="text-xs text-slate-500">{p.correlativo} · {new Date(p.created_at).toLocaleString('es', { dateStyle: 'short', timeStyle: 'short' })}</p>
                       </div>
-                      <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono}>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
+                      <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono} punto>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
                     </li>
                   ))}
                 </ul>
               )}
             </Tarjeta>
-          </Fila>
-          <Fila>
+          )}
+          <div className="grid gap-4 lg:gap-5 md:grid-cols-2">
+            {masPedidos}
+            {esVendedor ? miFichero : (
             <Tarjeta>
               <Subtitulo>Unidades por representante · este mes</Subtitulo>
               <BarrasRanking filas={porVendedor} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.vendedor(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} tomados por este representante. Suma de unidades pedidas.`, delMes.filter((p) => p.vendedor_id === id))} />
             </Tarjeta>
-            {masPedidos}
+            )}
+          </div>
+          {graficoMeses}
+        </div>
+        <div className="flex min-w-0 flex-col gap-4 lg:gap-5 xl:col-span-4">
+          {tarjetaMetas}
+          <CentroAvisos onAbrir={() => irATab('pedidos')} />
+          {!esVendedor && (
             <Tarjeta>
               <Subtitulo>Unidades por droguería · este mes</Subtitulo>
               {anilloDrogueria ? (
@@ -417,10 +443,9 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
                 <BarrasRanking filas={porDrogueria} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} enviados a esta droguería. Suma de unidades pedidas.`, delMes.filter((p) => p.drogueria_id === id))} />
               )}
             </Tarjeta>
-          </Fila>
-          {ultimos}
-        </>
-      )}
+          )}
+        </div>
+      </div>
       <DetallePedidos solicitud={detalle} porPedido={porPedido} nombres={nombresDetalle} onCerrar={() => setDetalle(null)} />
     </div>
   );
@@ -432,7 +457,6 @@ function diaDe(iso: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-const Fila = ({ children }: { children: ReactNode }) => <div className="grid gap-4 lg:grid-cols-3">{children}</div>;
 
 function Mini({ rotulo, valor }: { rotulo: string; valor: string }) {
   return (

@@ -10,9 +10,9 @@ export const diasDesde = (fecha: string | null | undefined, ahora = new Date()):
 
 export const ESTADOS_ETIQUETA: Record<EstadoPedido, { texto: string; tono: Tono }> = {
   borrador: { texto: 'Borrador', tono: 'gris' },
-  enviado_teletransferencia: { texto: 'Por procesar', tono: 'azul' },
+  enviado_teletransferencia: { texto: 'Por procesar', tono: 'info' },
   en_revision: { texto: 'En revisión', tono: 'ambar' },
-  en_proceso: { texto: 'En proceso', tono: 'azul' },
+  en_proceso: { texto: 'En proceso', tono: 'info' },
   procesado_parcial: { texto: 'Parcial', tono: 'ambar' },
   procesado_total: { texto: 'Completo', tono: 'verde' },
   facturado: { texto: 'Facturado', tono: 'verde' },

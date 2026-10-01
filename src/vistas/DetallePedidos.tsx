@@ -75,7 +75,7 @@ export function DetallePedidos({ solicitud, porPedido, nombres, onCerrar }: {
                     </span>
                     <span className="shrink-0 text-right">
                       <span className="block text-sm font-semibold tabular-nums text-slate-900 dark:text-white">{formato(unidades)}</span>
-                      <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono}>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
+                      <Etiqueta tono={ESTADOS_ETIQUETA[p.estado].tono} punto>{ESTADOS_ETIQUETA[p.estado].texto}</Etiqueta>
                     </span>
                   </button>
                   {expandido && (
