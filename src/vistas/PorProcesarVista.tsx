@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Download, Lock, RefreshCw } from 'lucide-react';
+import { CheckCircle2, Download, FileUp, Lock, RefreshCw } from 'lucide-react';
 import type { Usuario } from '../types/pharmacy';
 import type { LocalCliente, LocalDetalle, LocalDrogueria, LocalMapCliente, LocalMapProducto, LocalPedido, LocalProducto, MotivoAjuste } from '../offline/types';
 import { obtenerDb } from '../offline/db';
@@ -13,6 +13,9 @@ import { Sheet } from '../components/capture/Sheet';
 import { Avatar, Boton, Etiqueta, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso } from '../components/ui/kit';
 import { descargarTexto, detallesPorPedido, diasDesde, ESTADOS_ETIQUETA, fechaHoraCorta, nombreDeProducto, unidadesDePedido } from './logica';
 import { aplicarConfirmacionLocal, estadoTrasConfirmar, validarConfirmaciones } from './mesa';
+import { CargaRespuesta } from './CargaRespuesta';
+import type { PedidoCruzado } from '../services/respuestaDrogueria';
+import { irASeccion } from './navegacion';
 import type { Confirmacion } from './mesa';
 import { useClientes, useDetalles, useDroguerias, useMapClientes, useMapProductos, usePedidos, useProductos, useUsuariosNube } from './useDatos';
 
@@ -68,6 +71,8 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
   const [cola, setCola] = useState<Cola>('cola');
   const [abierto, setAbierto] = useState<string | null>(null);
   const [actualizando, setActualizando] = useState(false);
+  // Respuesta de la droguería por archivo: de muchos pedidos (lista) o de uno solo (desde el pedido abierto).
+  const [carga, setCarga] = useState<{ pedido?: LocalPedido; usar?: (r: PedidoCruzado) => void } | null>(null);
   const { mostrar, nodo } = useAviso();
 
   const porPedido = useMemo(() => detallesPorPedido(detalles), [detalles]);
@@ -104,6 +109,7 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
       irATab={irATab}
       onAviso={mostrar}
       onListo={() => { setAbierto(null); void actualizar(); }}
+      onCargarRespuesta={(usar) => setCarga({ pedido: actual, usar })}
     />
   );
 
@@ -112,9 +118,31 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
       <PageHeader
         titulo="Por procesar"
         descripcion="Toma un pedido, descarga el archivo de la droguería y registra lo que despachó."
-        acciones={<Boton icono={RefreshCw} onClick={actualizar} disabled={actualizando}>{actualizando ? 'Actualizando…' : 'Actualizar'}</Boton>}
+        acciones={
+          <>
+            <Boton icono={FileUp} onClick={() => setCarga({})}>Cargar respuesta</Boton>
+            <Boton icono={RefreshCw} onClick={actualizar} disabled={actualizando}>{actualizando ? 'Actualizando…' : 'Actualizar'}</Boton>
+          </>
+        }
       />
       {nodo}
+      {carga && (
+        <CargaRespuesta
+          onCerrar={() => setCarga(null)}
+          droguerias={droguerias}
+          pedidos={pedidos}
+          porPedido={porPedido}
+          clientes={clientes}
+          productos={productos}
+          mapProductos={mapProductos}
+          mapClientes={mapClientes}
+          pedidoFijo={carga.pedido}
+          onUsar={carga.usar && ((r) => { carga.usar?.(r); setCarga(null); })}
+          onTerminado={(texto) => { mostrar({ tipo: 'ok', texto }); setAbierto(null); void actualizar(); }}
+          esAdmin={usuario.rol === 'admin'}
+          irAFormato={() => irASeccion(irATab, 'datos', 'droguerias')}
+        />
+      )}
       <Segmentado opciones={[{ id: 'cola', texto: 'Por procesar', cuenta: cuentas.cola }, { id: 'revision', texto: 'En revisión', cuenta: cuentas.revision }, { id: 'hechos', texto: 'Procesados', cuenta: cuentas.hechos }]} valor={cola} onChange={(c) => { setCola(c); setAbierto(null); }} />
 
       <div className={grande ? 'grid grid-cols-[minmax(300px,380px)_1fr] items-start gap-3' : ''}>
@@ -157,7 +185,7 @@ export function PorProcesarVista({ usuario, irATab }: { usuario: Usuario; irATab
 }
 
 function Procesar({
-  pedido: p, lineas, cliente, drogueria, productos, mapProductos, mapClientes, vendedor, esAdmin, irATab, onAviso, onListo,
+  pedido: p, lineas, cliente, drogueria, productos, mapProductos, mapClientes, vendedor, esAdmin, irATab, onAviso, onListo, onCargarRespuesta,
 }: {
   pedido: LocalPedido;
   lineas: LocalDetalle[];
@@ -171,6 +199,7 @@ function Procesar({
   irATab: (t: string) => void;
   onAviso: (a: { tipo: 'ok' | 'error'; texto: string }) => void;
   onListo: () => void;
+  onCargarRespuesta: (usar: (r: PedidoCruzado) => void) => void;
 }) {
   const procesable = ['enviado_teletransferencia', 'en_revision', 'en_proceso'].includes(p.estado);
   const [reintento, setReintento] = useState(0);
@@ -235,6 +264,14 @@ function Procesar({
     } finally {
       setEnviando(false);
     }
+  };
+
+  // Cantidades leídas del archivo de respuesta: quedan escritas para revisarlas antes de confirmar.
+  const usarRespuesta = (r: PedidoCruzado) => {
+    setConf(Object.fromEntries(r.lineas.map((l) => [l.detalle.id, String(l.confirmadas)])));
+    setMotivos(Object.fromEntries(r.lineas.filter((l) => l.confirmadas < l.detalle.unidades_solicitadas).map((l) => [l.detalle.id, l.motivo])));
+    if (r.factura) setFactura(r.factura);
+    onAviso({ tipo: 'ok', texto: `Cantidades del archivo listas: quedaría ${ESTADOS_ETIQUETA[r.estado].texto.toLowerCase()}. Revisa y confirma.` });
   };
 
   const descargar = () => {
@@ -331,6 +368,7 @@ function Procesar({
 
       {puedeEditar && (
         <div className="space-y-2">
+          <Boton tamano="sm" icono={FileUp} onClick={() => onCargarRespuesta(usarRespuesta)}>Llenar con el archivo de la droguería</Boton>
           <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
             Número de factura o despacho (opcional)
             <input value={factura} onChange={(e) => setFactura(e.target.value)} className={`${estiloInput} mt-1`} />

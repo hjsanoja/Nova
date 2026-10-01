@@ -151,7 +151,7 @@ function FormDrogueria({ inicial, nueva, onCerrar, onGuardada, onEliminar, onFor
           </Campo>
         ) : (
           <div className="flex flex-col justify-end">
-            <Boton icono={FileCog} onClick={onFormato}>Formato del archivo de pedido</Boton>
+            <Boton icono={FileCog} onClick={onFormato}>Formatos de archivo (pedido y respuesta)</Boton>
           </div>
         )}
         <label className="inline-flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={d.activo} onChange={(e) => setD({ ...d, activo: e.target.checked })} className="h-4 w-4 accent-marca-700" /> Activa (se puede elegir en los pedidos)</label>

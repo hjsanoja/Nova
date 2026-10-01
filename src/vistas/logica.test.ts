@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actividadDeClientes, aCsv, clientesPorAtender, contarPorGrupo, cumplimientoPorDrogueria, filtrarPedidos, perteneceAGrupo, unidadesDePedido } from './logica';
+import { actividadDeClientes, aCsv, contarPorGrupo, cumplimientoPorDrogueria, filtrarPedidos, perteneceAGrupo, unidadesDePedido } from './logica';
 import { cliente, drogueria } from '../offline/testing/utiles';
 import type { EstadoPedido, LocalDetalle, LocalPedido } from '../offline/types';
 
@@ -32,7 +32,7 @@ describe('pedidos: grupos, filtros y totales', () => {
   });
 });
 
-describe('fichero: clientes por atender', () => {
+describe('fichero: actividad de los clientes', () => {
   const ahora = new Date('2026-09-30T00:00:00Z');
   it('usa la actividad más reciente (compra reportada o pedido) contra la frecuencia de visita', () => {
     const cs = [cliente('a', { frecuencia_dias: 7 }), cliente('b', { frecuencia_dias: 30 }), cliente('c', { frecuencia_dias: 7 }), cliente('d', { frecuencia_dias: 7, estado_validacion: 'prospecto_pendiente' }), cliente('e', { frecuencia_dias: null })];
@@ -40,7 +40,7 @@ describe('fichero: clientes por atender', () => {
     const pedido = new Map([['a', '2026-09-27'], ['c', '2026-09-05']]);
     const act = actividadDeClientes(cs, compra, pedido, ahora);
     expect(act.find((x) => x.cliente.id === 'a')!.dias).toBe(3); // el pedido de Nova es más reciente que la compra
-    expect(clientesPorAtender(act).map((x) => [x.cliente.id, x.atraso])).toEqual([['c', 18]]); // b: 20 días de 30 = al día; d prospecto; e sin frecuencia
+    expect(act.find((x) => x.cliente.id === 'c')!.atraso).toBe(18); // 25 días sin comprar con frecuencia de 7
   });
 });
 

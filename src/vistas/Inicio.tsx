@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, CalendarDays, CalendarRange, ClipboardPlus, Clock, Link2, Package, ShoppingBag, Sparkles, Store, Target, UserCheck, Users } from 'lucide-react';
+import { Activity, CalendarDays, CalendarRange, ClipboardPlus, Clock, HeartPulse, Link2, Package, Phone, ShoppingBag, Sparkles, Store, Target, UserCheck } from 'lucide-react';
 import type { Usuario } from '../types/pharmacy';
 import { obtenerDb } from '../offline/db';
 import { useLive } from '../offline/useLive';
@@ -9,14 +9,17 @@ import { Avatar, Boton, BotonClaro, Dato, Destacado, Etiqueta, Pildoras, Subtitu
 import { CentroAvisos } from '../avisos/CentroAvisos';
 import { Anillo, BarrasRanking, BarrasTendencia, Linea, MAX_PARTES_ANILLO, Medidor } from '../components/graficos/Graficos';
 import type { LocalCompraMensual, LocalMeta } from '../offline/types';
-import { avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe } from '../metas/logica';
+import { NIVELES_META, avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe, revisarMetasHoy, ritmoMeta } from '../metas/logica';
 import { DetallePedidos } from './DetallePedidos';
 import type { SolicitudDetalle } from './DetallePedidos';
-import { actividadDeClientes, clientesPorAtender, ESTADOS_ETIQUETA, perteneceAGrupo, unidadesDePedido, detallesPorPedido } from './logica';
+import { ESTADOS_ETIQUETA, perteneceAGrupo, unidadesDePedido, detallesPorPedido } from './logica';
+import { NIVELES_RIESGO, describirRiesgo } from './riesgo';
+import type { NivelRiesgo } from './riesgo';
+import { useRiesgoFarmacias } from './useRiesgo';
 import { irASeccion, prepararPedidoPara } from './navegacion';
 import { cuenta, rankingMes, resumenMeses, serieDiaria, serieMensual, topProductosMes, unidadesPorPedido, variacion } from './indicadores';
 import type { PuntoMes } from './indicadores';
-import { ultimaCompraPorCliente, ultimoPedidoPorCliente, useClientes, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
+import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
 
 const saludo = () => {
   const h = new Date().getHours();
@@ -143,20 +146,35 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const enRevision = pedidos.filter((p) => p.estado === 'en_revision').length;
   const parciales = pedidos.filter((p) => p.estado === 'procesado_parcial' && !(porPedido.get(p.id) ?? []).every((d) => d.remanente_derivado_en || d.unidades_pendientes === 0)).length;
 
-  const atender = useMemo(
-    () => clientesPorAtender(actividadDeClientes(clientes, ultimaCompraPorCliente(compras), ultimoPedidoPorCliente(pedidos))),
-    [clientes, compras, pedidos]
-  );
+  // Farmacias en riesgo: llevan mucho más tiempo del normal sin comprar (según su propio ritmo).
+  const { lista: riesgo, deLaNube } = useRiesgoFarmacias(clientes, pedidos, unidades, compras);
+  const cuentaRiesgo = (n: NivelRiesgo) => riesgo.filter((f) => f.nivel === n).length;
+  // Se abre en el nivel más urgente que tenga farmacias (hasta que la persona elija otro).
+  const [nivelElegido, setNivelRiesgo] = useState<Exclude<NivelRiesgo, 'al_dia'> | null>(null);
+  const nivelRiesgo = nivelElegido ?? (['en_riesgo', 'atrasada', 'perdida'] as const).find((n) => cuentaRiesgo(n) > 0) ?? 'en_riesgo';
+  const delNivel = riesgo.filter((f) => f.nivel === nivelRiesgo);
   const recientes = useMemo(() => [...pedidos].filter(cuenta).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5), [pedidos]);
   const antiguos = useMemo(
     () => pedidos.filter((p) => perteneceAGrupo(p.estado, 'por_procesar') || p.estado === 'en_revision').sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 5),
     [pedidos]
   );
   // Metas del mes: el avance usa todos los pedidos visibles (una meta de farmacia cuenta los de cualquier representante).
+  // Las más urgentes primero (en riesgo, atención…), y dentro de cada nivel la de menor avance.
   const avances = useMemo(
-    () => metas.map((m) => ({ m, a: avanceMeta(m, todos, unidades), texto: describirMeta(m, nombres) })).sort((x, y) => x.a.pct - y.a.pct),
+    () =>
+      metas
+        .map((m) => {
+          const a = avanceMeta(m, todos, unidades);
+          return { m, a, r: ritmoMeta(m, a.valor), texto: describirMeta(m, nombres) };
+        })
+        .sort((x, y) => NIVELES_META[x.r.nivel].orden - NIVELES_META[y.r.nivel].orden || x.a.pct - y.a.pct),
     [metas, todos, unidades, nombres]
   );
+  // Una vez al día, la base revisa las metas y avisa las que van en riesgo o ya se cumplieron.
+  useEffect(() => {
+    const sb = getSupabaseClient();
+    if (sb) void revisarMetasHoy((fn) => sb.rpc(fn)).catch(() => undefined);
+  }, []);
 
   // ---- Detalle auditable: cada cifra se abre con los pedidos que la forman y cómo se calculó.
   const [detalle, setDetalle] = useState<SolicitudDetalle | null>(null);
@@ -220,15 +238,19 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         <Vacio icono={Target} titulo="Sin metas este mes" texto={puedeMetas ? 'Define objetivos por representante, farmacia o droguería.' : 'Tu gerente aún no definió metas para este mes.'} />
       ) : (
         <ul className="flex flex-col gap-4">
-          {avances.slice(0, 4).map(({ m, a, texto }) => {
+          {avances.slice(0, 4).map(({ m, a, r, texto }) => {
             const ind = indicador(m.indicador);
+            const nivel = NIVELES_META[r.nivel];
+            const atrasada = r.nivel === 'en_riesgo' || r.nivel === 'atencion';
             return (
               <li key={m.id}>
                 <Medidor
                   valor={a.valor}
                   total={a.objetivo}
+                  esperado={r.nivel === 'cumplida' ? undefined : r.esperado}
+                  distintivo={<Etiqueta tono={nivel.tono} punto>{nivel.texto}</Etiqueta>}
                   rotulo={`${esVendedor && m.vendedor_id === usuario.id && !m.cliente_id && !m.drogueria_id ? ind.texto : `${texto} · ${ind.texto.toLowerCase()}`}`}
-                  nota={a.valor >= a.objetivo ? '¡Meta cumplida!' : `Faltan ${formato(a.objetivo - a.valor)} · ${formato(a.porDia)} ${ind.unidad} por día${a.proyeccion !== null ? ` · proyección ${formato(a.proyeccion)}` : ''}`}
+                  nota={a.valor >= a.objetivo ? '¡Meta cumplida!' : `${atrasada ? `A hoy se esperaban ${formato(Math.round(r.esperado))} · ` : ''}Faltan ${formato(a.objetivo - a.valor)} · ${formato(a.porDia)} ${ind.unidad} por día${a.proyeccion !== null ? ` · proyección ${formato(a.proyeccion)}` : ''}`}
                   onClick={() => abrir(`Meta: ${texto}`, `${QUE_CUENTA} de ${nombreMes}${m.vendedor_id ? ` del representante ${nombres.vendedor(m.vendedor_id)}` : ''}${m.cliente_id ? ` para ${nombres.cliente(m.cliente_id)}` : ''}${m.drogueria_id ? ` por ${nombres.drogueria(m.drogueria_id)}` : ''}. Mide ${ind.texto.toLowerCase()}: ${formato(a.valor)} de ${formato(a.objetivo)} (${a.pct}%). Faltan ${a.diasRestantes} días.`, pedidosDeMeta(m, todos))}
                 />
               </li>
@@ -299,6 +321,53 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
     </Tarjeta>
   );
 
+  const tarjetaRiesgo = (
+    <Tarjeta>
+      <Subtitulo accion={verTodos('clientes', esVendedor ? 'Mis clientes' : 'Ver clientes')}>Farmacias en riesgo</Subtitulo>
+      {riesgo.length === 0 ? (
+        <Vacio icono={HeartPulse} titulo="Sin historial de compras aún" texto="Cuando tus farmacias compren, NOVA aprende cada cuánto lo hacen y te avisa si alguna se atrasa." />
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <Pildoras
+              valor={nivelRiesgo}
+              onChange={setNivelRiesgo}
+              etiqueta="Nivel de riesgo"
+              opciones={[
+                { id: 'en_riesgo', texto: `En riesgo · ${cuentaRiesgo('en_riesgo')}` },
+                { id: 'atrasada', texto: `Atrasadas · ${cuentaRiesgo('atrasada')}` },
+                { id: 'perdida', texto: `Perdidas · ${cuentaRiesgo('perdida')}` },
+              ]}
+            />
+            <span className="text-xs text-slate-500">{deLaNube ? 'Con el historial del último año' : 'Con los datos de este equipo'}</span>
+          </div>
+          {delNivel.length === 0 ? (
+            <Vacio titulo={nivelRiesgo === 'en_riesgo' ? 'Ninguna en riesgo' : nivelRiesgo === 'atrasada' ? 'Ninguna atrasada' : 'Ninguna perdida'} texto="Todas compran a su ritmo de siempre." />
+          ) : (
+            <ul className="-my-2 divide-y divide-slate-100 dark:divide-slate-800">
+              {delNivel.slice(0, 5).map((f) => (
+                <li key={f.cliente.id} className="flex items-center gap-3 py-2.5">
+                  <Avatar nombre={f.cliente.nombre_comercial} tamano={36} />
+                  <div className="min-w-0 flex-1">
+                    <p className="flex flex-wrap items-center gap-x-2 text-sm font-medium text-slate-900 dark:text-white"><span className="truncate">{f.cliente.nombre_comercial}</span><Etiqueta tono={NIVELES_RIESGO[f.nivel].tono} punto>{NIVELES_RIESGO[f.nivel].texto}</Etiqueta></p>
+                    <p className="truncate text-xs text-slate-500">{describirRiesgo(f)}</p>
+                  </div>
+                  {f.cliente.telefono && (
+                    <a href={`tel:${f.cliente.telefono}`} aria-label={`Llamar a ${f.cliente.nombre_comercial}`} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-marca-700 hover:bg-marca-50 dark:text-marca-300 dark:hover:bg-marca-950"><Phone className="h-4 w-4" aria-hidden /></a>
+                  )}
+                  {(esVendedor || esAdmin) && (
+                    <Boton tamano="sm" variante="secundario" onClick={() => { prepararPedidoPara(f.cliente.id); irATab('captura'); }}>Pedido</Boton>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {delNivel.length > 5 && <p className="mt-3 text-xs text-slate-500">…y {delNivel.length - 5} más en {esVendedor ? 'Mis clientes' : 'Clientes'}.</p>}
+        </>
+      )}
+    </Tarjeta>
+  );
+
   const miFichero = (
     <Tarjeta>
       <Subtitulo>Mi fichero este mes</Subtitulo>
@@ -344,7 +413,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
           pendientes > 0 ? (
             <Dato icono={Clock} rotulo="Por enviar" valor={pendientes} tono={errores > 0 ? 'peligro' : 'aviso'} nota={errores > 0 ? 'Hay pedidos con error' : 'Se envían al tener señal'} />
           ) : (
-            <Dato icono={Users} rotulo="Clientes por atender" valor={atender.length} tono={atender.length > 0 ? 'aviso' : undefined} nota="Atrasados en su compra" onClick={() => irATab('clientes')} />
+            <Dato icono={HeartPulse} rotulo="Farmacias en riesgo" valor={cuentaRiesgo('en_riesgo')} tono={cuentaRiesgo('en_riesgo') > 0 ? 'peligro' : undefined} nota={`${cuentaRiesgo('atrasada')} atrasadas · ${cuentaRiesgo('perdida')} perdidas`} onClick={() => irATab('clientes')} />
           )
         ) : (
           <Dato icono={Clock} rotulo="Por procesar" valor={porProcesar} tono={porProcesar > 0 ? 'aviso' : undefined} nota={`${enRevision} en revisión${parciales ? ` · ${parciales} parciales` : ''}`} onClick={() => abrir('Por procesar', `Pedidos esperando a la mesa de transferencias (enviados o en proceso): ${porProcesar}. En revisión especial: ${enRevision}.`, pedidos.filter((p) => perteneceAGrupo(p.estado, 'por_procesar') || p.estado === 'en_revision'))} />
@@ -374,26 +443,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
           {grafico30}
           {ultimos}
           {esVendedor ? (
-            <Tarjeta>
-              <Subtitulo>Clientes por atender</Subtitulo>
-              {atender.length === 0 ? (
-                <Vacio titulo="Todo al día" texto="Ningún cliente de tu fichero está atrasado." />
-              ) : (
-                <ul className="-my-2 divide-y divide-slate-100 dark:divide-slate-800">
-                  {atender.slice(0, 5).map((a) => (
-                    <li key={a.cliente.id} className="flex items-center justify-between gap-2 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{a.cliente.nombre_comercial}</p>
-                        <p className="text-xs text-slate-500">{a.dias} días sin comprar · cada {a.cliente.frecuencia_dias}</p>
-                      </div>
-                      <Boton tamano="sm" variante="secundario" onClick={() => { prepararPedidoPara(a.cliente.id); irATab('captura'); }}>
-                        Pedido
-                      </Boton>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Tarjeta>
+            tarjetaRiesgo
           ) : (
             <Tarjeta>
               <Subtitulo accion={(esAdmin || usuario.rol === 'teletransferencista') && antiguos.length > 0 ? verTodos('por_procesar', 'Ir a procesar') : undefined}>
@@ -416,6 +466,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
               )}
             </Tarjeta>
           )}
+          {!esVendedor && tarjetaRiesgo}
           <div className="grid gap-4 lg:gap-5 md:grid-cols-2">
             {masPedidos}
             {esVendedor ? miFichero : (
@@ -429,7 +480,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         </div>
         <div className="flex min-w-0 flex-col gap-4 lg:gap-5 xl:col-span-4">
           {tarjetaMetas}
-          <CentroAvisos onAbrir={() => irATab('pedidos')} />
+          <CentroAvisos onAbrir={(n) => (n.tipo.startsWith('meta') ? puedeMetas && irATab('metas') : irATab('pedidos'))} />
           {!esVendedor && (
             <Tarjeta>
               <Subtitulo>Unidades por droguería · este mes</Subtitulo>

@@ -1,8 +1,22 @@
 [
   {
+    "version": "9.0",
+    "fecha": "2026-10-01",
+    "tipo": "mayor",
+    "titulo": "Respuesta de la droguería por archivo, metas con alertas y farmacias en riesgo",
+    "cambios": [
+      "Por procesar → «Cargar respuesta»: sube el Excel o CSV con lo que despachó la droguería; NOVA ubica cada pedido, muestra si queda completo, parcial o sin despacho, y los confirmas todos de una vez.",
+      "Dentro de un pedido, «Llenar con el archivo de la droguería» escribe las cantidades confirmadas para revisarlas antes de confirmar.",
+      "Cada droguería puede tener su formato de respuesta (Datos maestros → Droguerías → Formatos de archivo → Respuesta), probándolo con un archivo real.",
+      "Metas con alertas: cada meta dice si va en camino, necesita atención o está en riesgo, con una marca de lo esperado a hoy. Si va en riesgo, avisa al representante y a la gerencia (una vez por semana); también avisa cuando se cumple.",
+      "Farmacias en riesgo: NOVA aprende cada cuánto compra cada farmacia y marca las atrasadas, en riesgo o perdidas, en el Inicio y en Mis clientes."
+    ]
+  },
+  {
     "version": "8.0",
     "fecha": "2026-10-01",
     "tipo": "mayor",
+    "pr": 12,
     "titulo": "Diseño nuevo «Bosque»",
     "cambios": [
       "Interfaz renovada: verde bosque, tipografía Plus Jakarta Sans, tarjetas redondeadas con sombras suaves y pequeñas animaciones.",

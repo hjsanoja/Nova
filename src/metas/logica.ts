@@ -69,3 +69,62 @@ export function describirMeta(meta: Pick<LocalMeta, 'vendedor_id' | 'cliente_id'
   ].filter(Boolean);
   return partes.length ? partes.join(' · ') : 'Toda la empresa';
 }
+
+/* --------------------------------- alertas --------------------------------- */
+
+export type NivelMeta = 'cumplida' | 'en_camino' | 'atencion' | 'en_riesgo' | 'inicio' | 'no_cumplida' | 'futura';
+
+export interface Ritmo {
+  nivel: NivelMeta;
+  /** Lo que se debería llevar a la fecha (objetivo × días completos ÷ días del mes). */
+  esperado: number;
+}
+
+/** Texto, tono y orden (más urgente primero) de cada nivel. Siempre se muestra con su texto, nunca solo el color. */
+export const NIVELES_META: Record<NivelMeta, { texto: string; tono: 'exito' | 'marca' | 'aviso' | 'peligro' | 'neutro'; orden: number }> = {
+  en_riesgo: { texto: 'En riesgo', tono: 'peligro', orden: 0 },
+  atencion: { texto: 'Atención', tono: 'aviso', orden: 1 },
+  no_cumplida: { texto: 'No se cumplió', tono: 'peligro', orden: 2 },
+  inicio: { texto: 'Inicio de mes', tono: 'neutro', orden: 3 },
+  en_camino: { texto: 'En camino', tono: 'marca', orden: 4 },
+  futura: { texto: 'Próxima', tono: 'neutro', orden: 5 },
+  cumplida: { texto: 'Cumplida', tono: 'exito', orden: 6 },
+};
+
+/**
+ * Ritmo de la meta (espejo de app.avance_metas en la base): lo que se lleva contra lo esperado a la fecha.
+ * 95 % o más: en camino · 80–95 %: atención · menos: en riesgo. Los 3 primeros días del mes no se juzga.
+ */
+export function ritmoMeta(meta: Pick<LocalMeta, 'periodo' | 'objetivo'>, valor: number, hoy = new Date()): Ritmo {
+  const [a, m] = meta.periodo.split('-').map(Number);
+  const diasMes = new Date(a, m, 0).getDate();
+  const actual = periodoDe(hoy);
+  const completos = meta.periodo === actual ? hoy.getDate() - 1 : meta.periodo < actual ? diasMes : 0;
+  const esperado = Math.round(((meta.objetivo * completos) / diasMes) * 100) / 100;
+  if (valor >= meta.objetivo) return { nivel: 'cumplida', esperado };
+  if (meta.periodo > actual) return { nivel: 'futura', esperado: 0 };
+  if (meta.periodo < actual) return { nivel: 'no_cumplida', esperado };
+  if (completos < 3) return { nivel: 'inicio', esperado };
+  const nivel = valor >= esperado * 0.95 ? 'en_camino' : valor >= esperado * 0.8 ? 'atencion' : 'en_riesgo';
+  return { nivel, esperado };
+}
+
+const CLAVE_REVISION = 'nova:metas_revisadas';
+
+/** Pide a la base revisar las metas (avisos de riesgo y de cumplida) una vez al día por equipo. */
+export async function revisarMetasHoy(rpc: (fn: string) => PromiseLike<{ error: unknown }>, hoy = new Date()): Promise<boolean> {
+  const dia = `${hoy.getFullYear()}-${hoy.getMonth() + 1}-${hoy.getDate()}`;
+  try {
+    if (localStorage.getItem(CLAVE_REVISION) === dia) return false;
+  } catch {
+    /* sin almacenamiento: se revisa igual (la base no repite avisos) */
+  }
+  const { error } = await rpc('revisar_metas');
+  if (error) return false;
+  try {
+    localStorage.setItem(CLAVE_REVISION, dia);
+  } catch {
+    /* ignorar */
+  }
+  return true;
+}

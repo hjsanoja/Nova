@@ -14,6 +14,7 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
       'Plantillas: termina el dictado con "guárdalo como plantilla semanal" (o usa "Guardar como plantilla" en el carrito). La próxima vez di "Farmacia La Paz, plantilla semanal" o tócala sobre el catálogo.',
       'Código de la farmacia: si la droguería elegida aún no tiene el número de cliente de esa farmacia, la app te lo pide una sola vez antes de enviar. Sin ese código la droguería no reconoce el pedido.',
       'Mis clientes: tus farmacias con su teléfono y ubicación. Con "Agregar farmacias" armas tu fichero.',
+      'Farmacias en riesgo: NOVA aprende cada cuánto compra cada farmacia. Si una se atrasa mucho la marca como "Atrasada", "En riesgo" o "Perdida" (en el Inicio y en Mis clientes) para que la llames o le tomes pedido a tiempo.',
       'Descuentos: el catálogo marca los productos en oferta (por ejemplo "−10%") y el carrito aplica solo los descuentos por producto y por pedido. En el carrito puedes escribir tu propio % en cada producto; si supera lo autorizado, el pedido pasa por revisión de la mesa.',
       'Si ves el aviso "guardado solo en este teléfono", esos pedidos aún no llegaron a la nube: se envían solos con señal; no cierres sesión mientras tanto.',
       'Configuración → Avisos: activa los avisos para enterarte cuando tus pedidos se despachan o hay un comunicado nuevo.',
@@ -25,6 +26,7 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
     items: [
       'Por procesar: abre un pedido, descarga el archivo con los códigos de la droguería y envíalo por su portal. Si falta algo (farmacia sin código, producto sin código), el aviso rojo dice qué es; con productos sin código puedes descargar el archivo sin ellos.',
       'Cuando la droguería responda, escribe cuántas unidades confirmó por producto y toca "Confirmar". Si no despachó algo, indica el motivo.',
+      'Si la droguería responde con un archivo (Excel o CSV): toca "Cargar respuesta" arriba en Por procesar, elige la droguería y el archivo. NOVA muestra cómo quedaría cada pedido (completo, parcial o sin despacho) y los confirmas todos juntos. Dentro de un pedido, "Llenar con el archivo de la droguería" escribe las cantidades para que las revises.',
       'Si el archivo no se puede descargar, el aviso dice qué falta (por ejemplo, un producto sin código en esa droguería). Si falta el código de la farmacia, escríbelo ahí mismo y queda guardado.',
       'Clientes y Catálogo son de consulta: verás todas las farmacias, productos y droguerías.',
     ],
@@ -34,6 +36,7 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
     items: [
       'Resumen: pedidos, unidades, promedios por día y por mes, farmacias con pedido, avance de metas y rankings de representantes, productos y droguerías.',
       'Metas: objetivos del mes por representante, farmacia o droguería (o combinados), en unidades, pedidos o farmacias con pedido.',
+      'Alertas de metas: cada meta dice si va "En camino", necesita "Atención" o está "En riesgo" (la marca en la barra es lo esperado a hoy). Si va en riesgo, NOVA avisa al representante y a la gerencia una vez por semana; también avisa cuando se cumple.',
       'Comunicados: anuncios, descuentos o estrategias para todos o por rol, equipo, estado, ciudad o región. Aparecen arriba en la app de cada persona.',
       'Descuentos: por pedido (según productos distintos y unidades) o por producto (un % para productos elegidos, o para todos los productos desde un mínimo de unidades de cada uno).',
       'Reportes: pedidos (descargables a Excel), cumplimiento de cada droguería, alertas comerciales y accesos (quién entra y cuántas veces).',
@@ -44,7 +47,8 @@ const PASOS: Record<RolUsuario, { titulo: string; items: string[] }> = {
     items: [
       'Datos maestros: carga o edita droguerías, productos, farmacias y ventas. Marca uno o varios registros para borrarlos.',
       'Pedidos de prueba: en Pedidos marca los que quieras y toca "Eliminar"; para vaciar todos usa Configuración → Base de datos → Pedidos. Los teléfonos se limpian solos al sincronizar.',
-      'Archivo de pedido de cada droguería: Datos maestros → Droguerías → toca la droguería → "Formato del archivo de pedido". Arma las columnas, el separador y el nombre del archivo, con vista previa.',
+      'Archivo de pedido de cada droguería: Datos maestros → Droguerías → toca la droguería → "Formatos de archivo". Arma las columnas, el separador y el nombre del archivo, con vista previa.',
+      'Respuesta de la droguería: en "Formatos de archivo" → "Respuesta" indica qué columna trae el pedido, el producto y lo despachado (prueba con un archivo real). La mesa lo sube en Por procesar → "Cargar respuesta" y confirma varios pedidos de una vez.',
       'Fichero: asigna a cada vendedor las farmacias que atiende. Homologación: relaciona los códigos de cada droguería con tus farmacias y productos.',
       'Descuentos: por pedido (productos distintos y unidades, juntos o por separado) o por producto (lista de productos, o "Todos los productos" con un mínimo de unidades por producto: solo reciben el % los que llegan al mínimo).',
       'Configuración → Avisos: conecta una vez los avisos con la app cerrada (Edge Function "enviar-push") siguiendo los pasos de esa pantalla.',

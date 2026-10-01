@@ -6,8 +6,8 @@ si una fase se parte en dos PR, cada uno sube su versión.
 | Fase | Versión | Qué trae | ¿Cambia el SQL? |
 |------|---------|----------|-----------------|
 | 1 | v8.0 | Diseño nuevo «Bosque» | No |
-| 2 | v9.0 | Respuesta de la droguería por archivo · Metas con alertas · Farmacias en riesgo | Sí |
-| 3 | v10.0 | CRM: Ficha 360° · Tareas y recordatorios · Visitas con reporte (farmacias y médicos) · Registro de cambios | Sí |
+| 2 ✅ | v9.0 | Respuesta de la droguería por archivo · Metas con alertas · Farmacias en riesgo | Sí |
+| 3 | v10.0 | CRM: Ficha 360° · Tareas y recordatorios · Visitas con reporte (farmacias y médicos, visitador mixto) · Registro de cambios | Sí |
 | 4 | v11.0 | Automatizaciones · WhatsApp · Monitoreo de errores y respaldo · Robustez de la base | Sí |
 | 5 | v12.0 (experimental) | Laboratorio de precios e inventario por droguería (solo administrador) | Sí |
 
@@ -40,54 +40,34 @@ si una fase se parte en dos PR, cada uno sube su versión.
 
 ---
 
-## Fase 2 — Operación diaria (v9.0)
+## Fase 2 — Operación diaria (v9.0) ✅
 
 ### 2.1 Respuesta de la droguería por archivo
-Hoy la mesa marca a mano lo que la droguería confirmó. Con esta función se sube el archivo de respuesta y NOVA hace el cruce.
-
-1. Cada droguería tiene un **formato de respuesta**, igual al formato de envío que ya existe:
-   - qué columna trae el número de pedido, el código de producto, las unidades confirmadas y el motivo de rechazo;
-   - también la fila donde empiezan los datos y el separador.
-2. La mesa sube el Excel o CSV que devolvió la droguería:
-   - NOVA busca cada línea por **número de pedido + código de producto**;
-   - y muestra una vista previa con tres grupos: confirmadas completas, parciales y no encontradas.
-3. Al aceptar la vista previa:
-   - se llenan las «Confirmadas»;
-   - el pedido pasa a **procesado total** o **parcial**;
-   - se avisa al vendedor, con los avisos que ya existen.
-4. Las líneas que no se encontraron quedan en una lista para revisarlas a mano. Nunca se pierden.
-5. **Base de datos:**
-   - nueva tabla `formatos_respuesta_drogueria`;
-   - función `aplicar_respuesta_drogueria(pedido, lineas jsonb)`, que hace todo en una sola transacción y es idempotente: subir el mismo archivo dos veces no duplica nada.
-6. **Pruebas:**
-   - lectura de archivos (CSV con `;` y `,`, Excel con encabezados en otra fila);
-   - escenario SQL de respuesta parcial.
+1. La mesa toca **Por procesar → Cargar respuesta**, elige la droguería y sube el Excel (.xlsx) o CSV que devolvió.
+2. NOVA busca sola la fila de títulos y las columnas (pedido, código del producto, despachado o faltante, motivo, factura).
+   - Cada pedido se ubica por su número (PED-1045, o solo 1045) o, si el archivo no lo trae, por la cuenta de la farmacia.
+   - Cada producto se ubica por el código de la droguería, el código de barras o el código interno.
+3. Vista previa: cada pedido con su estado final (completo, parcial o sin despacho), los productos que no vinieron y las filas que no se pudieron ubicar (no se pierden: se listan para revisarlas a mano).
+4. «Confirmar N pedidos» toma, confirma y libera cada pedido con las mismas funciones de siempre. Los avisos al vendedor salen igual que al confirmar a mano.
+5. Dentro de un pedido, «Llenar con el archivo de la droguería» solo escribe las cantidades: la persona revisa y confirma.
+6. El formato de respuesta de cada droguería se guarda en **Datos maestros → Droguerías → Formatos de archivo → Respuesta** (con prueba en vivo usando un archivo real).
+   - Se guarda dentro del formato de la droguería (`formato_export.respuesta`), así que no necesitó tabla nueva.
+   - El Excel antiguo (.xls) no se lee: se pide guardarlo como .xlsx o CSV.
 
 ### 2.2 Metas con alertas
-1. Cada meta (por vendedor, equipo o droguería) calcula su **ritmo**: lo que se lleva contra lo que se debería llevar hoy. Por ejemplo, el día 15 de un mes de 30 días se debería llevar el 50 %.
-2. Hay tres niveles, cada uno con icono y texto, nunca solo color:
-   - **En camino:** ritmo de 95 % o más.
-   - **Atención:** ritmo entre 80 % y 95 %.
-   - **En riesgo:** ritmo menor de 80 %.
-3. **Avisos:**
-   - Aviso semanal (lunes) y aviso a mitad de mes al vendedor y a su responsable cuando la meta esté «En riesgo».
-   - Aviso de felicitación cuando se cumple.
-4. En Inicio, la tarjeta de metas muestra el nivel y cuánto falta por día para llegar.
-5. **Base de datos:** la vista `v_avance_metas` con el ritmo ya calculado, para que todos vean el mismo número.
+1. Cada meta muestra su nivel con texto (nunca solo color): **En camino** (95 % o más de lo esperado a hoy), **Atención** (80–95 %), **En riesgo** (menos de 80 %), **Cumplida**, **No se cumplió** y **Inicio de mes** (los 3 primeros días no se juzga).
+2. La barra tiene una marca con lo esperado a hoy.
+3. **Avisos** (en la app y al teléfono):
+   - meta en riesgo: al representante y a la gerencia/administración, una vez por semana;
+   - meta cumplida: una sola vez.
+   - La revisión la pide la app al abrir el Inicio (una vez al día) y, si el proyecto tiene pg_cron, corre sola a las 8:00.
+4. **Base de datos:** `app.avance_metas`, `revisar_metas()` y la columna `notificaciones.clave` (evita avisos repetidos).
 
 ### 2.3 Farmacias en riesgo
-1. **Cálculo por farmacia:**
-   - cada cuántos días pide normalmente (mediana entre pedidos);
-   - hace cuántos días fue su último pedido.
-2. **Estados:**
-   - **Al día.**
-   - **Atrasada:** pasó 1,5 veces su ciclo normal.
-   - **En riesgo:** pasó 2 veces su ciclo normal o lleva más de 45 días sin pedir.
-   - **Perdida:** más de 90 días sin pedir.
-3. **Dónde se ve:**
-   - nueva lista «Farmacias en riesgo» en Inicio y en el fichero del vendedor;
-   - con un botón para **crear tarea** (fase 3) o **escribir por WhatsApp** (fase 4).
-4. Se calcula en el equipo con los pedidos que ya están guardados, así que funciona sin internet. No necesita tabla nueva.
+1. Ciclo de compra de cada farmacia: la frecuencia de su ficha o, si no tiene, la mediana de días entre sus compras del último año (entre 7 y 60 días).
+2. Niveles: **Al día** · **Atrasada** (1,5 ciclos sin comprar) · **En riesgo** (2 ciclos o más de 45 días) · **Perdida** (más de 90 días).
+3. Se ve en el Inicio (tarjeta con pestañas por nivel, llamar y tomar pedido) y en **Mis clientes** (filtro por nivel y la línea de riesgo en la ficha).
+4. Con conexión usa `historial_compra_farmacias()` (pedidos de NOVA + compras reportadas por las droguerías); sin conexión calcula lo mismo con los datos del equipo.
 
 ---
 
@@ -133,9 +113,9 @@ Hoy la mesa marca a mano lo que la droguería confirmó. Con esta función se su
    - visitas por representante y por semana;
    - cobertura (médicos visitados contra asignados);
    - muestras entregadas.
-5. **Nuevo rol `representante`:**
-   - ve sus médicos y sus farmacias;
-   - no toma pedidos, salvo que se le habilite.
+5. **Visitador mixto** (confirmado por Hernando): el mismo representante visita médicos **y** toma pedidos en farmacias.
+   - No hace falta un rol nuevo: el vendedor gana la cartera de médicos además de su fichero de farmacias.
+   - La ruta del día y los reportes mezclan las dos visitas (farmacia y médico), con el pedido como resultado posible de la visita a farmacia.
 
 ### 3.4 Registro de cambios (auditoría)
 1. **Trigger genérico `app.auditar()`:**
@@ -225,3 +205,12 @@ Cada droguería manda su inventario y sus precios en un formato distinto. En lug
    - monto estimado del pedido.
 
 **Para empezar necesito:** un archivo real de inventario y uno de precios de cada droguería (Cobeca, Drocerca, Nena y las demás). Pueden venir con los datos sensibles borrados; lo importante es la forma.
+
+---
+
+## Pendientes de información (los entrega el equipo cuando los tenga)
+
+1. **Archivos reales de inventario y de precios** de cada droguería (Cobeca, Drocerca, Nena y las demás), aunque vengan con datos borrados. Sin ellos no arranca la Fase 5.
+2. **Un ejemplo del archivo de respuesta** (lo despachado) de cada droguería, para dejar su formato configurado y probado. Mientras tanto, NOVA adivina las columnas por sus títulos.
+3. **Datos del médico** que se quieren guardar en la Fase 3 (por ejemplo: especialidad, centro, horario de consulta, teléfono, potencial).
+

@@ -376,17 +376,27 @@ export function BarrasRanking({ filas, unidad, vacio, onSeleccionar }: { filas: 
 }
 
 /** Medidor de avance (p. ej. cobertura del fichero): la pista es un tono claro de la misma marca. */
-export function Medidor({ valor, total, rotulo, nota, onClick }: { valor: number; total: number; rotulo: string; nota?: string; onClick?: () => void }) {
+/**
+ * Medidor de una proporción (avance de meta, cobertura). `esperado` dibuja una marca con lo que se debería llevar a la
+ * fecha; `distintivo` va junto al rótulo (por ejemplo, el nivel de la meta con su texto).
+ */
+export function Medidor({ valor, total, rotulo, nota, onClick, esperado, distintivo }: { valor: number; total: number; rotulo: string; nota?: string; onClick?: () => void; esperado?: number; distintivo?: React.ReactNode }) {
   const pct = total > 0 ? Math.round((valor / total) * 100) : 0;
+  const marca = esperado !== undefined && total > 0 && esperado > 0 && esperado < total ? (esperado / total) * 100 : null;
   const Caja = onClick ? 'button' : 'div';
   return (
     <Caja {...(onClick ? { type: 'button' as const, onClick, 'aria-label': `${rotulo}: ${pct}%. Ver detalle` } : {})} className={onClick ? '-m-1 block w-[calc(100%+0.5rem)] rounded-lg p-1 text-left hover:bg-slate-50 dark:hover:bg-slate-800' : ''}>
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{rotulo}</p>
-        <p className="text-sm text-slate-500"><span className="text-lg font-semibold text-slate-900 dark:text-white">{pct}%</span> · {formato(valor)} de {formato(total)}</p>
+        <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-slate-700 dark:text-slate-200"><span>{rotulo}</span>{distintivo}</p>
+        <p className="shrink-0 text-sm text-slate-500"><span className="text-lg font-semibold text-slate-900 dark:text-white">{pct}%</span> · {formato(valor)} de {formato(total)}</p>
       </div>
-      <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-marca-100 dark:bg-marca-950" role="meter" aria-valuemin={0} aria-valuemax={total} aria-valuenow={valor} aria-label={rotulo}>
-        <div className="h-full rounded-full bg-grafico" style={{ width: `${Math.min(100, pct)}%` }} />
+      <div className="relative mt-2">
+        <div className="h-2.5 overflow-hidden rounded-full bg-marca-100 dark:bg-marca-950" role="meter" aria-valuemin={0} aria-valuemax={total} aria-valuenow={valor} aria-label={rotulo}>
+          <div className="h-full rounded-full bg-grafico" style={{ width: `${Math.min(100, pct)}%` }} />
+        </div>
+        {marca !== null && (
+          <span className="absolute -top-1 h-4.5 w-0.5 -translate-x-1/2 rounded-full bg-slate-700 ring-2 ring-white dark:bg-slate-200 dark:ring-slate-900" style={{ left: `${marca}%` }} title={`Esperado a hoy: ${formato(Math.round(esperado ?? 0))}`} aria-hidden />
+        )}
       </div>
       {nota && <p className="mt-1.5 text-xs text-slate-500">{nota}</p>}
     </Caja>

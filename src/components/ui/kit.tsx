@@ -181,6 +181,19 @@ export function BotonIcono({ icono: Icono, etiqueta, className = '', ...props }:
   );
 }
 
+/** Botón que abre el selector de archivos (el input queda oculto pero accesible con el teclado). */
+export function BotonArchivo({ icono: Icono, children, accept, onArchivo, variante = 'secundario', tamano = 'md', disabled = false }: {
+  icono?: LucideIcon; children: React.ReactNode; accept: string; onArchivo: (f: File) => void; variante?: Variante; tamano?: keyof typeof TAMANOS; disabled?: boolean;
+}) {
+  return (
+    <label className={`inline-flex cursor-pointer items-center justify-center gap-2 font-semibold transition-all focus-within:ring-2 focus-within:ring-marca-500 active:scale-[0.98] ${TAMANOS[tamano]} ${VARIANTES[variante]} ${disabled ? 'pointer-events-none opacity-60' : ''}`}>
+      {Icono && <Icono className="h-4 w-4 shrink-0" aria-hidden />}
+      {children}
+      <input type="file" accept={accept} disabled={disabled} className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onArchivo(f); }} />
+    </label>
+  );
+}
+
 /** Selector de secciones (pestañas). Se desplaza en horizontal si no cabe. */
 export function Segmentado<T extends string>({
   opciones,
