@@ -3,8 +3,10 @@ import { ChevronDown, LogOut, Moon, Settings, Sun } from 'lucide-react';
 import { RolUsuario, EquipoVentas, Usuario } from '../types/pharmacy';
 import { useTheme } from '../context/ThemeContext';
 import { NovaLogo } from './NovaLogo';
+import { Avatar } from './ui/kit';
 import { SyncStatusChip } from './SyncStatusChip';
 import { FirmaVersion } from './version/Version';
+import { etiquetaRol } from './shell/navConfig';
 
 interface HeaderProps {
   rolActual: RolUsuario;
@@ -13,14 +15,15 @@ interface HeaderProps {
   esDemo: boolean;
   onAbrirConfig: () => void;
   onCerrarSesion: () => void;
+  /** Módulo abierto (se muestra en PC; en el móvil va el logo). */
+  titulo?: string;
 }
 
-const ETIQUETA_ROL: Record<RolUsuario, string> = { admin: 'Administrador', gerente: 'Gerente', vendedor: 'Vendedor', teletransferencista: 'Transferencista' };
 
 const itemMenu = 'w-full min-h-10 text-left px-3 py-2 rounded-xl text-sm font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2.5';
 
 /** Barra superior mínima: marca, estado de sincronización, tema y menú de la cuenta. Todo lo demás vive en Configuración. */
-export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuarioActual, esDemo, onAbrirConfig, onCerrarSesion }) => {
+export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuarioActual, esDemo, onAbrirConfig, onCerrarSesion, titulo }) => {
   const { toggleTema, esClaro } = useTheme();
   const [abierto, setAbierto] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -38,16 +41,17 @@ export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuario
   }, [abierto]);
 
   const nombre = usuarioActual?.nombre_completo || 'Usuario';
-  const rol = rolActual === 'vendedor' && equipoActual !== 'TODOS' ? `${ETIQUETA_ROL[rolActual]} · ${equipoActual}` : ETIQUETA_ROL[rolActual];
+  const rol = etiquetaRol(rolActual, equipoActual);
   const accion = (fn: () => void) => () => {
     setAbierto(false);
     fn();
   };
 
   return (
-    <header className="sticky top-0 z-40 h-12 border-b border-slate-200 bg-white pl-safe pr-safe dark:border-slate-800 dark:bg-slate-900">
-      <div className="flex h-full min-w-0 items-center justify-between gap-2 px-3 sm:px-5">
-        <NovaLogo size="sm" esClaro={esClaro} />
+    <header className="sticky top-0 z-40 h-16 border-b border-slate-200/60 bg-white/90 shadow-[0_1px_8px_rgba(0,0,0,0.04)] backdrop-blur-xl pl-safe pr-safe dark:border-slate-800 dark:bg-slate-900/90">
+      <div className="flex h-full min-w-0 items-center justify-between gap-2 px-3 sm:px-5 lg:px-7">
+        <NovaLogo size="sm" esClaro={esClaro} className="md:hidden" />
+        {titulo && <p className="hidden truncate text-lg font-bold tracking-tight text-marca-900 md:block dark:text-white">{titulo}</p>}
         <div className="flex shrink-0 items-center gap-1">
           {esDemo && <span className="hidden rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 sm:inline dark:bg-amber-950 dark:text-amber-300">Demostración</span>}
           <SyncStatusChip onAbrirConfig={onAbrirConfig} />
@@ -67,7 +71,7 @@ export const Header: React.FC<HeaderProps> = ({ rolActual, equipoActual, usuario
               aria-expanded={abierto}
               className="flex h-9 items-center gap-2 rounded-xl pl-1 pr-2 hover:bg-slate-100 dark:hover:bg-slate-800"
             >
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-marca-700 text-xs font-bold text-white">{nombre.charAt(0).toUpperCase()}</span>
+              <Avatar nombre={nombre} tamano={32} />
               <span className="hidden max-w-36 flex-col text-left leading-tight md:flex">
                 <span className="truncate text-xs font-bold">{nombre}</span>
                 <span className="text-xs text-slate-500 dark:text-slate-400">{rol}</span>

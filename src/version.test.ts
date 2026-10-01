@@ -37,6 +37,6 @@ describe('versión de NOVA', () => {
 
   it('muestra a quienes hacen NOVA', () => {
     expect(CREDITOS.map((c) => c.nombre)).toEqual(['Hernando Sanoja', 'Dubralis Fajardo']);
-    expect(textoCreditos()).toContain('Hernando Sanoja (Administrador y desarrollador)');
+    expect(textoCreditos()).toBe('Hernando Sanoja (Responsable) · Dubralis Fajardo (Responsable)');
   });
 });

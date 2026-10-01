@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { EquipoVentas, RolUsuario, Usuario } from './types/pharmacy';
 import { Header } from './components/Header';
 import { SideNav, BottomNav } from './components/shell/Navigation';
-import { tabsDelRol, TAB_INICIAL } from './components/shell/navConfig';
+import { etiquetaRol, tabsDelRol, TAB_INICIAL } from './components/shell/navConfig';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginGate } from './components/acceso/LoginGate';
 import { getStoredSupabaseConfig } from './services/supabaseConfig';
@@ -176,13 +176,13 @@ function AppContent() {
   if (!usuarioActual) return <LoginGate onEntrar={handleEntrar} onConexionCambiada={() => setConectado(getStoredSupabaseConfig().isConnected)} />;
 
   return (
-    <div className="flex min-h-dvh flex-col font-sans text-slate-800 dark:text-slate-100">
-      <Header rolActual={rolActual} equipoActual={equipoActual} usuarioActual={usuarioActual} esDemo={esDemo} onAbrirConfig={() => irATab('config')} onCerrarSesion={handleCerrarSesion} />
+    <div className="flex min-h-dvh font-sans text-slate-800 dark:text-slate-100">
+      <SideNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} nombre={usuarioActual.nombre_completo} rol={etiquetaRol(rolActual, equipoActual)} />
 
-      <div className="flex min-w-0 flex-1">
-        <SideNav tabs={tabs} tabActiva={tabActiva} onCambiarTab={irATab} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Header rolActual={rolActual} equipoActual={equipoActual} usuarioActual={usuarioActual} esDemo={esDemo} onAbrirConfig={() => irATab('config')} onCerrarSesion={handleCerrarSesion} titulo={tabs.find((t) => t.id === tabActiva)?.label} />
 
-        <main className="mx-auto w-full min-w-0 max-w-[1500px] flex-1 px-3 py-3 pb-24 sm:px-5 sm:py-4 md:pb-6 lg:px-6">
+        <main className="mx-auto w-full min-w-0 max-w-[1500px] flex-1 px-3 py-4 pb-24 sm:px-5 md:pb-8 lg:px-7 lg:py-6">
           <AvisoVersion guiaAbierta={guiaAbierta} />
           <ErrorBoundary compacto>
             <Suspense fallback={null}>

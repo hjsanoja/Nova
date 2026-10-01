@@ -138,7 +138,8 @@ function AcercaDe() {
 }
 
 const PALETAS: { id: Paleta; nombre: string; nota: string; muestra: string[] }[] = [
-  { id: 'azul', nombre: 'Azul', nota: 'Predeterminado desde la v7.0', muestra: ['#1e53bc', '#2a66db', '#c6dafe'] },
+  { id: 'bosque', nombre: 'Bosque', nota: 'Predeterminado desde la v8.0', muestra: ['#0b4628', '#137a3e', '#86e3a4'] },
+  { id: 'azul', nombre: 'Azul', nota: 'El de la v7.0', muestra: ['#1e53bc', '#2a66db', '#c6dafe'] },
   { id: 'clasica', nombre: 'Verde azulado', nota: 'El de las primeras versiones', muestra: ['#0f766e', '#0d9488', '#99f6e4'] },
 ];
 
@@ -151,7 +152,7 @@ function Apariencia() {
       <p className="mb-1.5 text-xs font-medium text-slate-500">Tema</p>
       <Segmentado valor={esClaro ? 'claro' : 'oscuro'} onChange={(v) => (v === 'claro') !== esClaro && toggleTema()} opciones={[{ id: 'claro', texto: 'Claro' }, { id: 'oscuro', texto: 'Oscuro' }]} />
       <p className="mb-1.5 text-xs font-medium text-slate-500">Color de la app</p>
-      <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Color de la app">
+      <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Color de la app">
         {PALETAS.map((p) => {
           const activa = paleta === p.id;
           return (
@@ -175,7 +176,7 @@ function Apariencia() {
           );
         })}
       </div>
-      <p className="mt-2 text-xs text-slate-500">El verde queda para lo que salió bien (pedidos procesados, metas cumplidas).</p>
+      <p className="mt-2 text-xs text-slate-500">Se guarda en este equipo. Los estados (completo, en revisión, rechazado) conservan siempre su color.</p>
     </Tarjeta>
   );
 }

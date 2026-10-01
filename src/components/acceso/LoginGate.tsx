@@ -104,7 +104,7 @@ export const LoginGate: React.FC<Props> = ({ onEntrar, onConexionCambiada }) => 
         <div className="mb-5 flex justify-center">
           <NovaLogo size="lg" esClaro={esClaro} />
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+        <div className="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-elevada sm:p-6 dark:border-slate-800 dark:bg-slate-900">
           {mostrarConexion ? (
             <>
               <h1 className="text-base font-bold text-slate-900 dark:text-white">{conectado ? 'Conexión con Supabase' : 'Conecta tu proyecto'}</h1>

@@ -32,7 +32,7 @@ export const Sheet: React.FC<SheetProps> = ({ abierto, titulo, onCerrar, childre
         role="dialog"
         aria-modal="true"
         aria-label={titulo}
-        className={`animate-in relative flex max-h-[88dvh] w-full flex-col rounded-t-xl bg-white shadow-xl dark:border dark:border-slate-700 dark:bg-slate-900 ${ancho} md:rounded-xl`}
+        className={`animate-in relative flex max-h-[88dvh] w-full flex-col rounded-t-2xl bg-white shadow-xl dark:border dark:border-slate-700 dark:bg-slate-900 ${ancho} md:rounded-2xl`}
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
           <h2 className=" text-base font-bold text-slate-900 dark:text-white">{titulo}</h2>

@@ -24,8 +24,8 @@ export const VERSION = NOVEDADES[0].version;
 
 /** Quienes hacen NOVA: se muestran junto a la versión. */
 export const CREDITOS: { nombre: string; rol?: string }[] = [
-  { nombre: 'Hernando Sanoja', rol: 'Administrador y desarrollador' },
-  { nombre: 'Dubralis Fajardo' },
+  { nombre: 'Hernando Sanoja', rol: 'Responsable' },
+  { nombre: 'Dubralis Fajardo', rol: 'Responsable' },
 ];
 
 export const textoCreditos = (conRol = true) => CREDITOS.map((c) => (conRol && c.rol ? `${c.nombre} (${c.rol})` : c.nombre)).join(' · ');
