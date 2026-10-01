@@ -9,10 +9,12 @@ import type {
   LocalMapCliente,
   LocalMapProducto,
   LocalMeta,
+  LocalMedico,
   LocalNotificacion,
   LocalPedido,
   LocalPlantilla,
   LocalProducto,
+  LocalTarea,
   LocalVisita,
   MetaEntrada,
   OutboxItem,
@@ -39,6 +41,8 @@ export class NovaDB extends Dexie {
   plantillas!: Table<LocalPlantilla, string>;
   comunicados!: Table<LocalComunicado, string>;
   metas!: Table<LocalMeta, string>;
+  medicos!: Table<LocalMedico, string>;
+  tareas!: Table<LocalTarea, string>;
   outbox!: Table<OutboxItem, number>;
   meta!: Table<MetaEntrada, string>;
 
@@ -73,6 +77,12 @@ export class NovaDB extends Dexie {
       plantillas: 'id, cliente_id, vendedor_id, updated_at',
       comunicados: 'id, updated_at',
       metas: 'id, periodo, vendedor_id, updated_at',
+    });
+    // v5 (Fase 3): médicos de la cartera, tareas y visitas a médicos.
+    this.version(5).stores({
+      medicos: 'id, vendedor_id, updated_at',
+      tareas: 'id, vendedor_id, cliente_id, medico_id, vence_en, estado, sync_estado, updated_at',
+      visitas: 'id, cliente_id, medico_id, vendedor_id, checkin_en, sync_estado',
     });
   }
 

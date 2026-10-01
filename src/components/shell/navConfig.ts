@@ -1,4 +1,4 @@
-import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, Map as IconoMapa, Megaphone, Pill, Settings, ShoppingBag, ShoppingCart, Target, Users } from 'lucide-react';
+import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, ListTodo, Map as IconoMapa, Megaphone, Pill, Settings, ShoppingBag, ShoppingCart, Stethoscope, Target, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { RolUsuario } from '../../types/pharmacy';
 
@@ -28,6 +28,8 @@ const T = {
   pedidos: (label = 'Pedidos'): TabDef => ({ id: 'pedidos', label, corto: 'Pedidos', icon: ShoppingBag, grupo: 'Ventas' }),
   porProcesar: { id: 'por_procesar', label: 'Por procesar', corto: 'Procesar', icon: CheckCircle2, grupo: 'Ventas' } as TabDef,
   clientes: (label = 'Clientes'): TabDef => ({ id: 'clientes', label, corto: 'Clientes', icon: Users, grupo: 'Clientes y productos' }),
+  tareas: (label = 'Tareas'): TabDef => ({ id: 'tareas', label, corto: 'Tareas', icon: ListTodo, grupo: 'Ventas' }),
+  medicos: (label = 'Médicos'): TabDef => ({ id: 'medicos', label, corto: 'Médicos', icon: Stethoscope, grupo: 'Clientes y productos' }),
   catalogo: { id: 'catalogo', label: 'Catálogo', corto: 'Catálogo', icon: Pill, grupo: 'Clientes y productos' } as TabDef,
   reportes: { id: 'reportes', label: 'Reportes', corto: 'Reportes', icon: BarChart3, grupo: 'Gestión' } as TabDef,
   condiciones: { id: 'condiciones', label: 'Descuentos', corto: 'Descuentos', icon: BadgePercent, grupo: 'Gestión' } as TabDef,
@@ -42,11 +44,12 @@ const principales = (tabs: TabDef[], ids: string[]) => tabs.map((t) => ({ ...t, 
 /** Módulos permitidos por rol. La seguridad real está en la base de datos (RLS); esto solo ordena lo que cada persona ve. */
 export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
   // El vendedor pide desde el catálogo de "Nuevo pedido": no necesita un catálogo aparte.
-  vendedor: principales([T.inicio('Inicio'), T.ruta, T.pedir, T.pedidos('Mis pedidos'), T.clientes('Mis clientes'), T.config], ['inicio', 'ruta', 'captura', 'pedidos']),
+  // Visitador mixto: toma pedidos en farmacias y visita médicos.
+  vendedor: principales([T.inicio('Inicio'), T.ruta, T.pedir, T.pedidos('Mis pedidos'), T.tareas('Mis tareas'), T.clientes('Mis clientes'), T.medicos('Mis médicos'), T.config], ['inicio', 'ruta', 'captura', 'pedidos']),
   teletransferencista: principales([T.porProcesar, T.pedidos(), T.clientes(), T.catalogo, T.config], ['por_procesar', 'pedidos', 'clientes', 'catalogo']),
-  gerente: principales([T.inicio(), T.pedidos(), T.clientes(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.config], ['inicio', 'reportes', 'pedidos', 'metas']),
+  gerente: principales([T.inicio(), T.pedidos(), T.tareas(), T.clientes(), T.medicos(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.config], ['inicio', 'reportes', 'pedidos', 'metas']),
   admin: principales(
-    [T.inicio(), T.pedir, T.pedidos(), T.porProcesar, T.clientes(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.datos, T.config],
+    [T.inicio(), T.pedir, T.pedidos(), T.porProcesar, T.tareas(), T.clientes(), T.medicos(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.datos, T.config],
     ['inicio', 'por_procesar', 'pedidos', 'datos']
   ),
 };

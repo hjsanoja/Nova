@@ -5,11 +5,13 @@ si una fase se parte en dos PR, cada uno sube su versión.
 
 | Fase | Versión | Qué trae | ¿Cambia el SQL? |
 |------|---------|----------|-----------------|
-| 1 | v8.0 | Diseño nuevo «Bosque» | No |
+| 1 ✅ | v8.0 | Diseño nuevo «Bosque» | No |
 | 2 ✅ | v9.0 | Respuesta de la droguería por archivo · Metas con alertas · Farmacias en riesgo | Sí |
-| 3 | v10.0 | CRM: Ficha 360° · Tareas y recordatorios · Visitas con reporte (farmacias y médicos, visitador mixto) · Registro de cambios | Sí |
-| 4 | v11.0 | Automatizaciones · WhatsApp · Monitoreo de errores y respaldo · Robustez de la base | Sí |
-| 5 | v12.0 (experimental) | Laboratorio de precios e inventario por droguería (solo administrador) | Sí |
+| 3 ✅ | v10.0 | CRM: Médicos · Visitas con reporte (visitador mixto) · Tareas y recordatorios · Ficha 360° · Registro de cambios | Sí |
+| 4 | v11.0 | **Ciclos** (nuevo): calendario de ciclos con días hábiles y feriados · todo se mide por ciclo · metas por ciclo fáciles de repetir | Sí |
+| 5 | v12.0 | **Otras actividades** (nuevo): días libres y actividades con aprobación del gerente · cobertura ajustada | Sí |
+| 6 | v13.0 | Automatizaciones · WhatsApp · Monitoreo de errores y respaldo · Robustez de la base | Sí |
+| 7 | v14.0 (experimental) | Laboratorio de precios e inventario por droguería (solo administrador) | Sí |
 
 ---
 
@@ -71,64 +73,106 @@ si una fase se parte en dos PR, cada uno sube su versión.
 
 ---
 
-## Fase 3 — CRM (v10.0)
+## Fase 3 — CRM (v10.0) ✅
 
-### 3.1 Ficha 360° del cliente
-1. **Pantalla única por farmacia, con:**
-   - datos y códigos por droguería;
-   - pedidos y unidades por mes (gráfico);
-   - productos que más compra;
-   - productos que dejó de comprar;
-   - condiciones comerciales vigentes;
-   - visitas, tareas y notas;
-   - estado de riesgo (fase 2.3).
-2. **Desde dónde se abre:** Clientes, Pedidos, Ruta del día y la búsqueda general.
-3. Se usa el mismo diseño de tarjetas «Bosque», con pestañas: Resumen · Pedidos · Visitas · Tareas · Notas.
+### 3.1 Médicos (cartera del visitador)
+1. Nuevo módulo **Médicos** (el visitador lo ve como «Mis médicos»): nombre, especialidad, centro, dirección, ciudad, zona, teléfono, correo, categoría A/B/C, visitas al mes, ubicación GPS y representante.
+2. La gerencia y la administración los cargan con un Excel/CSV (plantilla descargable; el representante va por su correo) o uno por uno. El visitador también agrega los suyos.
+3. Cobertura del mes: cuántas visitas «realizadas» lleva cada médico contra las esperadas; los pendientes (y los de categoría A) primero.
 
-### 3.2 Tareas y recordatorios
-1. Tabla `crm_tareas`, con estos datos:
-   - título y fecha de vencimiento;
-   - responsable y estado (pendiente / hecha / cancelada);
-   - a quién se refiere: farmacia o médico;
-   - nota.
-2. Pantalla «Mis tareas» con grupos **Vencidas · Hoy · Próximas**. Se marca hecha con un toque.
-3. Recordatorio en el teléfono el día que vence, con los avisos que ya existen.
-4. Se pueden crear desde la ficha 360°, desde una visita o desde «Farmacias en riesgo».
-5. Funciona sin internet, con Dexie y la cola de envío, igual que los pedidos.
+### 3.2 Visitas con reporte (farmacias y médicos)
+1. Formulario corto para el teléfono: resultado, objetivo, productos presentados, **muestras** por producto (médicos), nota y **próxima acción con fecha** (queda como tarea).
+2. Se guarda con el GPS: el servidor calcula la distancia a la farmacia o al consultorio. Funciona sin señal.
+3. La **ruta del día** tiene la pestaña «Médicos» con los pendientes del mes, ordenados por cercanía.
+4. **Visitador mixto**: el mismo vendedor toma pedidos y visita médicos; no hizo falta un rol nuevo.
 
-### 3.3 Visitas con reporte (farmacias y **médicos**)
-1. **Maestro nuevo `dim_medicos`:**
-   - nombre y especialidad;
-   - centro o consultorio y zona;
-   - representante asignado.
-   - Se importa por Excel, como los demás maestros.
-2. Tabla `crm_visitas`, con estos datos:
-   - fecha y hora, y ubicación GPS (ya existe en la Ruta del día);
-   - a quién se visitó: farmacia o médico;
-   - objetivo, resultado y productos presentados;
-   - muestras entregadas (producto + cantidad);
-   - próxima acción, que crea una tarea automáticamente.
-3. Formulario corto pensado para el teléfono. Se puede dictar la nota.
-4. **Reportes de visitas:**
-   - visitas por representante y por semana;
-   - cobertura (médicos visitados contra asignados);
-   - muestras entregadas.
-5. **Visitador mixto** (confirmado por Hernando): el mismo representante visita médicos **y** toma pedidos en farmacias.
-   - No hace falta un rol nuevo: el vendedor gana la cartera de médicos además de su fichero de farmacias.
-   - La ruta del día y los reportes mezclan las dos visitas (farmacia y médico), con el pedido como resultado posible de la visita a farmacia.
+### 3.3 Tareas y recordatorios
+1. «Mis tareas»: vencidas, hoy y próximas; se marca hecha con un toque. Funciona sin señal.
+2. Se crean a mano, desde la ficha de una farmacia o médico, como próxima acción de una visita o desde «Farmacias en riesgo».
+3. La gerencia ve las del equipo y puede asignar tareas a un representante.
+4. Aviso al teléfono el día que vence (revisión diaria: `revision_diaria()`).
 
-### 3.4 Registro de cambios (auditoría)
-1. **Trigger genérico `app.auditar()`:**
-   - guarda en `registro_cambios` quién, cuándo, la tabla, el registro y el antes/después (solo los campos que cambiaron);
-   - se aplica a pedidos, clientes, condiciones comerciales, metas, usuarios y formatos.
-2. **Dónde se ve:** pantalla para el administrador con filtros (fecha, usuario, tabla) y el historial dentro de cada ficha.
-3. **Limpieza:** los registros de más de 18 meses se borran solos.
+### 3.4 Ficha 360°
+1. Farmacia: pestañas Resumen (riesgo, indicadores, datos, cuentas por droguería, lo que más compra y **lo que dejó de comprar**) · Pedidos · Visitas · Tareas · Historial.
+2. Médico: Resumen (cobertura del mes, datos, muestras entregadas) · Visitas · Tareas · Historial.
+
+### 3.5 Registro de cambios
+1. Quién cambió qué y cuándo (antes → después) en pedidos, farmacias, médicos, droguerías, descuentos, metas, usuarios y tareas.
+2. Se ve en **Reportes → Cambios** (con filtros y descarga) y en el «Historial» de cada ficha. Solo administración y gerencia.
+3. Se guarda 18 meses.
+
+### 3.6 Reportes de visitas
+**Reportes → Visitas**: visitas por representante (farmacias, médicos, % en el lugar, con pedido, muestras), cobertura de médicos del mes y muestras por producto, con descarga a Excel.
 
 ---
 
-## Fase 4 — Automatización y confiabilidad (v11.0)
+## Fase 4 — Ciclos (v11.0) · *nueva petición, evaluada*
 
-### 4.1 Automatizaciones
+**Qué se pidió:** medir visitas, pedidos y demás indicadores por **ciclos** (no por mes calendario); un módulo para definir cuándo empieza y termina cada ciclo; metas de unidades, pedidos y visitas por ciclo, fáciles de establecer y de **repetir** de ciclos anteriores; metas por farmacias, pedidos y médicos; los ciclos empiezan y terminan en **días hábiles**.
+
+**Evaluación:** es viable y encaja con lo que ya existe. Hoy todo se mide por mes (Inicio, metas, cobertura de médicos, reportes); el cambio de fondo es reemplazar «el mes» por «el ciclo vigente» en un solo lugar (una función que devuelve el período actual) para que todas las pantallas lo usen. Si no hay ciclos definidos, NOVA sigue midiendo por mes, así que se puede activar sin romper nada.
+
+### 4.1 Calendario de ciclos (solo administración)
+1. Pantalla **Ciclos**: nombre (C1-2027…), fecha de inicio y de fin, estado (planificado, vigente, cerrado).
+2. **Días hábiles:** lunes a viernes menos los **feriados** que cargue la administración (calendario de feriados nacionales; regionales si se necesitan).
+   - NOVA no deja guardar un ciclo que empiece o termine en un día no hábil, y sugiere el día hábil más cercano.
+   - No permite ciclos que se solapen; avisa si queda un hueco entre dos ciclos.
+3. **Crear el siguiente con un toque:** propone el próximo ciclo con la misma duración, empezando el siguiente día hábil.
+4. Cada ciclo muestra cuántos días hábiles tiene (dato clave para las metas y la cobertura).
+
+### 4.2 Todo se mide por ciclo
+1. Inicio: «Pedidos del ciclo», «Unidades del ciclo», «Farmacias con pedido en el ciclo», días hábiles transcurridos y restantes.
+2. Metas, cobertura de médicos, farmacias en riesgo y reportes usan el ciclo vigente (y permiten elegir un ciclo anterior).
+3. El ritmo de las metas se calcula con **días hábiles** (no días corridos): lo esperado a hoy = objetivo × días hábiles transcurridos ÷ días hábiles del ciclo.
+4. **Cierre de ciclo:** al terminar, NOVA guarda una foto de los resultados por representante (no cambia aunque luego se corrijan datos) para el historial y las comparaciones.
+
+### 4.3 Metas por ciclo
+1. **Indicadores:** unidades, pedidos, farmacias con pedido, visitas a médicos, visitas a farmacias, médicos cubiertos (%), y por producto si se necesita.
+2. **Alcance:** por representante, por farmacia, por médico (p. ej. visitas a un médico A), por droguería, o combinados.
+3. **Fácil de establecer:** una tabla tipo hoja de cálculo con una fila por representante y una columna por indicador; se llena de corrido.
+4. **Repetir:** «Copiar del ciclo anterior», «Copiar de un ciclo elegido» y «Ajustar todo +/- %». También se pueden cargar desde Excel.
+5. Las alertas de la Fase 2 (en camino, atención, en riesgo) siguen funcionando, ahora por ciclo.
+
+### 4.4 Base de datos (resumen técnico)
+- Tablas `ciclos` y `feriados`; columna `ciclo_id` en `metas` (las metas mensuales actuales se conservan como historial).
+- Funciones `dias_habiles(desde, hasta)`, `ciclo_vigente()`, `cerrar_ciclo()` y la foto de resultados `resultados_ciclo`.
+- Los ciclos y feriados bajan al teléfono para que todo funcione sin señal.
+
+---
+
+## Fase 5 — Otras actividades y días libres (v12.0) · *nueva petición, evaluada*
+
+**Qué se pidió:** un apartado donde el vendedor o visitador reporte otras actividades o días libres (feriados, vacaciones, día producto, impulsos, jornada médica…); los motivos los define la administración; todo reporte lo aprueba el gerente **antes** de descontarlo de la cobertura de visitas.
+
+**Evaluación:** viable y necesario para que la cobertura por ciclo sea justa. Depende de la Fase 4 (días hábiles del ciclo). Hay que definir quién es el gerente de cada representante.
+
+### 5.1 Motivos (administración)
+1. Catálogo editable: nombre (vacaciones, día producto, impulso, jornada médica, reposo médico, reunión, capacitación…), si **descuenta de la cobertura**, si **requiere aprobación** y si está activo.
+2. Los **feriados** del calendario (Fase 4) se descuentan solos para todos, sin aprobación.
+
+### 5.2 Reporte del vendedor o visitador
+1. Módulo **Mis actividades**: fecha o rango de fechas, jornada completa o media jornada, motivo y nota. Funciona sin señal.
+2. Ve el estado de cada reporte: pendiente, aprobado o rechazado (con el comentario del gerente).
+
+### 5.3 Aprobación del gerente
+1. Bandeja **Por aprobar** para el gerente, con aviso al teléfono cuando llega un reporte; aprueba o rechaza con un comentario (también varios a la vez).
+2. El representante recibe el aviso de la decisión.
+3. Cada representante tiene asignado su **gerente** (nuevo dato en Usuarios); si no tiene, aprueba cualquier gerente o la administración.
+
+### 5.4 Cobertura ajustada
+1. **Días efectivos** del representante en el ciclo = días hábiles − feriados − días **aprobados** que descuentan.
+2. Lo esperado (visitas y, si se decide, metas) se prorratea con los días efectivos: si alguien tuvo 3 días de vacaciones aprobadas en un ciclo de 20 días hábiles, se le esperan 17/20 de las visitas.
+3. Los reportes muestran la cobertura real y la ajustada, y la lista de actividades del período.
+
+### 5.5 Base de datos (resumen técnico)
+- Tablas `motivos_actividad` y `actividades` (con estado, quién aprobó y cuándo), y `dim_usuarios.gerente_id`.
+- Función `dias_efectivos(vendedor, ciclo)` y avisos de solicitud y decisión (con la revisión diaria y al instante).
+
+---
+
+## Fase 6 — Automatización y confiabilidad (v13.0)
+
+### 6.1 Automatizaciones
 Reglas simples que el administrador activa o desactiva. Primero vienen las reglas fijas; el editor libre queda para después.
 
 1. Pedido parcial → crear tarea al vendedor: «Ofrecer reemplazo».
@@ -139,7 +183,7 @@ Reglas simples que el administrador activa o desactiva. Primero vienen las regla
 
 Se ejecutan en la base (triggers y `pg_cron` de Supabase) para que funcionen aunque nadie tenga la app abierta.
 
-### 4.2 WhatsApp
+### 6.2 WhatsApp
 1. **Paso 1, sin costo:** botones que abren WhatsApp con el mensaje ya escrito (enlace `wa.me`). No envía nada solo; la persona revisa y envía. Sirve para:
    - confirmar un pedido;
    - avisar faltantes;
@@ -150,7 +194,7 @@ Se ejecutan en la base (triggers y `pg_cron` de Supabase) para que funcionen aun
    - un costo por conversación.
    - Solo se haría si el paso 1 se usa mucho.
 
-### 4.3 Monitoreo de errores y respaldo
+### 6.3 Monitoreo de errores y respaldo
 1. **Errores:**
    - la app registra sus errores (sin datos personales) en una tabla `registro_errores`, con versión, pantalla y equipo;
    - el administrador los ve en Reportes;
@@ -161,7 +205,7 @@ Se ejecutan en la base (triggers y `pg_cron` de Supabase) para que funcionen aun
    - Supabase también guarda copias diarias (plan Pro) y eso se documenta.
 3. **Estado de sincronización por equipo:** última subida, pendientes en cola, versión. Así se ve quién tiene pedidos sin enviar.
 
-### 4.4 Robustez de la base de datos
+### 6.4 Robustez de la base de datos
 1. **Revisión de índices:**
    - en las consultas más usadas, por fecha, vendedor y droguería;
    - en las claves que usa la sincronización.
@@ -175,7 +219,7 @@ Se ejecutan en la base (triggers y `pg_cron` de Supabase) para que funcionen aun
 
 ---
 
-## Fase 5 — Laboratorio de precios e inventario (experimental, solo administrador)
+## Fase 7 — Laboratorio de precios e inventario (experimental, solo administrador)
 
 Cada droguería manda su inventario y sus precios en un formato distinto. En lugar de adivinar, se arma un
 **laboratorio** donde el administrador prueba y pule cada formato antes de que lo vea el resto del equipo.
@@ -210,7 +254,9 @@ Cada droguería manda su inventario y sus precios en un formato distinto. En lug
 
 ## Pendientes de información (los entrega el equipo cuando los tenga)
 
-1. **Archivos reales de inventario y de precios** de cada droguería (Cobeca, Drocerca, Nena y las demás), aunque vengan con datos borrados. Sin ellos no arranca la Fase 5.
+1. **Archivos reales de inventario y de precios** de cada droguería (Cobeca, Drocerca, Nena y las demás), aunque vengan con datos borrados. Sin ellos no arranca la Fase 7.
 2. **Un ejemplo del archivo de respuesta** (lo despachado) de cada droguería, para dejar su formato configurado y probado. Mientras tanto, NOVA adivina las columnas por sus títulos.
-3. **Datos del médico** que se quieren guardar en la Fase 3 (por ejemplo: especialidad, centro, horario de consulta, teléfono, potencial).
+3. **Datos del médico** adicionales (horario de consulta, potencial en recetas, etc.): la Fase 3 ya guarda especialidad, centro, teléfono, correo, categoría y visitas al mes; lo que falte se agrega.
+4. **Para los ciclos (Fase 4):** duración habitual del ciclo, calendario de feriados del año y si hay feriados regionales.
+5. **Para las otras actividades (Fase 5):** lista inicial de motivos y quién es el gerente de cada representante.
 

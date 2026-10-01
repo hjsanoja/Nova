@@ -7,17 +7,27 @@ import { aCsv, cumplimientoPorDrogueria, descargarTexto, detallesPorPedido, ESTA
 import type { GrupoEstado } from './logica';
 import { VERSION, compararVersiones } from '../version';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
+import { ReporteVisitas } from '../crm/ReporteVisitas';
+import { RegistroCambios } from '../crm/RegistroCambios';
 
-type Seccion = 'pedidos' | 'cumplimiento' | 'alertas' | 'accesos';
+type Seccion = 'pedidos' | 'visitas' | 'cumplimiento' | 'alertas' | 'accesos' | 'cambios';
 
-/** Reportes para gerencia y administración: pedidos con filtros, cumplimiento de las droguerías y alertas comerciales. */
+const DESCRIPCION: Partial<Record<Seccion, string>> = {
+  accesos: 'Quién entra a NOVA y cuántas veces.',
+  visitas: 'Visitas a farmacias y médicos, cobertura del mes y muestras entregadas.',
+  cambios: 'Quién cambió qué y cuándo (se guarda 18 meses).',
+};
+
+/** Reportes para gerencia y administración: pedidos, visitas, cumplimiento de las droguerías, alertas, accesos y registro de cambios. */
 export function ReportesVista({ usuario }: { usuario: Usuario }) {
   const [seccion, setSeccion] = useState<Seccion>('pedidos');
   return (
     <div>
-      <PageHeader titulo="Reportes" descripcion={seccion === 'accesos' ? 'Quién entra a NOVA y cuántas veces.' : 'Se calculan con los pedidos de los últimos 90 días.'} />
-      <Segmentado opciones={[{ id: 'pedidos', texto: 'Pedidos' }, { id: 'cumplimiento', texto: 'Cumplimiento' }, { id: 'alertas', texto: 'Alertas' }, { id: 'accesos', texto: 'Accesos' }]} valor={seccion} onChange={setSeccion} />
+      <PageHeader titulo="Reportes" descripcion={DESCRIPCION[seccion] ?? 'Se calculan con los pedidos de los últimos 90 días.'} />
+      <Segmentado opciones={[{ id: 'pedidos', texto: 'Pedidos' }, { id: 'visitas', texto: 'Visitas' }, { id: 'cumplimiento', texto: 'Cumplimiento' }, { id: 'alertas', texto: 'Alertas' }, { id: 'accesos', texto: 'Accesos' }, { id: 'cambios', texto: 'Cambios' }]} valor={seccion} onChange={setSeccion} />
       {seccion === 'pedidos' && <ReportePedidos />}
+      {seccion === 'visitas' && <ReporteVisitas />}
+      {seccion === 'cambios' && <RegistroCambios />}
       {seccion === 'cumplimiento' && <Cumplimiento />}
       {seccion === 'alertas' && <Alertas esAdmin={usuario.rol === 'admin'} />}
       {seccion === 'accesos' && <Accesos />}

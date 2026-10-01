@@ -111,7 +111,7 @@ export function ritmoMeta(meta: Pick<LocalMeta, 'periodo' | 'objetivo'>, valor: 
 
 const CLAVE_REVISION = 'nova:metas_revisadas';
 
-/** Pide a la base revisar las metas (avisos de riesgo y de cumplida) una vez al día por equipo. */
+/** Pide a la base la revisión diaria (metas en riesgo o cumplidas y tareas que vencen) una vez al día por equipo. */
 export async function revisarMetasHoy(rpc: (fn: string) => PromiseLike<{ error: unknown }>, hoy = new Date()): Promise<boolean> {
   const dia = `${hoy.getFullYear()}-${hoy.getMonth() + 1}-${hoy.getDate()}`;
   try {
@@ -119,7 +119,7 @@ export async function revisarMetasHoy(rpc: (fn: string) => PromiseLike<{ error: 
   } catch {
     /* sin almacenamiento: se revisa igual (la base no repite avisos) */
   }
-  const { error } = await rpc('revisar_metas');
+  const { error } = await rpc('revision_diaria');
   if (error) return false;
   try {
     localStorage.setItem(CLAVE_REVISION, dia);

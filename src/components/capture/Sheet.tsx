@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface SheetProps {
@@ -12,9 +13,15 @@ interface SheetProps {
 
 /** Hoja inferior en móvil y diálogo centrado en tablet/PC. Bloquea el scroll del fondo y cierra con Escape. */
 export const Sheet: React.FC<SheetProps> = ({ abierto, titulo, onCerrar, children, ancho = 'md:max-w-lg' }) => {
+  const marca = React.useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!abierto) return;
-    const alTeclear = (e: KeyboardEvent) => e.key === 'Escape' && onCerrar();
+    // Con hojas apiladas, Escape cierra solo la de más arriba (la última abierta).
+    const alTeclear = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const hojas = document.querySelectorAll('[data-hoja]');
+      if (hojas[hojas.length - 1] === marca.current) onCerrar();
+    };
     const previo = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     window.addEventListener('keydown', alTeclear);
@@ -25,8 +32,9 @@ export const Sheet: React.FC<SheetProps> = ({ abierto, titulo, onCerrar, childre
   }, [abierto, onCerrar]);
 
   if (!abierto) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center md:items-center">
+  // En un portal: una hoja abierta desde otra (p. ej. una tarea desde la ficha) queda por encima y no hereda su recorte.
+  return createPortal(
+    <div ref={marca} data-hoja className="fixed inset-0 z-50 flex items-end justify-center md:items-center">
       <button type="button" aria-label="Cerrar" className="absolute inset-0 bg-slate-950/50 dark:bg-black/70" onClick={onCerrar} />
       <div
         role="dialog"
@@ -42,6 +50,7 @@ export const Sheet: React.FC<SheetProps> = ({ abierto, titulo, onCerrar, childre
         </div>
         <div className="min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain p-4 pb-safe">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

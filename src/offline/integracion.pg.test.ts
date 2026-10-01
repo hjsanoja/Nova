@@ -122,6 +122,7 @@ const RPC: Record<Exclude<TipoOutbox, 'pedido.rerutear'>, string> = {
   'visita.registrar': 'sync_registrar_visita',
   'farmacia.codigo': 'sync_registrar_codigo_farmacia',
   'plantilla.guardar': 'sync_guardar_plantilla',
+  'tarea.guardar': 'sync_guardar_tarea',
 };
 
 describe.skipIf(!activo)('integración con PostgreSQL + PostGIS', () => {
