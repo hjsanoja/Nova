@@ -3,9 +3,12 @@ import { ClipboardPlus, MapPin, MapPinCheck, Phone, Plus, Search, UserMinus, Use
 import type { Usuario } from '../types/pharmacy';
 import type { LocalCliente } from '../offline/types';
 import { Sheet } from '../components/capture/Sheet';
-import { Boton, Etiqueta, PageHeader, Tarjeta, Vacio, estiloInput, useAviso, useDebounced } from '../components/ui/kit';
+import { Boton, Etiqueta, Filtros, PageHeader, Tarjeta, Vacio, estiloInput, useAviso, useDebounced } from '../components/ui/kit';
 import { normalizar } from '../offline/busqueda';
-import { actividadDeClientes, clientesPorAtender, ESTADOS_ETIQUETA, diasDesde } from './logica';
+import { actividadDeClientes, ESTADOS_ETIQUETA, diasDesde } from './logica';
+import { NIVELES_RIESGO, describirRiesgo } from './riesgo';
+import type { FarmaciaRiesgo, NivelRiesgo } from './riesgo';
+import { useRiesgoFarmacias } from './useRiesgo';
 import { prepararPedidoPara } from './navegacion';
 import { AgregarFarmacias } from './AgregarFarmacias';
 import { getSupabaseClient } from '../services/supabaseClient';
@@ -16,6 +19,8 @@ import { solicitarSync } from '../offline/motor';
 import { ultimaCompraPorCliente, ultimoPedidoPorCliente, useClientes, useCompras, useDroguerias, useMapClientes, usePedidos, useProductos } from './useDatos';
 
 const POR_PAGINA = 60;
+const SIN_UNIDADES = new Map<string, number>();
+type FiltroRiesgo = 'todas' | Exclude<NivelRiesgo, 'al_dia'>;
 
 /** Fichero de farmacias. Un vendedor ve solo las suyas (lo decide la base de datos); la mesa y la gerencia ven todas. */
 export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (t: string) => void }) {
@@ -27,7 +32,7 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
   const mapClientes = useMapClientes();
   const [texto, setTexto] = useState('');
   const q = useDebounced(texto, 150);
-  const [soloAtrasados, setSoloAtrasados] = useState(false);
+  const [filtro, setFiltro] = useState<FiltroRiesgo>('todas');
   const [zona, setZona] = useState('');
   const [limite, setLimite] = useState(POR_PAGINA);
   const [abierto, setAbierto] = useState<string | null>(null);
@@ -62,7 +67,10 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
   };
   const propios = useMemo(() => (esVendedor ? pedidos.filter((p) => p.vendedor_id === usuario.id) : pedidos), [pedidos, esVendedor, usuario.id]);
   const actividad = useMemo(() => actividadDeClientes(clientes, ultimaCompraPorCliente(compras), ultimoPedidoPorCliente(pedidos)), [clientes, compras, pedidos]);
-  const atrasados = useMemo(() => new Set(clientesPorAtender(actividad, Number.MAX_SAFE_INTEGER).map((a) => a.cliente.id)), [actividad]);
+  // Farmacias en riesgo: su propio ritmo de compra contra los días que llevan sin comprar.
+  const { lista: riesgo } = useRiesgoFarmacias(clientes, pedidos, SIN_UNIDADES, compras);
+  const riesgoDe = useMemo(() => new Map(riesgo.map((f) => [f.cliente.id, f])), [riesgo]);
+  const cuentaNivel = (n: NivelRiesgo) => riesgo.filter((f) => f.nivel === n).length;
   const zonas = useMemo(() => Array.from(new Set(clientes.map((c) => c.brick).filter((z): z is string => !!z))).sort(), [clientes]);
 
   const filtrados = useMemo(() => {
@@ -70,9 +78,13 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
     return actividad
       .filter((a) => !t || a.cliente.busqueda.includes(t))
       .filter((a) => !zona || a.cliente.brick === zona)
-      .filter((a) => !soloAtrasados || atrasados.has(a.cliente.id))
-      .sort((x, y) => x.cliente.nombre_comercial.localeCompare(y.cliente.nombre_comercial));
-  }, [actividad, q, zona, soloAtrasados, atrasados]);
+      .filter((a) => filtro === 'todas' || riesgoDe.get(a.cliente.id)?.nivel === filtro)
+      .sort((x, y) =>
+        filtro === 'todas'
+          ? x.cliente.nombre_comercial.localeCompare(y.cliente.nombre_comercial)
+          : (riesgoDe.get(y.cliente.id)?.unidadesMes ?? 0) - (riesgoDe.get(x.cliente.id)?.unidadesMes ?? 0)
+      );
+  }, [actividad, q, zona, filtro, riesgoDe]);
 
   const seleccionado = abierto ? clientes.find((c) => c.id === abierto) : undefined;
 
@@ -104,21 +116,33 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
             {zonas.map((z) => <option key={z} value={z}>{z}</option>)}
           </select>
         )}
-        <Boton variante={soloAtrasados ? 'primario' : 'secundario'} onClick={() => { setSoloAtrasados((v) => !v); setLimite(POR_PAGINA); }}>
-          Por atender{atrasados.size > 0 ? ` (${atrasados.size})` : ''}
-        </Boton>
+      </div>
+      <div className="mb-3">
+        <Filtros
+          valor={filtro}
+          onChange={(f) => { setFiltro(f); setLimite(POR_PAGINA); }}
+          opciones={[
+            { id: 'todas', texto: 'Todas' },
+            { id: 'en_riesgo', texto: `En riesgo (${cuentaNivel('en_riesgo')})` },
+            { id: 'atrasada', texto: `Atrasadas (${cuentaNivel('atrasada')})` },
+            { id: 'perdida', texto: `Perdidas (${cuentaNivel('perdida')})` },
+          ]}
+        />
       </div>
 
       <Tarjeta className="!p-0">
         {filtrados.length === 0 ? (
           <Vacio
             icono={Users}
-            titulo={clientes.length === 0 ? (esVendedor ? 'Aún no tienes clientes asignados' : 'Todavía no hay clientes') : 'Sin resultados'}
-            texto={clientes.length === 0 ? (esVendedor ? (puedeEditarFichero ? 'Toca "Agregar farmacias" y marca las que atiendes.' : 'Pídele a un administrador que te asigne tu fichero.') : 'Cárgalos desde "Datos maestros".') : 'Prueba con otra búsqueda o quita los filtros.'}
+            titulo={clientes.length === 0 ? (esVendedor ? 'Aún no tienes clientes asignados' : 'Todavía no hay clientes') : filtro !== 'todas' && !q && !zona ? `Ninguna farmacia ${filtro === 'en_riesgo' ? 'en riesgo' : filtro === 'atrasada' ? 'atrasada' : 'perdida'}` : 'Sin resultados'}
+            texto={clientes.length === 0 ? (esVendedor ? (puedeEditarFichero ? 'Toca "Agregar farmacias" y marca las que atiendes.' : 'Pídele a un administrador que te asigne tu fichero.') : 'Cárgalos desde "Datos maestros".') : filtro !== 'todas' && !q && !zona ? 'Todas compran a su ritmo de siempre.' : 'Prueba con otra búsqueda o quita los filtros.'}
           />
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {filtrados.slice(0, limite).map(({ cliente: c, dias, atraso }) => (
+            {filtrados.slice(0, limite).map(({ cliente: c, dias }) => {
+              const r = riesgoDe.get(c.id);
+              const alerta = r && r.nivel !== 'al_dia';
+              return (
               <li key={c.id}>
                 <button type="button" onClick={() => setAbierto(c.id)} className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <div className="min-w-0">
@@ -130,11 +154,13 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
                   <div className="flex shrink-0 flex-col items-end gap-1">
                     {c.estado_validacion !== 'activo' && <Etiqueta tono="ambar">{c.estado_validacion === 'prospecto_pendiente' ? 'Por validar' : 'Inactivo'}</Etiqueta>}
                     {c.segmento === 'vip' && <Etiqueta tono="teal">VIP</Etiqueta>}
-                    <span className={`text-xs ${atraso != null && atraso > 0 ? 'font-semibold text-amber-600 dark:text-amber-400' : 'text-slate-400'}`}>{dias == null ? 'sin compras' : `hace ${dias} d`}</span>
+                    {alerta && <Etiqueta tono={NIVELES_RIESGO[r.nivel].tono} punto>{NIVELES_RIESGO[r.nivel].texto}</Etiqueta>}
+                    <span className={`text-xs ${alerta ? 'font-semibold text-slate-600 dark:text-slate-300' : 'text-slate-400'}`}>{r ? (r.dias === 0 ? 'compró hoy' : `hace ${r.dias} d`) : dias == null ? 'sin compras' : `hace ${dias} d`}</span>
                   </div>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
         {filtrados.length > limite && (
@@ -148,6 +174,7 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
         {seleccionado && (
           <FichaCliente
             cliente={seleccionado}
+            riesgo={riesgoDe.get(seleccionado.id)}
             compras={compras.filter((c) => c.cliente_id === seleccionado.id)}
             pedidos={propios.filter((p) => p.cliente_id === seleccionado.id).sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 5)}
             nombreProducto={(id) => productos.find((p) => p.id === id)?.nombre_comercial ?? 'Producto'}
@@ -165,6 +192,7 @@ export function ClientesVista({ usuario, irATab }: { usuario: Usuario; irATab: (
 
 function FichaCliente({
   cliente: c,
+  riesgo,
   compras,
   pedidos,
   nombreProducto,
@@ -175,6 +203,7 @@ function FichaCliente({
   onVisita,
 }: {
   cliente: LocalCliente;
+  riesgo?: FarmaciaRiesgo;
   compras: { producto_id: string; periodo: string; unidades: number }[];
   pedidos: { id: string; correlativo: string; estado: keyof typeof ESTADOS_ETIQUETA; created_at: string }[];
   nombreProducto: (id: string) => string;
@@ -194,6 +223,12 @@ function FichaCliente({
 
   return (
     <div className="space-y-4 text-sm">
+      {riesgo && (
+        <div className={`flex flex-wrap items-center gap-2 rounded-xl px-3 py-2 ${riesgo.nivel === 'al_dia' ? 'bg-slate-50 dark:bg-slate-800/60' : 'bg-amber-50 dark:bg-amber-950/30'}`}>
+          <Etiqueta tono={NIVELES_RIESGO[riesgo.nivel].tono} punto>{NIVELES_RIESGO[riesgo.nivel].texto}</Etiqueta>
+          <span className="text-xs text-slate-600 dark:text-slate-300">{describirRiesgo(riesgo)}{riesgo.cicloDeFicha ? ' (según su ficha)' : ''}</span>
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         {puedePedir && <Boton variante="primario" icono={ClipboardPlus} onClick={onPedido}>Tomar pedido</Boton>}
         {c.telefono && <a href={`tel:${c.telefono}`} className="inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-slate-300 px-3 text-sm font-semibold dark:border-slate-700"><Phone className="h-4 w-4" />{c.telefono}</a>}

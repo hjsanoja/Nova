@@ -21,7 +21,7 @@ export interface Preparacion<T> {
 }
 
 /** Separa una línea CSV respetando comillas ("a;b" es un solo campo; "" dentro de comillas es una comilla). */
-function partirLinea(linea: string, sep: string): string[] {
+export function partirLinea(linea: string, sep: string): string[] {
   const campos: string[] = [];
   let actual = '';
   let enComillas = false;
@@ -40,7 +40,7 @@ function partirLinea(linea: string, sep: string): string[] {
 }
 
 /** El separador es el que más aparece en el encabezado (fuera de comillas). */
-function detectarSeparador(encabezado: string): string {
+export function detectarSeparador(encabezado: string): string {
   const sinComillas = encabezado.replace(/"[^"]*"/g, '');
   let mejor = ',';
   let max = 0;

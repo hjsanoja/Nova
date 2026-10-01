@@ -125,6 +125,24 @@ export interface FormatoExport {
   formato_fecha?: 'YYYYMMDD' | 'DD/MM/YYYY' | 'YYYY-MM-DD';
   nombre_archivo?: string;
   columnas: ColumnaExport[];
+  /** Cómo leer el archivo de respuesta que devuelve la droguería (lo despachado). Sin esto, NOVA adivina las columnas. */
+  respuesta?: FormatoRespuesta;
+}
+
+/** Datos que NOVA busca en el archivo de respuesta de una droguería. */
+export type CampoRespuesta = 'pedido' | 'cliente' | 'producto' | 'confirmadas' | 'faltantes' | 'pedidas' | 'motivo' | 'factura';
+
+export interface FormatoRespuesta {
+  /** Fila con los títulos (1 = la primera). Sin valor, NOVA la busca sola. */
+  fila_encabezado?: number;
+  /** Hoja del Excel (sin valor, la primera). */
+  hoja?: string;
+  /** Título de la columna del archivo para cada dato. Los que falten se adivinan por el nombre. */
+  columnas: Partial<Record<CampoRespuesta, string>>;
+  /** Qué código trae la columna de producto ('auto' prueba todos). */
+  codigo_producto?: 'auto' | 'drogueria' | 'ean' | 'sku';
+  /** Productos del pedido que no vienen en el archivo: no se despacharon (cero) o se despacharon completos. */
+  ausentes?: 'cero' | 'completas';
 }
 
 export interface LocalDrogueria {

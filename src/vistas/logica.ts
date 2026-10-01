@@ -134,13 +134,6 @@ export function actividadDeClientes(
   });
 }
 
-/** Clientes activos atrasados respecto a su frecuencia, los más atrasados primero. */
-export const clientesPorAtender = (act: ClienteConActividad[], limite = 8): ClienteConActividad[] =>
-  act
-    .filter((a) => a.cliente.estado_validacion === 'activo' && a.atraso != null && a.atraso > 0)
-    .sort((x, y) => (y.atraso ?? 0) - (x.atraso ?? 0))
-    .slice(0, limite);
-
 // ----------------------------------------------------------------------------- reportes
 
 export interface FilaCumplimiento {

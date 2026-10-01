@@ -2992,7 +2992,8 @@ END $$;
 CREATE OR REPLACE FUNCTION app.push_notificacion() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
-  PERFORM app.enviar_push(ARRAY[NEW.usuario_id], NEW.titulo, NEW.cuerpo, './#/pedidos', 'notif-' || NEW.id);
+  PERFORM app.enviar_push(ARRAY[NEW.usuario_id], NEW.titulo, NEW.cuerpo,
+                          CASE WHEN NEW.tipo LIKE 'meta%' THEN './#/inicio' ELSE './#/pedidos' END, 'notif-' || NEW.id);
   RETURN NULL;
 END $$;
 DROP TRIGGER IF EXISTS trg_push_notificacion ON notificaciones;
@@ -3104,5 +3105,177 @@ BEGIN
     END LOOP;
   END IF;
 END $$;
+
+-- ------------------------------------------------------------------------------
+-- 17. FASE 2 (v9.0): METAS CON ALERTAS Y FARMACIAS EN RIESGO
+-- (la respuesta de la droguería por archivo no necesita cambios aquí: su formato vive en dim_droguerias.formato_export
+--  -> 'respuesta' y la confirmación usa tomar_pedido / confirmar_pedido / liberar_pedido)
+-- ------------------------------------------------------------------------------
+
+-- 17.1 Avisos automáticos sin repetir: cada uno lleva una clave (meta + semana, por ejemplo) y no se crea dos veces.
+ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS clave text;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_notif_clave ON notificaciones (usuario_id, clave) WHERE clave IS NOT NULL;
+
+-- 17.2 Avance y ritmo de las metas de un mes. Cuenta igual que la app: pedidos enviados (sin borradores, cancelados ni
+-- rechazados) por su fecha de creación en hora de Venezuela. Ritmo = lo que se lleva contra lo esperado a la fecha
+-- (objetivo × días completos ÷ días del mes): 95 % o más "en camino", 80–95 % "atención", menos "en riesgo".
+-- Los 3 primeros días del mes no se juzga ("inicio").
+CREATE OR REPLACE FUNCTION app.avance_metas(p_periodo date, p_hoy date)
+RETURNS TABLE (meta_id uuid, vendedor_id uuid, cliente_id uuid, drogueria_id uuid, indicador text,
+               valor numeric, objetivo numeric, esperado numeric, dias_restantes integer, nivel text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH m AS (
+    SELECT * FROM metas WHERE periodo = p_periodo AND deleted_at IS NULL
+  ), ped AS (
+    SELECT p.id, p.vendedor_id, p.cliente_id, p.drogueria_id
+      FROM fact_pedidos p
+     WHERE p.deleted_at IS NULL AND p.estado::text NOT IN ('borrador','cancelado','rechazado')
+       AND (p.created_at AT TIME ZONE 'America/Caracas')::date >= p_periodo
+       AND (p.created_at AT TIME ZONE 'America/Caracas')::date < (p_periodo + interval '1 month')::date
+  ), uds AS (
+    SELECT d.pedido_id, sum(d.unidades_solicitadas) AS u
+      FROM fact_pedido_detalles d JOIN ped ON ped.id = d.pedido_id
+     WHERE d.deleted_at IS NULL GROUP BY d.pedido_id
+  ), v AS (
+    SELECT m.id, m.vendedor_id, m.cliente_id, m.drogueria_id, m.indicador, m.objetivo,
+           (CASE m.indicador WHEN 'unidades' THEN coalesce(sum(uds.u), 0)
+                             WHEN 'pedidos' THEN count(ped.id)
+                             ELSE count(DISTINCT ped.cliente_id) END)::numeric AS valor
+      FROM m
+      LEFT JOIN ped ON (m.vendedor_id IS NULL OR ped.vendedor_id = m.vendedor_id)
+                   AND (m.cliente_id IS NULL OR ped.cliente_id = m.cliente_id)
+                   AND (m.drogueria_id IS NULL OR ped.drogueria_id = m.drogueria_id)
+      LEFT JOIN uds ON uds.pedido_id = ped.id
+     GROUP BY m.id, m.vendedor_id, m.cliente_id, m.drogueria_id, m.indicador, m.objetivo
+  )
+  SELECT v.id, v.vendedor_id, v.cliente_id, v.drogueria_id, v.indicador, v.valor, v.objetivo,
+         round(v.objetivo * t.completos / t.dias_mes, 2),
+         greatest(t.dias_mes - t.completos, 0),
+         CASE WHEN v.valor >= v.objetivo THEN 'cumplida'
+              WHEN t.completos < 3 THEN 'inicio'
+              WHEN v.valor >= v.objetivo * t.completos / t.dias_mes * 0.95 THEN 'en_camino'
+              WHEN v.valor >= v.objetivo * t.completos / t.dias_mes * 0.80 THEN 'atencion'
+              ELSE 'en_riesgo' END
+    FROM v,
+         LATERAL (SELECT ((p_periodo + interval '1 month')::date - p_periodo) AS dias_mes,
+                         least(greatest(p_hoy - p_periodo, 0), (p_periodo + interval '1 month')::date - p_periodo) AS completos) t
+$$;
+
+-- Número con punto de miles, como se escribe en Venezuela: 12.500.
+CREATE OR REPLACE FUNCTION app.num_es(p numeric) RETURNS text
+LANGUAGE sql IMMUTABLE AS $$ SELECT replace(to_char(round(p), 'FM999,999,999,990'), ',', '.') $$;
+
+-- 17.3 Revisión de metas: avisa (en la app y al teléfono) a quien corresponda.
+--   - Meta en riesgo: al representante de la meta y a la gerencia/administración, una vez por semana.
+--   - Meta cumplida: una sola vez.
+-- La llama la app al abrir el Inicio (una vez al día por equipo) y, si existe pg_cron, también cada mañana.
+-- p_hoy (otra fecha) solo lo usan la administración y las pruebas.
+CREATE OR REPLACE FUNCTION revisar_metas(p_hoy date DEFAULT NULL) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_hoy date := coalesce(p_hoy, (now() AT TIME ZONE 'America/Caracas')::date);
+  v_periodo date := date_trunc('month', v_hoy)::date;
+  v_semana text := to_char(v_hoy, 'IYYY-IW');
+  v_resp uuid[];
+  r record;
+  v_desc text;
+  v_unidad text;
+  v_dest uuid[];
+  v_n integer;
+  v_riesgo integer := 0;
+  v_cumplidas integer := 0;
+BEGIN
+  IF auth.uid() IS NOT NULL AND (app.rol() IS NULL OR (p_hoy IS NOT NULL AND NOT app.es_admin())) THEN
+    RAISE EXCEPTION 'Sin permiso para revisar las metas' USING ERRCODE = '42501';
+  END IF;
+  SELECT coalesce(array_agg(id), '{}') INTO v_resp FROM dim_usuarios
+   WHERE rol IN ('admin','gerente') AND activo AND deleted_at IS NULL;
+
+  FOR r IN SELECT * FROM app.avance_metas(v_periodo, v_hoy) WHERE nivel IN ('en_riesgo','cumplida') LOOP
+    SELECT coalesce(nullif(concat_ws(' · ',
+             (SELECT nombre_completo FROM dim_usuarios WHERE id = r.vendedor_id),
+             (SELECT nombre_comercial FROM dim_clientes WHERE id = r.cliente_id),
+             (SELECT nombre FROM dim_droguerias WHERE id = r.drogueria_id)), ''), 'Toda la empresa')
+      INTO v_desc;
+    v_unidad := CASE r.indicador WHEN 'unidades' THEN 'unidades' WHEN 'pedidos' THEN 'pedidos' ELSE 'farmacias' END;
+    v_dest := ARRAY(SELECT DISTINCT x FROM unnest(array_append(v_resp, r.vendedor_id)) x WHERE x IS NOT NULL);
+
+    IF r.nivel = 'en_riesgo' THEN
+      INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, clave)
+      SELECT u, 'meta_en_riesgo', 'Meta en riesgo: ' || v_desc,
+             format('Va en %s de %s %s. A esta fecha debería llevar %s. Faltan %s por día en los %s días que quedan.',
+                    app.num_es(r.valor), app.num_es(r.objetivo), v_unidad,
+                    app.num_es(r.esperado),
+                    app.num_es(ceil((r.objetivo - r.valor) / greatest(r.dias_restantes, 1))), r.dias_restantes),
+             'meta_riesgo:' || r.meta_id || ':' || v_semana
+        FROM unnest(v_dest) u
+      ON CONFLICT (usuario_id, clave) WHERE clave IS NOT NULL DO NOTHING;
+      GET DIAGNOSTICS v_n = ROW_COUNT;
+      v_riesgo := v_riesgo + v_n;
+    ELSE
+      INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, clave)
+      SELECT u, 'meta_cumplida', '¡Meta cumplida! ' || v_desc,
+             format('Llegó a %s de %s %s.', app.num_es(r.valor), app.num_es(r.objetivo), v_unidad),
+             'meta_cumplida:' || r.meta_id
+        FROM unnest(v_dest) u
+      ON CONFLICT (usuario_id, clave) WHERE clave IS NOT NULL DO NOTHING;
+      GET DIAGNOSTICS v_n = ROW_COUNT;
+      v_cumplidas := v_cumplidas + v_n;
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('avisos_riesgo', v_riesgo, 'avisos_cumplidas', v_cumplidas);
+END $$;
+REVOKE ALL ON FUNCTION app.avance_metas(date, date), revisar_metas(date) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION revisar_metas(date) TO authenticated;
+
+-- Si el proyecto tiene pg_cron, la revisión corre sola cada mañana (8:00 de Venezuela = 12:00 UTC).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    EXECUTE $c$SELECT cron.schedule('nova-revisar-metas', '0 12 * * *', 'SELECT public.revisar_metas()')$c$;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'No se programó la revisión diaria de metas: %', SQLERRM;
+END $$;
+
+-- 17.4 Historial de compra por farmacia (último año): última compra, cada cuántos días compra (mediana entre compras),
+-- cuántas compras y cuántas unidades al mes. Junta los pedidos de NOVA y las compras que reportan las droguerías.
+-- Un representante ve las farmacias de su fichero; la mesa, la gerencia y la administración, todas.
+-- La app decide el nivel (al día, atrasada, en riesgo, perdida) con estos datos.
+CREATE OR REPLACE FUNCTION historial_compra_farmacias()
+RETURNS TABLE (cliente_id uuid, ultima date, ciclo_dias integer, compras integer, unidades_mes integer)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH alcance AS (
+    SELECT c.id FROM dim_clientes c
+     WHERE c.deleted_at IS NULL AND c.estado_validacion = 'activo'
+       AND (app.es_staff() OR c.id IN (SELECT app.mis_clientes()))
+  ), fuentes AS (
+    SELECT p.cliente_id, (p.created_at AT TIME ZONE 'America/Caracas')::date AS dia,
+           coalesce(sum(d.unidades_solicitadas), 0) AS u, 'p' AS origen
+      FROM fact_pedidos p JOIN alcance a ON a.id = p.cliente_id
+      LEFT JOIN fact_pedido_detalles d ON d.pedido_id = p.id AND d.deleted_at IS NULL
+     WHERE p.deleted_at IS NULL AND p.estado::text NOT IN ('borrador','cancelado','rechazado')
+       AND p.created_at >= now() - interval '365 days'
+     GROUP BY 1, 2
+    UNION ALL
+    SELECT c.cliente_id, max(c.ultima_compra), sum(c.unidades), 'c'
+      FROM fact_compras_mensual c JOIN alcance a ON a.id = c.cliente_id
+     WHERE c.deleted_at IS NULL AND c.periodo >= date_trunc('month', current_date - 365)::date
+     GROUP BY c.cliente_id, c.periodo
+  ), dias AS (
+    SELECT f.cliente_id, f.dia, f.dia - lag(f.dia) OVER (PARTITION BY f.cliente_id ORDER BY f.dia) AS salto
+      FROM (SELECT DISTINCT fuentes.cliente_id, fuentes.dia FROM fuentes) f
+  ), unidades AS (
+    -- Los pedidos de NOVA suelen aparecer también en el reporte de la droguería: se toma la fuente mayor, no la suma.
+    SELECT fuentes.cliente_id, greatest(sum(u) FILTER (WHERE origen = 'p'), sum(u) FILTER (WHERE origen = 'c'), 0) AS u
+      FROM fuentes GROUP BY fuentes.cliente_id
+  )
+  SELECT d.cliente_id, max(d.dia), round(percentile_cont(0.5) WITHIN GROUP (ORDER BY d.salto))::integer,
+         count(*)::integer, round(max(un.u) / 12.0)::integer
+    FROM dias d JOIN unidades un ON un.cliente_id = d.cliente_id
+   GROUP BY d.cliente_id
+$$;
+REVOKE ALL ON FUNCTION historial_compra_farmacias() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION historial_compra_farmacias() TO authenticated;
 
 NOTIFY pgrst, 'reload schema';

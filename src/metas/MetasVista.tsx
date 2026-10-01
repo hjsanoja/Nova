@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Copy, Plus, Target, Trash2, X } from 'lucide-react';
 import { Sheet } from '../components/capture/Sheet';
 import { Medidor } from '../components/graficos/Graficos';
-import { BarraSeleccion, Boton, Campo, Casilla, Grupo, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useSeleccion } from '../components/ui/kit';
+import { BarraSeleccion, Boton, Campo, Casilla, Etiqueta, Grupo, PageHeader, Segmentado, Tarjeta, Vacio, estiloInput, useAviso, useConfirmar, useSeleccion } from '../components/ui/kit';
 import { obtenerDb } from '../offline/db';
 import { sincronizarYa } from '../offline/motor';
 import { useLive } from '../offline/useLive';
@@ -11,7 +11,7 @@ import { SelectorCliente } from '../pedido/SelectorCliente';
 import { getSupabaseClient } from '../services/supabaseClient';
 import { unidadesPorPedido } from '../vistas/indicadores';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useUsuariosNube } from '../vistas/useDatos';
-import { INDICADORES, avanceMeta, describirMeta, indicador, mesSiguiente, pedidosDeMeta, periodoDe } from './logica';
+import { INDICADORES, NIVELES_META, avanceMeta, describirMeta, indicador, mesSiguiente, pedidosDeMeta, periodoDe, ritmoMeta } from './logica';
 import { DetallePedidos } from '../vistas/DetallePedidos';
 import type { SolicitudDetalle } from '../vistas/DetallePedidos';
 import { detallesPorPedido } from '../vistas/logica';
@@ -59,7 +59,13 @@ export function MetasVista() {
   }, [nombres, productos]);
 
   const filas = useMemo(
-    () => metas.map((m) => ({ m, a: avanceMeta(m, pedidos, unidades), texto: describirMeta(m, nombres) })).sort((x, y) => x.texto.localeCompare(y.texto)),
+    () =>
+      metas
+        .map((m) => {
+          const a = avanceMeta(m, pedidos, unidades);
+          return { m, a, r: ritmoMeta(m, a.valor), texto: describirMeta(m, nombres) };
+        })
+        .sort((x, y) => NIVELES_META[x.r.nivel].orden - NIVELES_META[y.r.nivel].orden || x.texto.localeCompare(y.texto)),
     [metas, pedidos, unidades, nombres]
   );
 
@@ -88,7 +94,7 @@ export function MetasVista() {
     <div>
       <PageHeader
         titulo="Metas"
-        descripcion="Objetivos del mes por representante, farmacia o droguería (o combinados). El avance se ve en el Resumen de cada uno."
+        descripcion="Objetivos del mes por representante, farmacia o droguería (o combinados). La marca en la barra es lo esperado a hoy; si una meta va en riesgo, NOVA avisa al representante y a la gerencia."
         acciones={<Boton variante="primario" icono={Plus} onClick={() => setEdicion(nueva())}>Nueva meta</Boton>}
       />
       {nodo}
@@ -118,8 +124,9 @@ export function MetasVista() {
         </Tarjeta>
       ) : (
         <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {filas.map(({ m, a, texto }) => {
+          {filas.map(({ m, a, r, texto }) => {
             const ind = indicador(m.indicador);
+            const nivel = NIVELES_META[r.nivel];
             return (
               <li key={m.id} className="flex gap-1 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                 <Casilla etiqueta={`Seleccionar la meta de ${texto}`} marcada={sel.tiene(m.id)} onChange={() => sel.alternar(m.id)} />
@@ -128,8 +135,10 @@ export function MetasVista() {
                   <Medidor
                     valor={a.valor}
                     total={a.objetivo}
+                    esperado={r.nivel === 'cumplida' ? undefined : r.esperado}
+                    distintivo={<Etiqueta tono={nivel.tono} punto>{nivel.texto}</Etiqueta>}
                     rotulo={`${texto} · ${ind.texto.toLowerCase()}`}
-                    nota={a.valor >= a.objetivo ? 'Meta cumplida.' : a.diasRestantes > 0 ? `Faltan ${formato(a.objetivo - a.valor)}: ${formato(a.porDia)} ${ind.unidad} por día${a.proyeccion !== null ? ` · al ritmo actual cerraría en ${formato(a.proyeccion)}` : ''}.` : `Quedó en ${a.pct}%.`}
+                    nota={a.valor >= a.objetivo ? 'Meta cumplida.' : a.diasRestantes > 0 ? `${r.nivel === 'en_riesgo' || r.nivel === 'atencion' ? `A hoy se esperaban ${formato(Math.round(r.esperado))}. ` : ''}Faltan ${formato(a.objetivo - a.valor)}: ${formato(a.porDia)} ${ind.unidad} por día${a.proyeccion !== null ? ` · al ritmo actual cerraría en ${formato(a.proyeccion)}` : ''}.` : `Quedó en ${a.pct}%.`}
                   />
                 </button>
                 <Boton tamano="sm" variante="fantasma" className="mt-1 -ml-3" onClick={() => setDetalle({ titulo: `Meta: ${texto}`, calculo: `Pedidos enviados de ${nombreMes(m.periodo).toLowerCase()}${m.vendedor_id ? ` de ${nombres.vendedor(m.vendedor_id)}` : ''}${m.cliente_id ? ` para ${nombres.cliente(m.cliente_id)}` : ''}${m.drogueria_id ? ` por ${nombres.drogueria(m.drogueria_id)}` : ''} (sin borradores, cancelados ni rechazados). Mide ${ind.texto.toLowerCase()}: ${formato(a.valor)} de ${formato(a.objetivo)}.`, pedidos: pedidosDeMeta(m, pedidos), nota: 'Con los pedidos guardados en este dispositivo (últimos 90 días).' })}>Ver pedidos</Boton>

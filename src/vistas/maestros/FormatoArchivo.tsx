@@ -5,6 +5,7 @@ import { Boton, BotonIcono, Campo, Grupo, Segmentado, estiloInput } from '../../
 import { generarArchivoDrogueria } from '../../services/exportacionDrogueria';
 import { guardarFormatoDrogueria, leerFormatoDrogueria, problemasFormato } from '../../services/maestros';
 import { getSupabaseClient } from '../../services/supabaseClient';
+import { FormatoRespuestaEditor } from './FormatoRespuesta';
 import type { ColumnaExport, FormatoExport, LocalCliente, LocalDetalle, LocalDrogueria, LocalProducto, OrigenColumnaExport } from '../../offline/types';
 
 /** Qué dato va en cada columna, dicho en palabras. */
@@ -52,6 +53,7 @@ export function FormatoArchivo({ codigo, nombre, onCerrar, onGuardado }: { codig
   const [f, setF] = useState<FormatoExport | null>(null);
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
+  const [pestana, setPestana] = useState<'pedido' | 'respuesta'>('pedido');
 
   useEffect(() => {
     const sb = getSupabaseClient();
@@ -78,7 +80,7 @@ export function FormatoArchivo({ codigo, nombre, onCerrar, onGuardado }: { codig
 
   if (!f) {
     return (
-      <Sheet abierto titulo={`Archivo de pedido · ${nombre}`} onCerrar={onCerrar} ancho="md:max-w-3xl">
+      <Sheet abierto titulo={`Archivos · ${nombre}`} onCerrar={onCerrar} ancho="md:max-w-3xl">
         <p className="text-sm text-slate-500">{error || 'Cargando…'}</p>
       </Sheet>
     );
@@ -112,8 +114,13 @@ export function FormatoArchivo({ codigo, nombre, onCerrar, onGuardado }: { codig
   };
 
   return (
-    <Sheet abierto titulo={`Archivo de pedido · ${nombre}`} onCerrar={onCerrar} ancho="md:max-w-3xl">
+    <Sheet abierto titulo={`Archivos · ${nombre}`} onCerrar={onCerrar} ancho="md:max-w-3xl">
       <div className="flex flex-col gap-4">
+        <Segmentado valor={pestana} onChange={setPestana} opciones={[{ id: 'pedido', texto: 'Pedido (lo que se envía)' }, { id: 'respuesta', texto: 'Respuesta (lo despachado)' }]} />
+        {pestana === 'respuesta' ? (
+          <FormatoRespuestaEditor valor={f.respuesta} onChange={(respuesta) => cambiar({ respuesta })} />
+        ) : (
+        <>
         <p className="text-sm text-slate-600 dark:text-slate-300">
           Así será el archivo que descarga la mesa al procesar un pedido para {nombre}. Arma las columnas en el orden que pide la droguería.
         </p>
@@ -205,6 +212,8 @@ export function FormatoArchivo({ codigo, nombre, onCerrar, onGuardado }: { codig
           <pre className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 font-mono text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-200">{vista?.texto.replace(/\t/g, '→') || '—'}</pre>
           <p className="mt-1 text-xs text-slate-500">Ejemplo con dos productos de un pedido de Farmacia La Paz (Losartán con 10% de descuento del producto y 5% de descuento del pedido).</p>
         </div>
+        </>
+        )}
 
         {(problemas.length > 0 || error) && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{[...problemas, error].filter(Boolean).join(' ')}</p>}
         <div className="flex justify-end gap-2">
