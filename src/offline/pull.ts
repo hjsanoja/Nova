@@ -10,8 +10,10 @@ import type {
   LocalMapCliente,
   LocalMapProducto,
   LocalComunicado,
+  LocalMedico,
   LocalMeta,
   LocalNotificacion,
+  LocalTarea,
   LocalPlantilla,
   LocalVisita,
   LocalPedido,
@@ -387,7 +389,7 @@ export const TABLAS_PULL: TablaPull[] = [
     // aunque la visita se haya registrado en otro teléfono.
     remota: 'crm_visitas',
     acotarHistorial: true,
-    seleccion: 'id,cliente_id,vendedor_id,checkin_en,checkout_en,precision_gps_m,distancia_metros,dentro_de_radio,resultado,pedido_id,notas,updated_at,deleted_at',
+    seleccion: 'id,cliente_id,medico_id,vendedor_id,checkin_en,checkout_en,precision_gps_m,distancia_metros,dentro_de_radio,resultado,pedido_id,notas,objetivo,productos,muestras,proxima_accion,proxima_fecha,updated_at,deleted_at',
     aplicar: async (db, filas) => {
       const locales = new Map((await db.visitas.bulkGet(filas.map((f) => str(f.id)))).filter((v): v is LocalVisita => !!v).map((v) => [v.id, v]));
       const sucio = (id: string) => (locales.get(id)?.sync_estado ?? 'sincronizado') !== 'sincronizado';
@@ -397,7 +399,8 @@ export const TABLAS_PULL: TablaPull[] = [
           .filter((f) => !sucio(str(f.id)))
           .map<LocalVisita>((f) => ({
             id: str(f.id),
-            cliente_id: str(f.cliente_id),
+            cliente_id: strN(f.cliente_id),
+            medico_id: strN(f.medico_id),
             vendedor_id: str(f.vendedor_id),
             checkin_en: str(f.checkin_en),
             checkout_en: strN(f.checkout_en),
@@ -407,6 +410,71 @@ export const TABLAS_PULL: TablaPull[] = [
             resultado: (f.resultado as LocalVisita['resultado']) ?? null,
             pedido_id: strN(f.pedido_id),
             notas: strN(f.notas),
+            objetivo: strN(f.objetivo),
+            productos: Array.isArray(f.productos) ? (f.productos as string[]) : [],
+            muestras: Array.isArray(f.muestras) ? (f.muestras as LocalVisita['muestras']) : [],
+            proxima_accion: strN(f.proxima_accion),
+            proxima_fecha: strN(f.proxima_fecha),
+            sync_estado: 'sincronizado',
+          }))
+      );
+    },
+  },
+  {
+    // Médicos: el visitador recibe su cartera; la gerencia y la mesa, todos.
+    remota: 'dim_medicos',
+    podarNoVistos: async (db, vistos) => {
+      const sobran = (await db.medicos.toCollection().primaryKeys()).filter((id) => !vistos.has(id));
+      if (sobran.length) await db.medicos.bulkDelete(sobran);
+    },
+    aplicar: async (db, filas) => {
+      await db.medicos.bulkDelete(borrados(filas));
+      await db.medicos.bulkPut(
+        vigentes(filas).map<LocalMedico>((f) => ({
+          id: str(f.id),
+          codigo: strN(f.codigo),
+          nombre: str(f.nombre),
+          especialidad: strN(f.especialidad),
+          centro: strN(f.centro),
+          direccion: strN(f.direccion),
+          ciudad: strN(f.ciudad),
+          zona: strN(f.zona),
+          telefono: strN(f.telefono),
+          correo: strN(f.correo),
+          categoria: (strN(f.categoria) as LocalMedico['categoria']) ?? null,
+          visitas_mes: numN(f.visitas_mes),
+          lat: numN(f.lat),
+          lon: numN(f.lon),
+          vendedor_id: strN(f.vendedor_id),
+          notas: strN(f.notas),
+          activo: f.activo !== false,
+          updated_at: str(f.updated_at),
+        }))
+      );
+    },
+  },
+  {
+    remota: 'crm_tareas',
+    aplicar: async (db, filas) => {
+      const locales = new Map((await db.tareas.bulkGet(filas.map((f) => str(f.id)))).filter((t): t is LocalTarea => !!t).map((t) => [t.id, t]));
+      const sucio = (id: string) => (locales.get(id)?.sync_estado ?? 'sincronizado') !== 'sincronizado';
+      await db.tareas.bulkDelete(borrados(filas).filter((id) => !sucio(id)));
+      await db.tareas.bulkPut(
+        vigentes(filas)
+          .filter((f) => !sucio(str(f.id)))
+          .map<LocalTarea>((f) => ({
+            id: str(f.id),
+            vendedor_id: str(f.vendedor_id),
+            cliente_id: strN(f.cliente_id),
+            medico_id: strN(f.medico_id),
+            visita_id: strN(f.visita_id),
+            titulo: str(f.titulo),
+            notas: strN(f.notas),
+            vence_en: str(f.vence_en).slice(0, 10),
+            estado: (f.estado as LocalTarea['estado']) ?? 'pendiente',
+            hecha_en: strN(f.hecha_en),
+            origen: (f.origen as LocalTarea['origen']) ?? 'manual',
+            updated_at: str(f.updated_at),
             sync_estado: 'sincronizado',
           }))
       );

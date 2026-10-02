@@ -1,8 +1,23 @@
 [
   {
+    "version": "10.0",
+    "fecha": "2026-10-01",
+    "tipo": "mayor",
+    "titulo": "CRM: médicos, visitas con reporte, tareas y ficha 360°",
+    "cambios": [
+      "Médicos: la cartera de cada visitador con su cobertura del mes (visitas realizadas contra las esperadas). La gerencia los carga con un Excel o uno por uno.",
+      "Visitas con reporte a farmacias y médicos: resultado, objetivo, productos presentados, muestras y próxima acción. Se guarda con el GPS y funciona sin señal. La ruta del día suma la pestaña «Médicos».",
+      "Mis tareas: vencidas, hoy y próximas, con aviso el día que vencen. La próxima acción de una visita y las farmacias en riesgo se convierten en tareas con un toque.",
+      "Ficha 360° de cada farmacia (resumen, pedidos, visitas, tareas y lo que dejó de comprar) y de cada médico.",
+      "Reportes → Visitas (por representante, cobertura de médicos y muestras) y Reportes → Cambios: quién cambió qué y cuándo.",
+      "Plan actualizado con las próximas fases: ciclos con días hábiles y metas por ciclo, y otras actividades con aprobación del gerente."
+    ]
+  },
+  {
     "version": "9.0",
     "fecha": "2026-10-01",
     "tipo": "mayor",
+    "pr": 13,
     "titulo": "Respuesta de la droguería por archivo, metas con alertas y farmacias en riesgo",
     "cambios": [
       "Por procesar → «Cargar respuesta»: sube el Excel o CSV con lo que despachó la droguería; NOVA ubica cada pedido, muestra si queda completo, parcial o sin despacho, y los confirmas todos de una vez.",

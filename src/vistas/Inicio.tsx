@@ -16,6 +16,9 @@ import { ESTADOS_ETIQUETA, perteneceAGrupo, unidadesDePedido, detallesPorPedido 
 import { NIVELES_RIESGO, describirRiesgo } from './riesgo';
 import type { NivelRiesgo } from './riesgo';
 import { useRiesgoFarmacias } from './useRiesgo';
+import { useMedicos, useTareas } from '../crm/datos';
+import { FilaTarea, TareaForm, useNombresDestino } from '../crm/Tareas';
+import { agruparTareas, hoyTexto } from '../offline/crm';
 import { irASeccion, prepararPedidoPara } from './navegacion';
 import { cuenta, rankingMes, resumenMeses, serieDiaria, serieMensual, topProductosMes, unidadesPorPedido, variacion } from './indicadores';
 import type { PuntoMes } from './indicadores';
@@ -321,6 +324,26 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
     </Tarjeta>
   );
 
+  // Tareas de hoy y vencidas (las propias; la gerencia ve las suyas aquí y las del equipo en Tareas).
+  const tareas = useTareas();
+  const medicos = useMedicos();
+  const destinoTarea = useNombresDestino(clientes, medicos);
+  const [tareaRiesgo, setTareaRiesgo] = useState<{ id: string; nombre: string } | null>(null);
+  const misTareas = useMemo(() => agruparTareas(tareas.filter((t) => t.vendedor_id === usuario.id)), [tareas, usuario.id]);
+  const urgentes = [...misTareas.vencidas, ...misTareas.hoy];
+  const tarjetaTareas = (urgentes.length > 0 || esVendedor) && usuario.rol !== 'teletransferencista' && (
+    <Tarjeta>
+      <Subtitulo accion={verTodos('tareas', 'Ver todas')}>Tareas de hoy{urgentes.length ? ` · ${urgentes.length}` : ''}</Subtitulo>
+      {urgentes.length === 0 ? (
+        <Vacio titulo="Nada pendiente para hoy" texto={misTareas.proximas.length ? `${misTareas.proximas.length} tarea${misTareas.proximas.length === 1 ? '' : 's'} para los próximos días.` : 'Anota lo que tengas que hacer en «Mis tareas».'} />
+      ) : (
+        <ul className="-my-2 divide-y divide-slate-100 dark:divide-slate-800">
+          {urgentes.slice(0, 4).map((t) => <FilaTarea key={t.id} t={t} destino={destinoTarea(t)} hoy={hoyTexto()} onEditar={() => irATab('tareas')} />)}
+        </ul>
+      )}
+    </Tarjeta>
+  );
+
   const tarjetaRiesgo = (
     <Tarjeta>
       <Subtitulo accion={verTodos('clientes', esVendedor ? 'Mis clientes' : 'Ver clientes')}>Farmacias en riesgo</Subtitulo>
@@ -355,6 +378,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
                   {f.cliente.telefono && (
                     <a href={`tel:${f.cliente.telefono}`} aria-label={`Llamar a ${f.cliente.nombre_comercial}`} className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-marca-700 hover:bg-marca-50 dark:text-marca-300 dark:hover:bg-marca-950"><Phone className="h-4 w-4" aria-hidden /></a>
                   )}
+                  {esVendedor && <Boton tamano="sm" variante="fantasma" onClick={() => setTareaRiesgo({ id: f.cliente.id, nombre: f.cliente.nombre_comercial })}>Tarea</Boton>}
                   {(esVendedor || esAdmin) && (
                     <Boton tamano="sm" variante="secundario" onClick={() => { prepararPedidoPara(f.cliente.id); irATab('captura'); }}>Pedido</Boton>
                   )}
@@ -480,7 +504,8 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         </div>
         <div className="flex min-w-0 flex-col gap-4 lg:gap-5 xl:col-span-4">
           {tarjetaMetas}
-          <CentroAvisos onAbrir={(n) => (n.tipo.startsWith('meta') ? puedeMetas && irATab('metas') : irATab('pedidos'))} />
+          {tarjetaTareas}
+          <CentroAvisos onAbrir={(n) => (n.tipo.startsWith('meta') ? puedeMetas && irATab('metas') : n.tipo.startsWith('tarea') ? irATab('tareas') : irATab('pedidos'))} />
           {!esVendedor && (
             <Tarjeta>
               <Subtitulo>Unidades por droguería · este mes</Subtitulo>
@@ -498,6 +523,16 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         </div>
       </div>
       <DetallePedidos solicitud={detalle} porPedido={porPedido} nombres={nombresDetalle} onCerrar={() => setDetalle(null)} />
+      {tareaRiesgo && (
+        <TareaForm
+          sugerida={{ titulo: `Recuperar a ${tareaRiesgo.nombre}: llamar o visitar`, cliente_id: tareaRiesgo.id, origen: 'riesgo' }}
+          vendedorId={usuario.id}
+          clientes={clientes}
+          medicos={medicos}
+          onCerrar={() => setTareaRiesgo(null)}
+          onGuardada={() => setTareaRiesgo(null)}
+        />
+      )}
     </div>
   );
 }

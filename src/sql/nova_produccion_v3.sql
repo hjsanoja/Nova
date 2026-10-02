@@ -2396,6 +2396,9 @@ BEGIN
   ELSIF p_tipo = 'droguerias' THEN
     UPDATE dim_droguerias SET deleted_at = now() WHERE deleted_at IS NULL AND codigo = ANY (v_claves);
     GET DIAGNOSTICS v_n = ROW_COUNT;
+  ELSIF p_tipo = 'medicos' AND to_regclass('public.dim_medicos') IS NOT NULL THEN
+    EXECUTE 'UPDATE dim_medicos SET deleted_at = now() WHERE deleted_at IS NULL AND (id::text = ANY ($1) OR codigo = ANY ($1))' USING v_claves;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
   ELSIF p_tipo = 'reglas' THEN
     UPDATE config_reglas_comerciales SET deleted_at = now(), activo = false WHERE deleted_at IS NULL AND id::text = ANY (v_claves);
     GET DIAGNOSTICS v_n = ROW_COUNT;
@@ -2440,7 +2443,7 @@ GRANT EXECUTE ON FUNCTION eliminar_registros(text, text[]), admin_eliminar_usuar
 -- la de inicio de sesión) + máximo 5 intentos fallidos cada 15 minutos. Cada uso queda en audit_log.
 -- Nunca se tocan usuarios, equipos, configuración, secretos ni auditoría.
 --   alcance 'historial'       -> ventas reportadas por las droguerías, sus lotes y el consolidado mensual
---   alcance 'pedidos'         -> pedidos, detalles, visitas, notificaciones y alertas (el correlativo reinicia)
+--   alcance 'pedidos'         -> pedidos, detalles, visitas, tareas, notificaciones y alertas (el correlativo reinicia)
 --   alcance 'homologaciones'  -> códigos de farmacias y productos por droguería; las ventas vuelven a "sin homologar"
 --   alcance 'fichero'         -> asignación de farmacias a vendedores
 --   alcance 'clientes'        -> farmacias + pedidos (dependen de ellas), fichero y homologaciones de farmacias;
@@ -2505,6 +2508,7 @@ BEGIN
   IF p_alcance IN ('pedidos', 'clientes', 'productos', 'droguerias', 'todo') THEN
     TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, alertas_comerciales,
              fact_pedidos RESTART IDENTITY CASCADE;
+    IF to_regclass('public.crm_tareas') IS NOT NULL THEN EXECUTE 'TRUNCATE crm_tareas'; END IF;
     PERFORM setval('seq_correlativo_pedido', 1001, false);
   END IF;
   IF p_alcance = 'homologaciones' THEN
@@ -2993,7 +2997,8 @@ CREATE OR REPLACE FUNCTION app.push_notificacion() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   PERFORM app.enviar_push(ARRAY[NEW.usuario_id], NEW.titulo, NEW.cuerpo,
-                          CASE WHEN NEW.tipo LIKE 'meta%' THEN './#/inicio' ELSE './#/pedidos' END, 'notif-' || NEW.id);
+                          CASE WHEN NEW.tipo LIKE 'meta%' THEN './#/inicio' WHEN NEW.tipo LIKE 'tarea%' THEN './#/tareas' ELSE './#/pedidos' END,
+                          'notif-' || NEW.id);
   RETURN NULL;
 END $$;
 DROP TRIGGER IF EXISTS trg_push_notificacion ON notificaciones;
@@ -3232,7 +3237,7 @@ GRANT EXECUTE ON FUNCTION revisar_metas(date) TO authenticated;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
-    EXECUTE $c$SELECT cron.schedule('nova-revisar-metas', '0 12 * * *', 'SELECT public.revisar_metas()')$c$;
+    NULL; -- desde la v10.0 la programa la sección 18 (revisión diaria: metas + tareas)
   END IF;
 EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE 'No se programó la revisión diaria de metas: %', SQLERRM;
@@ -3277,5 +3282,346 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
 $$;
 REVOKE ALL ON FUNCTION historial_compra_farmacias() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION historial_compra_farmacias() TO authenticated;
+
+-- ------------------------------------------------------------------------------
+-- 18. FASE 3 (v10.0): CRM — MÉDICOS, VISITAS CON REPORTE, TAREAS Y REGISTRO DE CAMBIOS
+-- ------------------------------------------------------------------------------
+
+-- 18.1 Médicos: la cartera del visitador (el mismo representante visita médicos y toma pedidos en farmacias).
+CREATE TABLE IF NOT EXISTS dim_medicos (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  codigo        text UNIQUE,
+  nombre        text NOT NULL CHECK (btrim(nombre) <> ''),
+  especialidad  text,
+  centro        text,                       -- clínica, consultorio u hospital
+  direccion     text,
+  ciudad        text,
+  zona          text,
+  telefono      text,
+  correo        text,
+  categoria     text CHECK (categoria IN ('A','B','C')),   -- potencial de prescripción
+  visitas_mes   smallint CHECK (visitas_mes BETWEEN 0 AND 31),
+  lat           numeric(9,6),
+  lon           numeric(9,6),
+  vendedor_id   uuid REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  notas         text,
+  activo        boolean NOT NULL DEFAULT true,
+  creado_por    uuid DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version   integer NOT NULL DEFAULT 1,
+  deleted_at    timestamptz
+);
+CREATE INDEX IF NOT EXISTS idx_medicos_vendedor ON dim_medicos (vendedor_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_medicos_updated ON dim_medicos (updated_at);
+
+-- Carga por archivo (solo administración): crea o actualiza por código; el representante se indica por su correo.
+CREATE OR REPLACE FUNCTION cargar_medicos(p_filas jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE f jsonb; v_vend uuid; v_ins integer := 0; v_act integer := 0; v_sin text[] := '{}'; v_correo text; v_id uuid;
+BEGIN
+  IF NOT (app.es_admin() OR app.rol() = 'gerente') THEN RAISE EXCEPTION 'Solo administración o gerencia' USING ERRCODE = '42501'; END IF;
+  FOR f IN SELECT * FROM jsonb_array_elements(coalesce(p_filas, '[]'::jsonb)) LOOP
+    IF coalesce(btrim(f->>'nombre'), '') = '' THEN CONTINUE; END IF;
+    v_correo := lower(nullif(btrim(f->>'representante'), ''));
+    v_vend := NULL;
+    IF v_correo IS NOT NULL THEN
+      SELECT id INTO v_vend FROM dim_usuarios WHERE lower(email) = v_correo AND deleted_at IS NULL;
+      IF v_vend IS NULL AND NOT v_correo = ANY (v_sin) THEN v_sin := v_sin || v_correo; END IF;
+    END IF;
+    v_id := NULL;
+    IF nullif(btrim(f->>'codigo'), '') IS NOT NULL THEN
+      SELECT id INTO v_id FROM dim_medicos WHERE codigo = btrim(f->>'codigo');
+    END IF;
+    IF v_id IS NULL THEN
+      INSERT INTO dim_medicos (codigo, nombre, especialidad, centro, direccion, ciudad, zona, telefono, correo, categoria,
+                               visitas_mes, lat, lon, vendedor_id, notas)
+      VALUES (nullif(btrim(f->>'codigo'), ''), btrim(f->>'nombre'), nullif(btrim(f->>'especialidad'), ''), nullif(btrim(f->>'centro'), ''),
+              nullif(btrim(f->>'direccion'), ''), nullif(btrim(f->>'ciudad'), ''), nullif(btrim(f->>'zona'), ''),
+              nullif(btrim(f->>'telefono'), ''), nullif(btrim(f->>'correo'), ''), nullif(upper(btrim(f->>'categoria')), ''),
+              nullif(f->>'visitas_mes', '')::smallint, nullif(f->>'lat', '')::numeric, nullif(f->>'lon', '')::numeric, v_vend,
+              nullif(btrim(f->>'notas'), ''));
+      v_ins := v_ins + 1;
+    ELSE
+      UPDATE dim_medicos SET nombre = btrim(f->>'nombre'),
+             especialidad = coalesce(nullif(btrim(f->>'especialidad'), ''), especialidad),
+             centro = coalesce(nullif(btrim(f->>'centro'), ''), centro),
+             direccion = coalesce(nullif(btrim(f->>'direccion'), ''), direccion),
+             ciudad = coalesce(nullif(btrim(f->>'ciudad'), ''), ciudad),
+             zona = coalesce(nullif(btrim(f->>'zona'), ''), zona),
+             telefono = coalesce(nullif(btrim(f->>'telefono'), ''), telefono),
+             correo = coalesce(nullif(btrim(f->>'correo'), ''), correo),
+             categoria = coalesce(nullif(upper(btrim(f->>'categoria')), ''), categoria),
+             visitas_mes = coalesce(nullif(f->>'visitas_mes', '')::smallint, visitas_mes),
+             lat = coalesce(nullif(f->>'lat', '')::numeric, lat),
+             lon = coalesce(nullif(f->>'lon', '')::numeric, lon),
+             vendedor_id = CASE WHEN v_correo IS NULL THEN vendedor_id ELSE coalesce(v_vend, vendedor_id) END,
+             activo = true, deleted_at = NULL
+       WHERE id = v_id;
+      v_act := v_act + 1;
+    END IF;
+  END LOOP;
+  RETURN jsonb_build_object('insertados', v_ins, 'actualizados', v_act, 'correos_sin_cuenta', to_jsonb(v_sin));
+END $$;
+
+-- 18.2 Visitas con reporte: a una farmacia O a un médico, con objetivo, productos presentados, muestras y próxima acción.
+ALTER TABLE crm_visitas ALTER COLUMN cliente_id DROP NOT NULL;
+ALTER TABLE crm_visitas ADD COLUMN IF NOT EXISTS medico_id uuid REFERENCES dim_medicos(id) ON DELETE CASCADE;
+ALTER TABLE crm_visitas ADD COLUMN IF NOT EXISTS objetivo text;
+ALTER TABLE crm_visitas ADD COLUMN IF NOT EXISTS productos uuid[] NOT NULL DEFAULT '{}';
+ALTER TABLE crm_visitas ADD COLUMN IF NOT EXISTS muestras jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE crm_visitas ADD COLUMN IF NOT EXISTS proxima_accion text;
+ALTER TABLE crm_visitas ADD COLUMN IF NOT EXISTS proxima_fecha date;
+DO $$ BEGIN
+  ALTER TABLE crm_visitas ADD CONSTRAINT ck_visita_destino CHECK (num_nonnulls(cliente_id, medico_id) = 1);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE crm_visitas ADD CONSTRAINT ck_visita_muestras CHECK (jsonb_typeof(muestras) = 'array');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE INDEX IF NOT EXISTS idx_visitas_medico ON crm_visitas (medico_id, checkin_en DESC) WHERE medico_id IS NOT NULL;
+-- Resultados de la visita a un médico (se agregan a los de farmacia).
+ALTER TYPE resultado_visita ADD VALUE IF NOT EXISTS 'realizada';
+ALTER TYPE resultado_visita ADD VALUE IF NOT EXISTS 'no_atendio';
+
+-- El punto de referencia es la farmacia o el consultorio del médico.
+CREATE OR REPLACE FUNCTION app.calcular_geofence() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_punto geography;
+BEGIN
+  IF NEW.medico_id IS NOT NULL THEN
+    SELECT CASE WHEN lat IS NOT NULL AND lon IS NOT NULL THEN ST_SetSRID(ST_MakePoint(lon::float8, lat::float8), 4326)::geography END
+      INTO v_punto FROM dim_medicos WHERE id = NEW.medico_id;
+  ELSE
+    SELECT ubicacion INTO v_punto FROM dim_clientes WHERE id = NEW.cliente_id;
+  END IF;
+  NEW.radio_tolerancia_m := coalesce(NEW.radio_tolerancia_m, app.cfg_num('radio_geofence_m', 100)::integer);
+  IF v_punto IS NULL OR NEW.checkin_ubicacion IS NULL THEN
+    NEW.distancia_metros := NULL;
+    NEW.dentro_de_radio := false;
+  ELSE
+    NEW.distancia_metros := round(ST_Distance(NEW.checkin_ubicacion, v_punto)::numeric, 2);
+    NEW.dentro_de_radio := NEW.distancia_metros <= NEW.radio_tolerancia_m;
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS trg_geofence ON crm_visitas;
+CREATE TRIGGER trg_geofence BEFORE INSERT OR UPDATE OF checkin_ubicacion, cliente_id, medico_id, radio_tolerancia_m ON crm_visitas
+  FOR EACH ROW EXECUTE FUNCTION app.calcular_geofence();
+
+-- Registro (idempotente por id) desde el dispositivo. Un médico solo lo visita quien lo tiene en su cartera (o la gerencia).
+CREATE OR REPLACE FUNCTION sync_registrar_visita(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE v_id uuid := (p->>'id')::uuid; v_row crm_visitas; v_medico uuid := nullif(p->>'medico_id', '')::uuid;
+BEGIN
+  IF v_medico IS NOT NULL AND NOT (app.es_staff() OR EXISTS (SELECT 1 FROM dim_medicos WHERE id = v_medico AND vendedor_id = auth.uid())) THEN
+    RAISE EXCEPTION 'Este médico no está en tu cartera' USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO crm_visitas (id, cliente_id, medico_id, vendedor_id, checkin_en, checkin_ubicacion, precision_gps_m, checkout_en,
+                           resultado, pedido_id, notas, device_id, objetivo, productos, muestras, proxima_accion, proxima_fecha)
+  VALUES (v_id, nullif(p->>'cliente_id', '')::uuid, v_medico, auth.uid(), (p->>'checkin_en')::timestamptz,
+          CASE WHEN p ? 'lon' AND p ? 'lat'
+               THEN ST_SetSRID(ST_MakePoint((p->>'lon')::float8, (p->>'lat')::float8), 4326)::geography END,
+          nullif(p->>'precision_gps_m','')::numeric, nullif(p->>'checkout_en','')::timestamptz,
+          nullif(p->>'resultado','')::resultado_visita, nullif(p->>'pedido_id','')::uuid, p->>'notas', p->>'device_id',
+          nullif(btrim(p->>'objetivo'), ''),
+          coalesce(ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(p->'productos') = 'array' THEN p->'productos' ELSE '[]'::jsonb END)::uuid), '{}'),
+          CASE WHEN jsonb_typeof(p->'muestras') = 'array' THEN p->'muestras' ELSE '[]'::jsonb END,
+          nullif(btrim(p->>'proxima_accion'), ''), nullif(p->>'proxima_fecha', '')::date)
+  ON CONFLICT (id) DO UPDATE
+    SET checkout_en = excluded.checkout_en, resultado = excluded.resultado, pedido_id = excluded.pedido_id,
+        notas = excluded.notas, objetivo = excluded.objetivo, productos = excluded.productos, muestras = excluded.muestras,
+        proxima_accion = excluded.proxima_accion, proxima_fecha = excluded.proxima_fecha
+    WHERE crm_visitas.vendedor_id = auth.uid();
+  SELECT * INTO v_row FROM crm_visitas WHERE id = v_id;
+  RETURN jsonb_build_object('id', v_row.id, 'distancia_metros', v_row.distancia_metros,
+                            'dentro_de_radio', v_row.dentro_de_radio, 'row_version', v_row.row_version);
+END $$;
+
+-- 18.3 Tareas y recordatorios: lo que hay que hacer y cuándo, con una farmacia o un médico (o sin ninguno).
+CREATE TABLE IF NOT EXISTS crm_tareas (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  vendedor_id  uuid NOT NULL REFERENCES dim_usuarios(id) ON DELETE CASCADE,   -- responsable
+  cliente_id   uuid REFERENCES dim_clientes(id) ON DELETE CASCADE,
+  medico_id    uuid REFERENCES dim_medicos(id) ON DELETE CASCADE,
+  visita_id    uuid REFERENCES crm_visitas(id) ON DELETE SET NULL,
+  titulo       text NOT NULL CHECK (btrim(titulo) <> ''),
+  notas        text,
+  vence_en     date NOT NULL,
+  estado       text NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente','hecha','cancelada')),
+  hecha_en     timestamptz,
+  origen       text NOT NULL DEFAULT 'manual' CHECK (origen IN ('manual','visita','riesgo','sistema')),
+  creado_por   uuid DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  updated_at   timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version  integer NOT NULL DEFAULT 1,
+  deleted_at   timestamptz,
+  CONSTRAINT ck_tarea_destino CHECK (num_nonnulls(cliente_id, medico_id) <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_tareas_vendedor ON crm_tareas (vendedor_id, estado, vence_en);
+CREATE INDEX IF NOT EXISTS idx_tareas_updated ON crm_tareas (updated_at);
+
+-- Guardado idempotente desde el dispositivo (crear, editar, marcar hecha o borrar).
+CREATE OR REPLACE FUNCTION sync_guardar_tarea(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SET search_path = public AS $$
+DECLARE v_id uuid := (p->>'id')::uuid; v_row crm_tareas; v_estado text := coalesce(nullif(p->>'estado', ''), 'pendiente');
+BEGIN
+  INSERT INTO crm_tareas (id, vendedor_id, cliente_id, medico_id, visita_id, titulo, notas, vence_en, estado, hecha_en, origen, deleted_at)
+  VALUES (v_id, coalesce(nullif(p->>'vendedor_id', '')::uuid, auth.uid()), nullif(p->>'cliente_id', '')::uuid,
+          nullif(p->>'medico_id', '')::uuid, nullif(p->>'visita_id', '')::uuid, btrim(p->>'titulo'), nullif(btrim(p->>'notas'), ''),
+          (p->>'vence_en')::date, v_estado, CASE WHEN v_estado = 'hecha' THEN now() END,
+          coalesce(nullif(p->>'origen', ''), 'manual'), CASE WHEN (p->>'eliminar')::boolean THEN now() END)
+  ON CONFLICT (id) DO UPDATE
+    SET titulo = excluded.titulo, notas = excluded.notas, vence_en = excluded.vence_en, estado = excluded.estado,
+        cliente_id = excluded.cliente_id, medico_id = excluded.medico_id,
+        hecha_en = CASE WHEN excluded.estado = 'hecha' THEN coalesce(crm_tareas.hecha_en, now()) END,
+        deleted_at = excluded.deleted_at;
+  SELECT * INTO v_row FROM crm_tareas WHERE id = v_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'No puedes guardar esta tarea' USING ERRCODE = '42501'; END IF;
+  RETURN jsonb_build_object('id', v_row.id, 'estado', v_row.estado, 'row_version', v_row.row_version);
+END $$;
+
+-- Recordatorio el día que vence (o el primer día que se revise después): una sola vez por tarea y fecha.
+CREATE OR REPLACE FUNCTION revisar_tareas(p_hoy date DEFAULT NULL) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_hoy date := coalesce(p_hoy, (now() AT TIME ZONE 'America/Caracas')::date); v_n integer;
+BEGIN
+  IF auth.uid() IS NOT NULL AND (app.rol() IS NULL OR (p_hoy IS NOT NULL AND NOT app.es_admin())) THEN
+    RAISE EXCEPTION 'Sin permiso para revisar las tareas' USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, clave)
+  SELECT t.vendedor_id, 'tarea_vence',
+         CASE WHEN t.vence_en < v_hoy THEN 'Tarea vencida: ' ELSE 'Tarea para hoy: ' END || t.titulo,
+         coalesce((SELECT nombre_comercial FROM dim_clientes WHERE id = t.cliente_id),
+                  (SELECT 'Dr(a). ' || nombre FROM dim_medicos WHERE id = t.medico_id), t.notas),
+         'tarea:' || t.id || ':' || t.vence_en
+    FROM crm_tareas t
+   WHERE t.deleted_at IS NULL AND t.estado = 'pendiente' AND t.vence_en <= v_hoy AND t.vence_en >= v_hoy - 7
+  ON CONFLICT (usuario_id, clave) WHERE clave IS NOT NULL DO NOTHING;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END $$;
+
+-- 18.4 Registro de cambios: quién cambió qué y cuándo (antes → después), en las tablas importantes.
+CREATE TABLE IF NOT EXISTS registro_cambios (
+  id           bigserial PRIMARY KEY,
+  tabla        text NOT NULL,
+  registro_id  text,
+  operacion    char(1) NOT NULL CHECK (operacion IN ('I','U','D')),
+  usuario_id   uuid,
+  cambios      jsonb,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_cambios_registro ON registro_cambios (tabla, registro_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cambios_fecha ON registro_cambios (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cambios_usuario ON registro_cambios (usuario_id, created_at DESC);
+
+-- Altas: solo quién y cuándo. Cambios: cada campo modificado con [antes, después]. Bajas: la fila completa.
+CREATE OR REPLACE FUNCTION app.auditar() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_ignorar text[] := ARRAY['updated_at','row_version','created_at','busqueda','tokens','ubicacion','checkin_ubicacion'];
+  v_old jsonb; v_new jsonb; v_cambios jsonb := '{}'::jsonb; k text;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    INSERT INTO registro_cambios (tabla, registro_id, operacion, usuario_id) VALUES (TG_TABLE_NAME, to_jsonb(NEW)->>'id', 'I', auth.uid());
+    RETURN NULL;
+  ELSIF TG_OP = 'DELETE' THEN
+    INSERT INTO registro_cambios (tabla, registro_id, operacion, usuario_id, cambios)
+    VALUES (TG_TABLE_NAME, to_jsonb(OLD)->>'id', 'D', auth.uid(), to_jsonb(OLD) - v_ignorar);
+    RETURN NULL;
+  END IF;
+  v_old := to_jsonb(OLD) - v_ignorar;
+  v_new := to_jsonb(NEW) - v_ignorar;
+  FOR k IN SELECT jsonb_object_keys(v_new) LOOP
+    IF v_old->k IS DISTINCT FROM v_new->k THEN
+      v_cambios := v_cambios || jsonb_build_object(k, jsonb_build_array(v_old->k, v_new->k));
+    END IF;
+  END LOOP;
+  IF v_cambios <> '{}'::jsonb THEN
+    INSERT INTO registro_cambios (tabla, registro_id, operacion, usuario_id, cambios) VALUES (TG_TABLE_NAME, v_new->>'id', 'U', auth.uid(), v_cambios);
+  END IF;
+  RETURN NULL;
+END $$;
+
+-- 18.5 Revisión diaria (la pide la app una vez al día; con pg_cron también corre sola): metas, tareas y limpieza del
+-- registro de cambios (se conservan 18 meses).
+CREATE OR REPLACE FUNCTION revision_diaria() RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_metas jsonb; v_tareas integer;
+BEGIN
+  IF auth.uid() IS NOT NULL AND app.rol() IS NULL THEN RAISE EXCEPTION 'Cuenta sin acceso' USING ERRCODE = '42501'; END IF;
+  v_metas := revisar_metas();
+  v_tareas := revisar_tareas();
+  DELETE FROM registro_cambios WHERE created_at < now() - interval '18 months';
+  RETURN v_metas || jsonb_build_object('avisos_tareas', v_tareas);
+END $$;
+
+-- Marcas de tiempo, auditoría, seguridad por filas y tiempo real de las tablas nuevas.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['dim_medicos','crm_tareas'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_touch ON %I', t);
+    EXECUTE format('CREATE TRIGGER trg_touch BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION app.touch()', t);
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['fact_pedidos','dim_clientes','dim_medicos','dim_droguerias','config_reglas_comerciales','metas','dim_usuarios','crm_tareas'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_auditar ON %I', t);
+    EXECUTE format('CREATE TRIGGER trg_auditar AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION app.auditar()', t);
+  END LOOP;
+  ALTER TABLE registro_cambios ENABLE ROW LEVEL SECURITY;
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    FOREACH t IN ARRAY ARRAY['dim_medicos','crm_tareas','crm_visitas'] LOOP
+      IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = t) THEN
+        EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+      END IF;
+    END LOOP;
+  END IF;
+END $$;
+
+DROP POLICY IF EXISTS medicos_lectura ON dim_medicos;
+CREATE POLICY medicos_lectura ON dim_medicos FOR SELECT TO authenticated
+  USING ((SELECT app.es_staff()) OR vendedor_id = (SELECT auth.uid()) OR creado_por = (SELECT auth.uid()));
+DROP POLICY IF EXISTS medicos_gestion ON dim_medicos;
+CREATE POLICY medicos_gestion ON dim_medicos FOR ALL TO authenticated
+  USING ((SELECT app.rol())::text IN ('admin','gerente')) WITH CHECK ((SELECT app.rol())::text IN ('admin','gerente'));
+-- El visitador agrega médicos a su propia cartera y corrige los que él creó.
+DROP POLICY IF EXISTS medicos_alta_visitador ON dim_medicos;
+CREATE POLICY medicos_alta_visitador ON dim_medicos FOR INSERT TO authenticated
+  WITH CHECK ((SELECT app.rol()) = 'vendedor' AND vendedor_id = (SELECT auth.uid()));
+DROP POLICY IF EXISTS medicos_edicion_visitador ON dim_medicos;
+CREATE POLICY medicos_edicion_visitador ON dim_medicos FOR UPDATE TO authenticated
+  USING (creado_por = (SELECT auth.uid()) AND vendedor_id = (SELECT auth.uid()))
+  WITH CHECK (vendedor_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS tareas_lectura ON crm_tareas;
+CREATE POLICY tareas_lectura ON crm_tareas FOR SELECT TO authenticated
+  USING (vendedor_id = (SELECT auth.uid()) OR (SELECT app.es_staff()));
+-- Cada quien maneja sus tareas; la gerencia y la administración también asignan tareas a otros.
+DROP POLICY IF EXISTS tareas_gestion ON crm_tareas;
+CREATE POLICY tareas_gestion ON crm_tareas FOR ALL TO authenticated
+  USING (vendedor_id = (SELECT auth.uid()) OR (SELECT app.rol())::text IN ('admin','gerente'))
+  WITH CHECK (vendedor_id = (SELECT auth.uid()) OR (SELECT app.rol())::text IN ('admin','gerente'));
+
+DROP POLICY IF EXISTS cambios_lectura ON registro_cambios;
+CREATE POLICY cambios_lectura ON registro_cambios FOR SELECT TO authenticated
+  USING ((SELECT app.rol())::text IN ('admin','gerente'));
+
+REVOKE ALL ON dim_medicos, crm_tareas, registro_cambios FROM anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON dim_medicos, crm_tareas TO authenticated;
+GRANT SELECT ON registro_cambios TO authenticated;
+REVOKE ALL ON FUNCTION cargar_medicos(jsonb), revisar_tareas(date), revision_diaria() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION cargar_medicos(jsonb), revisar_tareas(date), revision_diaria(), sync_guardar_tarea(jsonb) TO authenticated;
+
+-- pg_cron (si existe): la revisión diaria reemplaza a la de solo metas.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    BEGIN EXECUTE $c$SELECT cron.unschedule('nova-revisar-metas')$c$; EXCEPTION WHEN OTHERS THEN NULL; END;
+    EXECUTE $c$SELECT cron.schedule('nova-revision-diaria', '0 12 * * *', 'SELECT public.revision_diaria()')$c$;
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'No se programó la revisión diaria: %', SQLERRM;
+END $$;
 
 NOTIFY pgrst, 'reload schema';

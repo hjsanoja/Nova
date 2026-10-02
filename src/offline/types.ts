@@ -229,11 +229,17 @@ export interface LocalDetalle {
   remanente_derivado_en?: string | null;
 }
 
-export type ResultadoVisita = 'pedido_tomado' | 'sin_pedido' | 'cliente_cerrado' | 'reprogramada';
+/** Farmacia: pedido_tomado, sin_pedido, cliente_cerrado, reprogramada. Médico: realizada, no_atendio, reprogramada. */
+export type ResultadoVisita = 'pedido_tomado' | 'sin_pedido' | 'cliente_cerrado' | 'reprogramada' | 'realizada' | 'no_atendio';
+
+/** Muestra médica entregada en una visita. */
+export interface MuestraVisita { producto_id: string; cantidad: number }
 
 export interface LocalVisita {
   id: string;
-  cliente_id: string;
+  /** Visita a una farmacia (cliente_id) o a un médico (medico_id): siempre una de las dos. */
+  cliente_id: string | null;
+  medico_id?: string | null;
   vendedor_id: string;
   checkin_en: string;
   lat?: number | null;
@@ -245,6 +251,55 @@ export interface LocalVisita {
   resultado?: ResultadoVisita | null;
   pedido_id?: string | null;
   notas?: string | null;
+  objetivo?: string | null;
+  /** Productos presentados. */
+  productos?: string[];
+  muestras?: MuestraVisita[];
+  proxima_accion?: string | null;
+  proxima_fecha?: string | null;
+  sync_estado: EstadoSync;
+}
+
+/** Médico de la cartera del visitador. */
+export interface LocalMedico {
+  id: string;
+  codigo?: string | null;
+  nombre: string;
+  especialidad?: string | null;
+  centro?: string | null;
+  direccion?: string | null;
+  ciudad?: string | null;
+  zona?: string | null;
+  telefono?: string | null;
+  correo?: string | null;
+  categoria?: 'A' | 'B' | 'C' | null;
+  /** Visitas esperadas por mes. */
+  visitas_mes?: number | null;
+  lat?: number | null;
+  lon?: number | null;
+  vendedor_id?: string | null;
+  notas?: string | null;
+  activo: boolean;
+  updated_at?: string;
+}
+
+export type EstadoTarea = 'pendiente' | 'hecha' | 'cancelada';
+
+/** Tarea o recordatorio del representante (con una farmacia, un médico o sin ninguno). */
+export interface LocalTarea {
+  id: string;
+  vendedor_id: string;
+  cliente_id?: string | null;
+  medico_id?: string | null;
+  visita_id?: string | null;
+  titulo: string;
+  notas?: string | null;
+  /** YYYY-MM-DD */
+  vence_en: string;
+  estado: EstadoTarea;
+  hecha_en?: string | null;
+  origen: 'manual' | 'visita' | 'riesgo' | 'sistema';
+  updated_at?: string;
   sync_estado: EstadoSync;
 }
 
@@ -315,7 +370,8 @@ export type TipoOutbox =
   | 'pedido.rerutear'
   | 'visita.registrar'
   | 'farmacia.codigo'
-  | 'plantilla.guardar';
+  | 'plantilla.guardar'
+  | 'tarea.guardar';
 
 export type EstadoOutbox = 'pendiente' | 'error' | 'conflicto';
 
