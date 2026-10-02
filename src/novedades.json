@@ -1,8 +1,20 @@
 [
   {
+    "version": "12.1",
+    "fecha": "2026-10-02",
+    "tipo": "ajuste",
+    "titulo": "Dictado: presionar para hablar, con onda de voz y más precisión",
+    "cambios": [
+      "El micrófono escucha solo mientras lo mantienes presionado (también con la barra espaciadora en la computadora). Al soltarlo pasa a la vista previa: ya no hay dudas de cuándo deja de escuchar.",
+      "Mientras escucha, una onda roja animada y un anillo alrededor del botón lo indican; la onda crece cuando detecta tu voz.",
+      "Más precisión: de las varias versiones que entiende el teléfono se queda con la que coincide con tu catálogo y tus farmacias, reconoce palabras mal escuchadas por cómo suenan (b/v, c/s/z, ll/y, h muda…) y, entre presentaciones parecidas, prefiere la que esa farmacia suele comprar."
+    ]
+  },
+  {
     "version": "12.0",
     "fecha": "2026-10-02",
     "tipo": "mayor",
+    "pr": 16,
     "titulo": "Otras actividades y días libres con aprobación del gerente",
     "cambios": [
       "Mis actividades: el representante reporta vacaciones, reunión de ciclo, impulso u otra actividad (un día, varios días o media jornada), también sin señal, y ve si está por aprobar, aprobada o rechazada.",

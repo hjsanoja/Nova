@@ -158,6 +158,29 @@ function distancia(a: string, b: string, tope = 2): number {
   return prev[b.length];
 }
 
+/**
+ * Clave fonética del español: lo que el reconocimiento de voz confunde suena igual (b/v, c/s/z, ll/y, h muda, qu/k, g/j
+ * ante e/i, letras dobles). "atorbastatina" y "atorvastatina" dan la misma clave.
+ */
+export function fonetica(palabra: string): string {
+  if (/^\d+$/.test(palabra)) return palabra;
+  return palabra
+    .replace(/ph/g, 'f')
+    .replace(/ch/g, '#')
+    .replace(/h/g, '')
+    .replace(/qu([ei])/g, 'k$1')
+    .replace(/c([ei])/g, 's$1')
+    .replace(/g([ei])/g, 'j$1')
+    .replace(/gu([ei])/g, 'g$1')
+    .replace(/c|q/g, 'k')
+    .replace(/z/g, 's')
+    .replace(/[vw]/g, 'b')
+    .replace(/ll/g, 'y')
+    .replace(/y$/, 'i')
+    .replace(/x/g, 'ks')
+    .replace(/(.)\1+/g, '$1');
+}
+
 const IGNORAR = new Set(['farmacia', 'farmacias', 'drogueria', 'la', 'el', 'los', 'las', 'de', 'del', 'ca', 'c', 'a', 's', 'sa', 'srl', 'y']);
 
 /** Qué tan bien las palabras dichas describen un texto (0 a 1). Los números deben coincidir exactos. */
@@ -171,11 +194,51 @@ export function parecido(palabras: string[], objetivo: string[]): number {
       if (o === p) { mejor = 1; break; }
       if (/^\d+$/.test(p)) continue;
       if (p.length >= 4 && (o.startsWith(p) || p.startsWith(o)) && o.length >= 4) mejor = Math.max(mejor, 0.85);
+      else if (p.length >= 3 && o.length >= 3 && fonetica(p) === fonetica(o)) mejor = Math.max(mejor, 0.9);
       else if (p.length >= 5 && distancia(p, o) <= (p.length >= 9 ? 2 : 1)) mejor = Math.max(mejor, 0.75);
+      else if (p.length >= 6 && distancia(fonetica(p), fonetica(o)) <= 1) mejor = Math.max(mejor, 0.7);
     }
     suma += mejor;
   }
   return suma / utiles.length;
+}
+
+// ---------------------------------------------------------------------------- elegir lo que se escuchó
+
+/** Palabras que NOVA conoce (farmacias, productos, droguerías y las del pedido), con su forma fonética. */
+export function crearVocabulario(textos: Iterable<string>): Set<string> {
+  const v = new Set<string>(['plantilla', 'drogueria', 'farmacia', 'por', 'cajas', 'unidades', 'mg', 'ml']);
+  for (const t of textos) {
+    for (const w of normalizar(t).split(' ')) {
+      if (w.length < 3 || /^\d+$/.test(w)) continue;
+      v.add(w);
+      v.add(`~${fonetica(w)}`);
+    }
+  }
+  return v;
+}
+
+/** Qué tanto de lo escuchado son palabras conocidas o cantidades (0 a 1). */
+export function puntuarTranscripcion(texto: string, vocabulario: Set<string>): number {
+  const tokens = palabrasANumeros(normalizar(texto).split(' ').filter(Boolean)).filter((t) => !RELLENO.has(t) && !IGNORAR.has(t));
+  if (tokens.length === 0) return 0;
+  let conocidas = 0;
+  for (const t of tokens) if (/^\d+$/.test(t) || vocabulario.has(t) || vocabulario.has(`~${fonetica(t)}`)) conocidas++;
+  return conocidas / tokens.length;
+}
+
+/**
+ * El reconocimiento de voz da varias versiones de cada frase (de más a menos probable). Se queda con la que más se
+ * parece al catálogo y a las farmacias; ante un empate, con la que el reconocimiento consideró más probable.
+ */
+export function elegirTranscripcion(alternativas: string[], vocabulario: Set<string>): string {
+  let mejor = alternativas[0] ?? '';
+  let puntos = puntuarTranscripcion(mejor, vocabulario);
+  for (const a of alternativas.slice(1)) {
+    const p = puntuarTranscripcion(a, vocabulario);
+    if (p > puntos + 0.1) { mejor = a; puntos = p; }
+  }
+  return mejor;
 }
 
 // ---------------------------------------------------------------------------- droguería y plantilla
@@ -252,13 +315,23 @@ export interface PedidoDictado<C, P, D = DrogueriaDictable> {
 }
 
 const UMBRAL = 0.5;
+/** Ventaja de lo que la farmacia ya compra: decide entre presentaciones parecidas ("losartán" → la de 50 que siempre pide). */
+const BONO_HISTORIAL = 0.08;
+
+export interface OpcionesDictado<C> {
+  /** Farmacia a usar si la frase no nombra ninguna (la del carrito abierto). */
+  clientePorDefecto?: C | null;
+  /** Lo que compra cada farmacia: producto -> peso entre 0 y 1 (1 = lo que más compra). */
+  historial?: (clienteId: string) => ReadonlyMap<string, number> | undefined;
+}
 
 /** Interpreta el texto dictado contra las farmacias y el catálogo del dispositivo. */
 export function interpretarDictado<C extends ClienteDictable, P extends ProductoDictable, D extends DrogueriaDictable = DrogueriaDictable>(
   textoDictado: string,
   clientes: C[],
   productos: P[],
-  droguerias: D[] = []
+  droguerias: D[] = [],
+  opciones: OpcionesDictado<C> = {}
 ): PedidoDictado<C, P, D> {
   const { resto: texto, drogueria, plantilla } = extraerDrogueriaYPlantilla(textoDictado, droguerias);
   const tokensCliente = new Map(clientes.map((c) => [c.id, c.busqueda.split(' ')]));
@@ -267,10 +340,20 @@ export function interpretarDictado<C extends ClienteDictable, P extends Producto
   const frase = separarFrase(texto, (palabras) => puntuarClientes(palabras)[0]?.p ?? 0);
 
   const candidatosCliente = frase.cliente.length ? puntuarClientes(frase.cliente) : [];
+  const clienteElegido = candidatosCliente[0] && candidatosCliente[0].p >= UMBRAL ? candidatosCliente[0].c : null;
+  const deCliente = clienteElegido ?? opciones.clientePorDefecto ?? null;
+  const compra = deCliente ? opciones.historial?.(deCliente.id) : undefined;
   const activos = productos.filter((p) => p.activo);
   const lineas = frase.lineas.map((l) => {
+    const numeros = l.palabras.filter((w) => /^\d+$/.test(w));
     const puntuados = activos
-      .map((p) => ({ p, s: parecido(l.palabras, p.tokens) + (normalizar(p.nombre_comercial).startsWith(l.palabras[0] ?? '~') ? 0.05 : 0) }))
+      .map((p) => {
+        let s = parecido(l.palabras, p.tokens) + (normalizar(p.nombre_comercial).startsWith(l.palabras[0] ?? '~') ? 0.05 : 0);
+        // Una concentración dicha que el producto no tiene ("losartán 100" frente a Losartán 50) lo aleja.
+        if (numeros.some((n) => !p.tokens.includes(n))) s -= 0.15;
+        if (s >= 0.3 && compra?.has(p.id)) s += BONO_HISTORIAL * (compra.get(p.id) ?? 0);
+        return { p, s };
+      })
       .filter((x) => x.s >= 0.3)
       .sort((a, b) => b.s - a.s || a.p.nombre_comercial.length - b.p.nombre_comercial.length)
       .slice(0, 6);
@@ -284,7 +367,6 @@ export function interpretarDictado<C extends ClienteDictable, P extends Producto
       confianza: mejor ? Math.min(1, mejor.s) : 0,
     };
   });
-  const clienteElegido = candidatosCliente[0] && candidatosCliente[0].p >= UMBRAL ? candidatosCliente[0].c : null;
   return {
     cliente: clienteElegido,
     alternativasCliente: candidatosCliente.filter((x) => x.c !== clienteElegido).slice(0, 5).map((x) => x.c),

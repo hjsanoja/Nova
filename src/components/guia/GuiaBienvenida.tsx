@@ -50,7 +50,7 @@ export function pasosDeLaGuia(usuario: Pick<Usuario, 'rol' | 'nombre_completo'>)
         icono: ShoppingCart,
         titulo: 'Tomar un pedido',
         texto: 'En Pedir eliges la farmacia, agregas productos, eliges la droguería y tocas Enviar.',
-        puntos: ['Cada producto empieza en 1 unidad; cámbiala con + y −.', 'Con el micrófono puedes dictar el pedido completo.', 'La primera vez con una droguería te pide el código de la farmacia. Es solo una vez.'],
+        puntos: ['Cada producto empieza en 1 unidad; cámbiala con + y −.', 'Mantén presionado el micrófono para dictar el pedido completo; al soltarlo ves la vista previa.', 'La primera vez con una droguería te pide el código de la farmacia. Es solo una vez.'],
       },
       {
         icono: BadgePercent,
