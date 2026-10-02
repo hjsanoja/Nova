@@ -59,7 +59,7 @@ export const CAMPOS: Record<string, string> = {
   nombre_comercial: 'Nombre', razon_social: 'Razón social', rif: 'RIF', direccion: 'Dirección', telefono: 'Teléfono', frecuencia_dias: 'Frecuencia (días)',
   estado_validacion: 'Validación', segmento: 'Segmento', nombre: 'Nombre', especialidad: 'Especialidad', centro: 'Centro', categoria: 'Categoría',
   vendedor_id: 'Representante', objetivo: 'Objetivo', indicador: 'Indicador', periodo: 'Mes', activo: 'Activo', rol: 'Rol', correo: 'Correo',
-  descuento_max_pct: 'Descuento máximo', formato_export: 'Formato de archivo', titulo: 'Título', vence_en: 'Vence', visitas_mes: 'Visitas al mes',
+  descuento_max_pct: 'Descuento máximo', formato_export: 'Formato de archivo', titulo: 'Título', vence_en: 'Vence', visitas_mes: 'Visitas por ciclo',
   transferencista_id: 'Transferencista', drogueria_id: 'Droguería', cliente_id: 'Farmacia', lat: 'Latitud', lon: 'Longitud', zona: 'Zona', ciudad: 'Ciudad',
 };
 const valorTexto = (v: unknown) => (v == null || v === '' ? '—' : typeof v === 'object' ? 'cambió' : String(v));

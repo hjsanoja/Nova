@@ -1,6 +1,10 @@
 // Indicadores del Resumen (funciones puras sobre los datos del dispositivo): pedidos y unidades por día y por mes,
 // productos más pedidos, ranking por vendedor o droguería y cobertura del fichero.
 import type { LocalDetalle, LocalPedido } from '../offline/types';
+import { enRango } from '../ciclos/logica';
+
+/** Fechas de un período (ciclo o mes), YYYY-MM-DD, ambas incluidas. */
+export interface Rango { desde: string; hasta: string }
 
 /** Pedidos que cuentan como venta (no borradores, cancelados ni rechazados). */
 export const cuenta = (p: Pick<LocalPedido, 'estado'>) => !['borrador', 'cancelado', 'rechazado'].includes(p.estado);
@@ -83,17 +87,36 @@ export function resumenMeses(pedidos: LocalPedido[], unidades: Map<string, numbe
   return { actual: cerrar(acc.actual), anterior: cerrar(acc.anterior), hoy: cerrar(acc.hoy) };
 }
 
+/** Totales de un período (ciclo o mes), del período anterior (para la variación) y de hoy. */
+export function resumenPeriodo(pedidos: LocalPedido[], unidades: Map<string, number>, rango: Rango, anterior?: Rango | null, hoy = new Date()): { actual: ResumenPeriodo; anterior: ResumenPeriodo; hoy: ResumenPeriodo } {
+  const diaHoy = diaLocal(hoy.toISOString());
+  const vacio = () => ({ pedidos: 0, unidades: 0, clientes: new Set<string>() });
+  const acc = { actual: vacio(), anterior: vacio(), hoy: vacio() };
+  for (const p of pedidos) {
+    if (!cuenta(p)) continue;
+    const destinos = [enRango(p.created_at, rango) ? acc.actual : null, anterior && enRango(p.created_at, anterior) ? acc.anterior : null, diaLocal(p.created_at) === diaHoy ? acc.hoy : null];
+    for (const d of destinos) {
+      if (!d) continue;
+      d.pedidos++;
+      d.unidades += unidades.get(p.id) ?? 0;
+      d.clientes.add(p.cliente_id);
+    }
+  }
+  const cerrar = (x: ReturnType<typeof vacio>): ResumenPeriodo => ({ pedidos: x.pedidos, unidades: x.unidades, clientes: x.clientes.size });
+  return { actual: cerrar(acc.actual), anterior: cerrar(acc.anterior), hoy: cerrar(acc.hoy) };
+}
+
 /** Variación porcentual redondeada; null si no hay base para comparar. */
 export const variacion = (actual: number, anterior: number): number | null => (anterior > 0 ? Math.round(((actual - anterior) / anterior) * 100) : null);
 
 export interface FilaRanking { clave: string; nombre: string; valor: number }
 
-/** Suma unidades del mes por una clave del pedido (vendedor, droguería, farmacia) y devuelve los mayores. */
-export function rankingMes(pedidos: LocalPedido[], unidades: Map<string, number>, clave: (p: LocalPedido) => string | null | undefined, nombre: (k: string) => string, limite = 5, hoy = new Date()): FilaRanking[] {
+/** Suma unidades del mes (o del período indicado) por una clave del pedido (vendedor, droguería, farmacia) y devuelve los mayores. */
+export function rankingMes(pedidos: LocalPedido[], unidades: Map<string, number>, clave: (p: LocalPedido) => string | null | undefined, nombre: (k: string) => string, limite = 5, hoy = new Date(), rango?: Rango): FilaRanking[] {
   const mes = mesLocal(hoy);
   const suma = new Map<string, number>();
   for (const p of pedidos) {
-    if (!cuenta(p) || mesLocal(new Date(p.created_at)) !== mes) continue;
+    if (!cuenta(p) || (rango ? !enRango(p.created_at, rango) : mesLocal(new Date(p.created_at)) !== mes)) continue;
     const k = clave(p);
     if (!k) continue;
     suma.set(k, (suma.get(k) ?? 0) + (unidades.get(p.id) ?? 0));
@@ -101,10 +124,10 @@ export function rankingMes(pedidos: LocalPedido[], unidades: Map<string, number>
   return [...suma.entries()].map(([k, v]) => ({ clave: k, nombre: nombre(k), valor: v })).sort((a, b) => b.valor - a.valor).slice(0, limite);
 }
 
-/** Productos más pedidos del mes (unidades). */
-export function topProductosMes(pedidos: LocalPedido[], detalles: LocalDetalle[], nombre: (id: string) => string, limite = 5, hoy = new Date()): FilaRanking[] {
+/** Productos más pedidos del mes (o del período indicado), en unidades. */
+export function topProductosMes(pedidos: LocalPedido[], detalles: LocalDetalle[], nombre: (id: string) => string, limite = 5, hoy = new Date(), rango?: Rango): FilaRanking[] {
   const mes = mesLocal(hoy);
-  const delMes = new Set(pedidos.filter((p) => cuenta(p) && mesLocal(new Date(p.created_at)) === mes).map((p) => p.id));
+  const delMes = new Set(pedidos.filter((p) => cuenta(p) && (rango ? enRango(p.created_at, rango) : mesLocal(new Date(p.created_at)) === mes)).map((p) => p.id));
   const suma = new Map<string, number>();
   for (const d of detalles) if (delMes.has(d.pedido_id)) suma.set(d.producto_id, (suma.get(d.producto_id) ?? 0) + d.unidades_solicitadas);
   return [...suma.entries()].map(([k, v]) => ({ clave: k, nombre: nombre(k), valor: v })).sort((a, b) => b.valor - a.valor).slice(0, limite);

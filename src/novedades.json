@@ -1,8 +1,23 @@
 [
   {
+    "version": "11.0",
+    "fecha": "2026-10-02",
+    "tipo": "mayor",
+    "titulo": "Ciclos por equipo: días hábiles, feriados y metas por ciclo",
+    "cambios": [
+      "Gestión → Ciclos: cada equipo tiene su calendario de ciclos (y uno General para los demás). Los ciclos empiezan y terminan en día hábil, no se cruzan y «Crear el siguiente» propone el próximo con un toque.",
+      "Feriados nacionales y regionales: la app sugiere los nacionales del año (con Carnaval y Semana Santa) y los regionales solo cuentan para quien vive en ese estado.",
+      "Todo se mide por ciclo: el Inicio muestra pedidos, unidades y farmacias del ciclo, el promedio por día hábil y los días hábiles que quedan. La cobertura de médicos y el reporte de visitas también van por ciclo.",
+      "Metas por ciclo: tabla rápida por representante con unidades, pedidos, farmacias, visitas a médicos y farmacias y médicos visitados; repetir las del ciclo anterior, copiar de otro ciclo y ajustar todo en %.",
+      "El ritmo de las metas se calcula con días hábiles y, al terminar un ciclo, NOVA lo cierra y guarda la foto de sus resultados.",
+      "Sin ciclos, NOVA sigue midiendo por mes como antes."
+    ]
+  },
+  {
     "version": "10.0",
     "fecha": "2026-10-01",
     "tipo": "mayor",
+    "pr": 14,
     "titulo": "CRM: médicos, visitas con reporte, tareas y ficha 360°",
     "cambios": [
       "Médicos: la cartera de cada visitador con su cobertura del mes (visitas realizadas contra las esperadas). La gerencia los carga con un Excel o uno por uno.",

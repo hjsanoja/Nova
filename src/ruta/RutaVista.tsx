@@ -10,6 +10,7 @@ import { VisitaForm } from '../crm/VisitaForm';
 import type { DestinoVisita } from '../crm/VisitaForm';
 import { leerUbicacion, fechaCorta, useMedicos } from '../crm/datos';
 import { coberturaMedicos } from '../crm/medicos';
+import { usePeriodo } from '../ciclos/datos';
 import type { Usuario } from '../types/pharmacy';
 import { actividadDeClientes } from '../vistas/logica';
 import { prepararPedidoPara } from '../vistas/navegacion';
@@ -23,7 +24,7 @@ const RADIO_M = 100;
 
 /**
  * Ruta del día: las farmacias del fichero a las que les toca visita, ordenadas por cercanía, en un mapa, y los médicos de la
- * cartera que faltan por visitar este mes (visitador mixto). Desde cada uno se abre la navegación, se registra la visita
+ * cartera que faltan por visitar en el ciclo de su equipo (o en el mes, sin ciclos; visitador mixto). Desde cada uno se abre la navegación, se registra la visita
  * con su reporte y el GPS (queda la distancia al lugar) o se toma el pedido.
  */
 export function RutaVista({ usuario, irATab }: { usuario: Usuario; irATab: (t: string) => void }) {
@@ -39,7 +40,8 @@ export function RutaVista({ usuario, irATab }: { usuario: Usuario; irATab: (t: s
   const productos = useProductos();
   const medicos = useMedicos();
   const misMedicos = useMemo(() => medicos.filter((m) => m.vendedor_id === usuario.id), [medicos, usuario.id]);
-  const cobertura = useMemo(() => coberturaMedicos(misMedicos, visitas), [misMedicos, visitas]);
+  const periodo = usePeriodo(usuario);
+  const cobertura = useMemo(() => coberturaMedicos(misMedicos, visitas, { desde: periodo.desde, hasta: periodo.hasta }), [misMedicos, visitas, periodo.desde, periodo.hasta]);
   const medicosPendientes = cobertura.filter((c) => c.hechas < c.esperadas).length;
   const medicosOrdenados = useMemo(() => {
     if (!origen) return cobertura;
@@ -103,7 +105,7 @@ export function RutaVista({ usuario, irATab }: { usuario: Usuario; irATab: (t: s
           <Medidor valor={hechas} total={paraHoy.length} rotulo="Farmacias de hoy" nota={`${paraHoy.length - hechas} por visitar${recorrido ? ` · recorrido aprox. ${distanciaTexto(recorrido)}` : ''}${origen ? '' : ' · toca "Usar mi ubicación" para ordenar desde donde estás'}`} />
           {misMedicos.length > 0 && (
             <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
-              <Medidor valor={cobertura.length - medicosPendientes} total={cobertura.length} rotulo="Médicos visitados este mes" nota={`${medicosPendientes} por visitar`} />
+              <Medidor valor={cobertura.length - medicosPendientes} total={cobertura.length} rotulo={`Médicos visitados ${periodo.tipo === 'ciclo' ? `en el ciclo ${periodo.ciclo?.nombre ?? ''}` : 'este mes'}`} nota={`${medicosPendientes} por visitar${periodo.tipo === 'ciclo' ? ` · quedan ${periodo.restantes} días hábiles` : ''}`} />
             </div>
           )}
         </Tarjeta>
@@ -125,7 +127,7 @@ export function RutaVista({ usuario, irATab }: { usuario: Usuario; irATab: (t: s
                   <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">{m.nombre}</p>
                   <p className="truncate text-xs text-slate-500">{[m.especialidad, m.centro, aqui != null ? `a ${distanciaTexto(aqui)} de ti` : null].filter(Boolean).join(' · ')}</p>
                   <div className="mt-1 flex flex-wrap gap-1">
-                    <Etiqueta tono={listo ? 'exito' : 'neutro'}>{c.hechas} de {c.esperadas} este mes</Etiqueta>
+                    <Etiqueta tono={listo ? 'exito' : 'neutro'}>{c.hechas} de {c.esperadas} {periodo.tipo === 'ciclo' ? 'este ciclo' : 'este mes'}</Etiqueta>
                     {m.categoria && <Etiqueta tono={m.categoria === 'A' ? 'marca' : 'neutro'}>Cat. {m.categoria}</Etiqueta>}
                     {c.ultima && <Etiqueta>Última: {fechaCorta(c.ultima)}</Etiqueta>}
                   </div>

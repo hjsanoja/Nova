@@ -3,10 +3,12 @@ import { textoBusquedaCliente, tokensProducto } from './busqueda';
 import type { FilaRemota, SyncRemote } from './remoto';
 import type { ReglaComercial } from './politicas';
 import type {
+  LocalCiclo,
   LocalCliente,
   LocalCompraMensual,
   LocalDetalle,
   LocalDrogueria,
+  LocalFeriado,
   LocalMapCliente,
   LocalMapProducto,
   LocalComunicado,
@@ -363,6 +365,43 @@ export const TABLAS_PULL: TablaPull[] = [
     },
   },
   {
+    // Ciclos de todos los equipos (pocos): con el nombre del equipo para mostrarlo.
+    remota: 'ciclos',
+    seleccion: 'id,equipo_id,nombre,inicio,fin,notas,cerrado_en,updated_at,deleted_at,dim_equipos(nombre)',
+    aplicar: async (db, filas) => {
+      await db.ciclos.bulkDelete(borrados(filas));
+      await db.ciclos.bulkPut(
+        vigentes(filas).map<LocalCiclo>((f) => ({
+          id: str(f.id),
+          equipo_id: strN(f.equipo_id),
+          equipo_nombre: (f.dim_equipos as { nombre?: string } | null)?.nombre ?? null,
+          nombre: str(f.nombre),
+          inicio: str(f.inicio).slice(0, 10),
+          fin: str(f.fin).slice(0, 10),
+          notas: strN(f.notas),
+          cerrado_en: strN(f.cerrado_en),
+          updated_at: str(f.updated_at),
+        }))
+      );
+    },
+  },
+  {
+    remota: 'feriados',
+    aplicar: async (db, filas) => {
+      await db.feriados.bulkDelete(borrados(filas));
+      await db.feriados.bulkPut(
+        vigentes(filas).map<LocalFeriado>((f) => ({
+          id: str(f.id),
+          fecha: str(f.fecha).slice(0, 10),
+          nombre: str(f.nombre),
+          alcance: f.alcance === 'regional' ? 'regional' : 'nacional',
+          estados: Array.isArray(f.estados) ? (f.estados as string[]) : [],
+          updated_at: str(f.updated_at),
+        }))
+      );
+    },
+  },
+  {
     remota: 'metas',
     podarNoVistos: async (db, vistos) => {
       const sobran = (await db.metas.toCollection().primaryKeys()).filter((id) => !vistos.has(id));
@@ -373,10 +412,12 @@ export const TABLAS_PULL: TablaPull[] = [
       await db.metas.bulkPut(
         vigentes(filas).map<LocalMeta>((f) => ({
           id: str(f.id),
-          periodo: str(f.periodo),
+          periodo: strN(f.periodo),
+          ciclo_id: strN(f.ciclo_id),
           vendedor_id: strN(f.vendedor_id),
           cliente_id: strN(f.cliente_id),
           drogueria_id: strN(f.drogueria_id),
+          medico_id: strN(f.medico_id),
           indicador: (f.indicador as LocalMeta['indicador']) ?? 'unidades',
           objetivo: Number(f.objetivo),
           updated_at: str(f.updated_at),

@@ -1,4 +1,4 @@
-import { BadgePercent, BarChart3, CheckCircle2, Database, LayoutDashboard, ListTodo, Map as IconoMapa, Megaphone, Pill, Settings, ShoppingBag, ShoppingCart, Stethoscope, Target, Users } from 'lucide-react';
+import { BadgePercent, BarChart3, CalendarRange, CheckCircle2, Database, LayoutDashboard, ListTodo, Map as IconoMapa, Megaphone, Pill, Settings, ShoppingBag, ShoppingCart, Stethoscope, Target, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { RolUsuario } from '../../types/pharmacy';
 
@@ -34,6 +34,7 @@ const T = {
   reportes: { id: 'reportes', label: 'Reportes', corto: 'Reportes', icon: BarChart3, grupo: 'Gestión' } as TabDef,
   condiciones: { id: 'condiciones', label: 'Descuentos', corto: 'Descuentos', icon: BadgePercent, grupo: 'Gestión' } as TabDef,
   metas: { id: 'metas', label: 'Metas', corto: 'Metas', icon: Target, grupo: 'Gestión' } as TabDef,
+  ciclos: { id: 'ciclos', label: 'Ciclos', corto: 'Ciclos', icon: CalendarRange, grupo: 'Gestión' } as TabDef,
   comunicados: { id: 'comunicados', label: 'Comunicados', corto: 'Avisos', icon: Megaphone, grupo: 'Gestión' } as TabDef,
   datos: { id: 'datos', label: 'Datos maestros', corto: 'Datos', icon: Database, grupo: 'Gestión' } as TabDef,
   config: { id: 'config', label: 'Configuración', corto: 'Ajustes', icon: Settings, grupo: 'Cuenta' } as TabDef,
@@ -47,9 +48,9 @@ export const TABS_POR_ROL: Record<RolUsuario, TabDef[]> = {
   // Visitador mixto: toma pedidos en farmacias y visita médicos.
   vendedor: principales([T.inicio('Inicio'), T.ruta, T.pedir, T.pedidos('Mis pedidos'), T.tareas('Mis tareas'), T.clientes('Mis clientes'), T.medicos('Mis médicos'), T.config], ['inicio', 'ruta', 'captura', 'pedidos']),
   teletransferencista: principales([T.porProcesar, T.pedidos(), T.clientes(), T.catalogo, T.config], ['por_procesar', 'pedidos', 'clientes', 'catalogo']),
-  gerente: principales([T.inicio(), T.pedidos(), T.tareas(), T.clientes(), T.medicos(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.config], ['inicio', 'reportes', 'pedidos', 'metas']),
+  gerente: principales([T.inicio(), T.pedidos(), T.tareas(), T.clientes(), T.medicos(), T.catalogo, T.reportes, T.metas, T.ciclos, T.condiciones, T.comunicados, T.config], ['inicio', 'reportes', 'pedidos', 'metas']),
   admin: principales(
-    [T.inicio(), T.pedir, T.pedidos(), T.porProcesar, T.tareas(), T.clientes(), T.medicos(), T.catalogo, T.reportes, T.metas, T.condiciones, T.comunicados, T.datos, T.config],
+    [T.inicio(), T.pedir, T.pedidos(), T.porProcesar, T.tareas(), T.clientes(), T.medicos(), T.catalogo, T.reportes, T.metas, T.ciclos, T.condiciones, T.comunicados, T.datos, T.config],
     ['inicio', 'por_procesar', 'pedidos', 'datos']
   ),
 };

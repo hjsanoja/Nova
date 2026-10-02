@@ -6,21 +6,35 @@ import { aCsv, descargarTexto, nombreDeProducto } from '../vistas/logica';
 import { useClientes, useProductos, useUsuariosNube } from '../vistas/useDatos';
 import { textoResultado, useMedicos, useVisitas } from './datos';
 import { coberturaMedicos, muestrasPorProducto, resumenCobertura, visitasPorRepresentante } from './medicos';
+import type { FiltroVisitas } from './medicos';
+import { useCiclos, usePeriodoDeEquipo } from '../ciclos/datos';
+import { enRango } from '../ciclos/logica';
 
-type Rango = '7' | '30' | 'mes';
+type Rango = '7' | '30' | 'mes' | 'ciclo';
 
-/** Reporte de visitas: por representante, cobertura de médicos del mes y muestras entregadas (últimos 90 días en el equipo). */
+/**
+ * Reporte de visitas: por representante, cobertura de médicos y muestras entregadas (últimos 90 días en el equipo). En
+ * "Ciclo" cada representante se mide con el ciclo vigente de su equipo (o el general; sin ciclos, el mes).
+ */
 export function ReporteVisitas() {
   const visitas = useVisitas();
   const medicos = useMedicos();
   const productos = useProductos();
   const clientes = useClientes();
   const { usuarios } = useUsuariosNube();
-  const [rango, setRango] = useState<Rango>('mes');
-  const desde = useMemo(() => {
+  const ciclos = useCiclos();
+  const [eleccion, setRango] = useState<Rango | null>(null);
+  const rango: Rango = eleccion ?? (ciclos.length ? 'ciclo' : 'mes');
+  const periodoDeEquipo = usePeriodoDeEquipo();
+  const periodoDe = useMemo(() => {
+    const equipo = new Map(usuarios.map((u) => [u.id, u.equipo_id ?? null]));
+    return (vendedorId?: string | null) => periodoDeEquipo(vendedorId ? equipo.get(vendedorId) : null);
+  }, [usuarios, periodoDeEquipo]);
+  const desde = useMemo<FiltroVisitas>(() => {
     const h = new Date();
+    if (rango === 'ciclo') return (v) => enRango(v.checkin_en, periodoDe(v.vendedor_id));
     return rango === 'mes' ? new Date(h.getFullYear(), h.getMonth(), 1) : new Date(h.getFullYear(), h.getMonth(), h.getDate() - Number(rango) + 1);
-  }, [rango]);
+  }, [rango, periodoDe]);
   const nombre = (id: string) => usuarios.find((u) => u.id === id)?.nombre_completo ?? 'Representante';
   const filas = useMemo(() => visitasPorRepresentante(visitas, desde), [visitas, desde]);
   const muestras = useMemo(() => {
@@ -30,18 +44,21 @@ export function ReporteVisitas() {
   const coberturaRep = useMemo(() => {
     const porRep = new Map<string, typeof medicos>();
     for (const m of medicos) if (m.vendedor_id) porRep.set(m.vendedor_id, [...(porRep.get(m.vendedor_id) ?? []), m]);
-    return [...porRep.entries()].map(([id, ms]) => ({ id, ...resumenCobertura(coberturaMedicos(ms, visitas)) })).sort((a, b) => a.cubiertos / a.total - b.cubiertos / b.total);
-  }, [medicos, visitas]);
-  const total = resumenCobertura(coberturaMedicos(medicos, visitas));
+    return [...porRep.entries()].map(([id, ms]) => ({ id, ...resumenCobertura(coberturaMedicos(ms, visitas, periodoDe(id))) })).sort((a, b) => a.cubiertos / a.total - b.cubiertos / b.total);
+  }, [medicos, visitas, periodoDe]);
+  // Cobertura: cada médico con el ciclo vigente del equipo de su representante (o el mes, si no hay ciclos).
+  const total = resumenCobertura(coberturaMedicos(medicos, visitas, (m) => periodoDe(m.vendedor_id)));
+  const conCiclos = medicos.some((m) => periodoDe(m.vendedor_id).tipo === 'ciclo');
 
   const descargar = () => {
     const c = new Map(clientes.map((x) => [x.id, x.nombre_comercial]));
     const m = new Map(medicos.map((x) => [x.id, x.nombre]));
     const p = new Map(productos.map((x) => [x.id, x]));
-    const enRango = visitas.filter((v) => new Date(v.checkin_en) >= desde).sort((a, b) => a.checkin_en.localeCompare(b.checkin_en));
-    descargarTexto(`visitas_${desde.toISOString().slice(0, 10)}.csv`, aCsv(
+    const entra = (v: (typeof visitas)[number]) => (desde instanceof Date ? new Date(v.checkin_en) >= desde : desde(v));
+    const delPeriodo = visitas.filter(entra).sort((a, b) => a.checkin_en.localeCompare(b.checkin_en));
+    descargarTexto(`visitas_${rango === 'ciclo' ? 'ciclo' : (desde as Date).toISOString().slice(0, 10)}.csv`, aCsv(
       ['Fecha', 'Representante', 'Tipo', 'Visitado', 'Resultado', 'En el lugar', 'Objetivo', 'Productos', 'Muestras', 'Nota', 'Próxima acción'],
-      enRango.map((v) => [
+      delPeriodo.map((v) => [
         new Date(v.checkin_en).toLocaleString('es'), nombre(v.vendedor_id), v.medico_id ? 'Médico' : 'Farmacia',
         v.medico_id ? m.get(v.medico_id) ?? '' : c.get(v.cliente_id ?? '') ?? '', textoResultado(v.resultado), v.dentro_de_radio ? 'Sí' : 'No',
         v.objetivo ?? '', (v.productos ?? []).map((id) => nombreDeProducto(p.get(id))).join(', '),
@@ -54,7 +71,7 @@ export function ReporteVisitas() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Segmentado valor={rango} onChange={setRango} opciones={[{ id: '7', texto: '7 días' }, { id: '30', texto: '30 días' }, { id: 'mes', texto: 'Este mes' }]} />
+        <Segmentado valor={rango} onChange={setRango} opciones={[...(ciclos.length ? [{ id: 'ciclo' as const, texto: 'Ciclo' }] : []), { id: '7', texto: '7 días' }, { id: '30', texto: '30 días' }, { id: 'mes', texto: 'Este mes' }]} />
         <Boton icono={Download} onClick={descargar} disabled={filas.length === 0}>Descargar visitas</Boton>
       </div>
 
@@ -94,12 +111,12 @@ export function ReporteVisitas() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <Tarjeta>
-          <Subtitulo>Cobertura de médicos · este mes</Subtitulo>
+          <Subtitulo>Cobertura de médicos · {conCiclos ? 'ciclo vigente' : 'este mes'}</Subtitulo>
           {total.total === 0 ? (
             <Vacio titulo="Sin médicos cargados" texto="Cárgalos en el módulo Médicos." />
           ) : (
             <div className="flex flex-col gap-4">
-              <Medidor valor={total.cubiertos} total={total.total} rotulo="Médicos con todas sus visitas" nota={`${total.visitas} de ${total.esperadas} visitas esperadas en el mes`} />
+              <Medidor valor={total.cubiertos} total={total.total} rotulo="Médicos con todas sus visitas" nota={`${total.visitas} de ${total.esperadas} visitas esperadas ${conCiclos ? 'en el ciclo de cada equipo' : 'en el mes'}`} />
               {coberturaRep.map((r) => (
                 <Medidor key={r.id} valor={r.cubiertos} total={r.total} rotulo={nombre(r.id)} nota={`${r.visitas} de ${r.esperadas} visitas`} />
               ))}

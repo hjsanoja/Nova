@@ -8,7 +8,7 @@ si una fase se parte en dos PR, cada uno sube su versión.
 | 1 ✅ | v8.0 | Diseño nuevo «Bosque» | No |
 | 2 ✅ | v9.0 | Respuesta de la droguería por archivo · Metas con alertas · Farmacias en riesgo | Sí |
 | 3 ✅ | v10.0 | CRM: Médicos · Visitas con reporte (visitador mixto) · Tareas y recordatorios · Ficha 360° · Registro de cambios | Sí |
-| 4 | v11.0 | **Ciclos** (nuevo): calendario de ciclos con días hábiles y feriados · todo se mide por ciclo · metas por ciclo fáciles de repetir | Sí |
+| 4 ✅ | v11.0 | **Ciclos por equipo**: calendario con días hábiles y feriados nacionales y regionales · todo se mide por ciclo · metas por ciclo fáciles de repetir · cierre con foto de resultados | Sí |
 | 5 | v12.0 | **Otras actividades** (nuevo): días libres y actividades con aprobación del gerente · cobertura ajustada | Sí |
 | 6 | v13.0 | Automatizaciones · WhatsApp · Monitoreo de errores y respaldo · Robustez de la base | Sí |
 | 7 | v14.0 (experimental) | Laboratorio de precios e inventario por droguería (solo administrador) | Sí |
@@ -106,37 +106,46 @@ si una fase se parte en dos PR, cada uno sube su versión.
 
 ---
 
-## Fase 4 — Ciclos (v11.0) · *nueva petición, evaluada*
+## Fase 4 — Ciclos (v11.0) ✅
 
-**Qué se pidió:** medir visitas, pedidos y demás indicadores por **ciclos** (no por mes calendario); un módulo para definir cuándo empieza y termina cada ciclo; metas de unidades, pedidos y visitas por ciclo, fáciles de establecer y de **repetir** de ciclos anteriores; metas por farmacias, pedidos y médicos; los ciclos empiezan y terminan en **días hábiles**.
+**Qué se pidió:** medir visitas, pedidos y demás indicadores por **ciclos** (no por mes calendario); un módulo para definir cuándo empieza y termina cada ciclo; metas de unidades, pedidos y visitas por ciclo, fáciles de establecer y de **repetir** de ciclos anteriores; metas por farmacias, pedidos y médicos; los ciclos empiezan y terminan en **días hábiles**. Respuestas del equipo: los ciclos son **por equipo** (cada equipo puede tener uno distinto), duran normalmente 4 semanas pero pueden variar, y hay feriados **nacionales y regionales**.
 
-**Evaluación:** es viable y encaja con lo que ya existe. Hoy todo se mide por mes (Inicio, metas, cobertura de médicos, reportes); el cambio de fondo es reemplazar «el mes» por «el ciclo vigente» en un solo lugar (una función que devuelve el período actual) para que todas las pantallas lo usen. Si no hay ciclos definidos, NOVA sigue midiendo por mes, así que se puede activar sin romper nada.
+**Cómo quedó:** si no hay ciclos, NOVA sigue midiendo por mes, así que se activa sin romper nada.
 
-### 4.1 Calendario de ciclos (solo administración)
-1. Pantalla **Ciclos**: nombre (C1-2027…), fecha de inicio y de fin, estado (planificado, vigente, cerrado).
-2. **Días hábiles:** lunes a viernes menos los **feriados** que cargue la administración (calendario de feriados nacionales; regionales si se necesitan).
-   - NOVA no deja guardar un ciclo que empiece o termine en un día no hábil, y sugiere el día hábil más cercano.
-   - No permite ciclos que se solapen; avisa si queda un hueco entre dos ciclos.
-3. **Crear el siguiente con un toque:** propone el próximo ciclo con la misma duración, empezando el siguiente día hábil.
-4. Cada ciclo muestra cuántos días hábiles tiene (dato clave para las metas y la cobertura).
+### 4.1 Calendario de ciclos y feriados (Gestión → Ciclos)
+1. **Ciclos por equipo:** una tarjeta por equipo y una **General** (la usan los equipos que no tienen ciclo propio). Cada ciclo tiene nombre (C10-2026…), inicio, fin y nota; estado planificado, vigente, terminado o cerrado.
+2. **Días hábiles:** lunes a viernes menos los feriados. Los **nacionales** cuentan para todos; los **regionales** solo para quien tenga ese estado en su zona (Configuración → Usuarios → Zona).
+   - No deja guardar un ciclo que empiece o termine en fin de semana o feriado; el botón «Ajustar a días hábiles» lo corrige.
+   - No deja que dos ciclos del mismo equipo se crucen, y avisa (sin impedir guardar) si quedan días hábiles sin ciclo entre dos ciclos.
+   - Atajos de duración: 2, 4 o 5 semanas; muestra los días hábiles y los feriados que caen dentro.
+3. **Crear el siguiente con un toque:** propone el próximo con la misma duración, empezando el siguiente día hábil y con el nombre que sigue.
+4. **Feriados:** por año; nacionales o regionales (eligiendo los estados). Sugiere los feriados nacionales de Venezuela del año (incluye Carnaval y Semana Santa) para marcarlos y guardarlos de una vez.
+5. Solo la administración crea, cambia o borra ciclos y feriados; todos los ven (también sin señal).
 
 ### 4.2 Todo se mide por ciclo
-1. Inicio: «Pedidos del ciclo», «Unidades del ciclo», «Farmacias con pedido en el ciclo», días hábiles transcurridos y restantes.
-2. Metas, cobertura de médicos, farmacias en riesgo y reportes usan el ciclo vigente (y permiten elegir un ciclo anterior).
-3. El ritmo de las metas se calcula con **días hábiles** (no días corridos): lo esperado a hoy = objetivo × días hábiles transcurridos ÷ días hábiles del ciclo.
-4. **Cierre de ciclo:** al terminar, NOVA guarda una foto de los resultados por representante (no cambia aunque luego se corrijan datos) para el historial y las comparaciones.
+1. **Inicio:** pedidos, unidades y farmacias **del ciclo**, comparados con el ciclo anterior; promedio por **día hábil**; días hábiles que quedan; productos, representantes y droguerías del ciclo. El vendedor ve el ciclo de su equipo; la gerencia elige el ciclo vigente de cada equipo o el mes calendario.
+2. **Cobertura de médicos** (Médicos, Mi ruta y Reportes → Visitas): cada representante se mide con el ciclo vigente de su equipo. El dato del médico pasa a llamarse «visitas por ciclo».
+3. **Reportes → Visitas** tiene el período «Ciclo».
+4. El ritmo de las metas usa **días hábiles**: lo esperado a hoy = objetivo × días hábiles completos ÷ días hábiles del ciclo.
+5. **Cierre de ciclo:** al terminar, la revisión diaria lo cierra sola (o la administración con «Cerrar ciclo») y guarda la foto de los resultados de cada meta, que ya no cambia aunque luego se corrijan datos.
 
-### 4.3 Metas por ciclo
-1. **Indicadores:** unidades, pedidos, farmacias con pedido, visitas a médicos, visitas a farmacias, médicos cubiertos (%), y por producto si se necesita.
-2. **Alcance:** por representante, por farmacia, por médico (p. ej. visitas a un médico A), por droguería, o combinados.
-3. **Fácil de establecer:** una tabla tipo hoja de cálculo con una fila por representante y una columna por indicador; se llena de corrido.
-4. **Repetir:** «Copiar del ciclo anterior», «Copiar de un ciclo elegido» y «Ajustar todo +/- %». También se pueden cargar desde Excel.
-5. Las alertas de la Fase 2 (en camino, atención, en riesgo) siguen funcionando, ahora por ciclo.
+### 4.3 Metas por ciclo (Gestión → Metas)
+1. **Indicadores:** unidades, pedidos, farmacias con pedido, visitas a médicos (realizadas), visitas a farmacias y médicos visitados (distintos).
+2. **Alcance:** todo el equipo, un representante, una farmacia, un médico o una droguería (o combinados).
+3. **Tabla rápida:** una fila por representante del equipo (más «Todo el equipo») y una columna por indicador; «= todos» copia un valor a toda la columna.
+4. **Repetir:** «Repetir las metas del ciclo anterior», «Copiar de otro ciclo» (con % de ajuste, sumando o reemplazando) y «Ajustar %» a todas las metas del ciclo.
+5. Las alertas (en camino, atención, en riesgo, cumplida) siguen funcionando, ahora por ciclo y con días hábiles.
+6. Las metas por mes se conservan y se pueden seguir usando («Por mes»).
 
 ### 4.4 Base de datos (resumen técnico)
-- Tablas `ciclos` y `feriados`; columna `ciclo_id` en `metas` (las metas mensuales actuales se conservan como historial).
-- Funciones `dias_habiles(desde, hasta)`, `ciclo_vigente()`, `cerrar_ciclo()` y la foto de resultados `resultados_ciclo`.
-- Los ciclos y feriados bajan al teléfono para que todo funcione sin señal.
+- Tablas `feriados`, `ciclos` (con `equipo_id`; nulo = general) y `resultados_ciclo`; en `metas`, `ciclo_id` y `medico_id` (cada meta es de un mes o de un ciclo).
+- Funciones `app.es_dia_habil`, `dias_habiles`, `app.avance_metas_ciclo`, `cerrar_ciclo`, `copiar_metas_ciclo`, `ajustar_metas_ciclo`; `revisar_metas` revisa también los ciclos vigentes y `revision_diaria` cierra los ciclos terminados.
+- Validación en la base (trigger): días hábiles y ciclos que no se cruzan por equipo.
+- Pruebas SQL 53 a 56 (`db-tests/95_ciclos.sql`).
+
+### 4.5 Para después (si se necesita)
+- Metas por producto y carga de metas desde Excel.
+- Farmacias en riesgo no cambia: se calcula con el ritmo de compra de cada farmacia, no con el período.
 
 ---
 
@@ -144,10 +153,14 @@ si una fase se parte en dos PR, cada uno sube su versión.
 
 **Qué se pidió:** un apartado donde el vendedor o visitador reporte otras actividades o días libres (feriados, vacaciones, día producto, impulsos, jornada médica…); los motivos los define la administración; todo reporte lo aprueba el gerente **antes** de descontarlo de la cobertura de visitas.
 
-**Evaluación:** viable y necesario para que la cobertura por ciclo sea justa. Depende de la Fase 4 (días hábiles del ciclo). Hay que definir quién es el gerente de cada representante.
+**Evaluación:** viable y necesario para que la cobertura por ciclo sea justa. Depende de la Fase 4 (días hábiles del ciclo), que ya está lista.
+
+**Respuestas del equipo:**
+1. Cada representante tiene **su propio gerente**; aprueban **ese gerente o la administración**.
+2. Motivos iniciales: **Reunión de Ciclo, Vacaciones e Impulso**. La administración puede agregar, cambiar o desactivar motivos.
 
 ### 5.1 Motivos (administración)
-1. Catálogo editable: nombre (vacaciones, día producto, impulso, jornada médica, reposo médico, reunión, capacitación…), si **descuenta de la cobertura**, si **requiere aprobación** y si está activo.
+1. Catálogo editable que arranca con **Reunión de Ciclo, Vacaciones e Impulso** (luego se agregan día producto, jornada médica, reposo médico, capacitación… si hacen falta): nombre, si **descuenta de la cobertura**, si **requiere aprobación** y si está activo.
 2. Los **feriados** del calendario (Fase 4) se descuentan solos para todos, sin aprobación.
 
 ### 5.2 Reporte del vendedor o visitador
@@ -157,7 +170,7 @@ si una fase se parte en dos PR, cada uno sube su versión.
 ### 5.3 Aprobación del gerente
 1. Bandeja **Por aprobar** para el gerente, con aviso al teléfono cuando llega un reporte; aprueba o rechaza con un comentario (también varios a la vez).
 2. El representante recibe el aviso de la decisión.
-3. Cada representante tiene asignado su **gerente** (nuevo dato en Usuarios); si no tiene, aprueba cualquier gerente o la administración.
+3. Cada representante tiene asignado su **gerente** (nuevo dato en Configuración → Usuarios). Solo ese gerente o la administración pueden aprobar; si aún no tiene gerente, aprueba la administración.
 
 ### 5.4 Cobertura ajustada
 1. **Días efectivos** del representante en el ciclo = días hábiles − feriados − días **aprobados** que descuentan.
@@ -256,7 +269,6 @@ Cada droguería manda su inventario y sus precios en un formato distinto. En lug
 
 1. **Archivos reales de inventario y de precios** de cada droguería (Cobeca, Drocerca, Nena y las demás), aunque vengan con datos borrados. Sin ellos no arranca la Fase 7.
 2. **Un ejemplo del archivo de respuesta** (lo despachado) de cada droguería, para dejar su formato configurado y probado. Mientras tanto, NOVA adivina las columnas por sus títulos.
-3. **Datos del médico** adicionales (horario de consulta, potencial en recetas, etc.): la Fase 3 ya guarda especialidad, centro, teléfono, correo, categoría y visitas al mes; lo que falte se agrega.
-4. **Para los ciclos (Fase 4):** duración habitual del ciclo, calendario de feriados del año y si hay feriados regionales.
-5. **Para las otras actividades (Fase 5):** lista inicial de motivos y quién es el gerente de cada representante.
+3. **Datos del médico** adicionales (horario de consulta, potencial en recetas, etc.): la Fase 3 ya guarda especialidad, centro, teléfono, correo, categoría y visitas por ciclo; lo que falte se agrega.
+4. **Para las otras actividades (Fase 5):** qué gerente tiene cada representante (se podrá cargar en Usuarios cuando llegue la Fase 5).
 

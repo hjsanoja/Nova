@@ -6,6 +6,10 @@ export interface Usuario {
   nombre_completo: string;
   rol: RolUsuario;
   equipo: EquipoVentas;
+  /** Equipo en la base (dim_equipos.id): decide qué ciclo le aplica. */
+  equipo_id?: string | null;
+  /** Estado donde trabaja: para los feriados regionales. */
+  estado_geografico?: string | null;
   telefono?: string;
   activo: boolean;
   created_at: string;

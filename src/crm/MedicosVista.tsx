@@ -16,6 +16,7 @@ import { HistorialRegistro, ListaVisitas } from './Historial';
 import { PLANTILLA_MEDICOS, coberturaMedicos, leerMedicos, resumenCobertura } from './medicos';
 import type { CoberturaMedico } from './medicos';
 import { TareasDe } from './Tareas';
+import { usePeriodoDeEquipo } from '../ciclos/datos';
 import { VisitaForm } from './VisitaForm';
 
 type Filtro = 'todos' | 'pendientes' | 'A' | 'B' | 'C';
@@ -23,7 +24,8 @@ const POR_PAGINA = 60;
 const enlace = 'inline-flex min-h-9 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-sm font-semibold hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800';
 
 /**
- * Médicos: la cartera del visitador (el mismo representante visita médicos y toma pedidos). Cobertura del mes, ficha con
+ * Médicos: la cartera del visitador (el mismo representante visita médicos y toma pedidos). Cobertura del ciclo (cada
+ * representante con el ciclo vigente de su equipo; sin ciclos, el mes), ficha con
  * visitas y tareas, alta y carga por archivo (la gerencia y la administración asignan cada médico a su representante).
  */
 export function MedicosVista({ usuario }: { usuario: Usuario }) {
@@ -49,8 +51,17 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
   const vendedores = usuarios.filter((u) => u.rol === 'vendedor' && u.activo);
   const nombreUsuario = (id?: string | null) => (id ? usuarios.find((u) => u.id === id)?.nombre_completo ?? (id === usuario.id ? usuario.nombre_completo : 'Representante') : 'Sin representante');
   const deCartera = useMemo(() => (representante ? medicos.filter((m) => m.vendedor_id === representante) : medicos), [medicos, representante]);
-  const cobertura = useMemo(() => coberturaMedicos(deCartera, visitas), [deCartera, visitas]);
+  // Cada médico se mide con el ciclo vigente del equipo de su representante (o el general; sin ciclos, el mes).
+  const periodoDeEquipo = usePeriodoDeEquipo();
+  const periodoDe = useMemo(() => {
+    const equipo = new Map(usuarios.map((u) => [u.id, u.equipo_id ?? null]));
+    return (vendedorId?: string | null) => periodoDeEquipo(vendedorId === usuario.id ? usuario.equipo_id : vendedorId ? equipo.get(vendedorId) : null);
+  }, [usuarios, usuario.id, usuario.equipo_id, periodoDeEquipo]);
+  const cobertura = useMemo(() => coberturaMedicos(deCartera, visitas, (m) => periodoDe(m.vendedor_id)), [deCartera, visitas, periodoDe]);
   const resumen = resumenCobertura(cobertura);
+  const periodos = [...new Map(deCartera.map((m) => periodoDe(m.vendedor_id)).map((p) => [p.etiqueta, p])).values()];
+  const unPeriodo = periodos.length <= 1 ? (periodos[0] ?? periodoDe(usuario.id)) : null;
+  const textoPeriodo = unPeriodo ? (unPeriodo.tipo === 'ciclo' ? `el ciclo ${unPeriodo.etiqueta}` : `el mes`) : 'el ciclo vigente de cada equipo';
   const lista = useMemo(() => {
     const palabras = normalizar(q).split(' ').filter(Boolean);
     return cobertura.filter((c) => {
@@ -103,7 +114,7 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
     <div>
       <PageHeader
         titulo={esVendedor ? 'Mis médicos' : 'Médicos'}
-        descripcion={esVendedor ? 'Tu cartera de médicos y cómo vas con las visitas del mes.' : 'Cartera de médicos por representante, con la cobertura de visitas del mes.'}
+        descripcion={esVendedor ? `Tu cartera de médicos y cómo vas con las visitas en ${textoPeriodo}.` : `Cartera de médicos por representante, con la cobertura de visitas en ${textoPeriodo}.`}
         acciones={
           <>
             {gestiona && <BotonArchivo icono={FileUp} accept=".xlsx,.csv,.txt,text/csv" onArchivo={(f) => void cargar(f)}>Cargar archivo</BotonArchivo>}
@@ -116,7 +127,7 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
 
       <div className="mb-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
         <Tarjeta>
-          <Medidor valor={resumen.visitas} total={resumen.esperadas} rotulo="Visitas del mes" nota={`${resumen.cubiertos} de ${resumen.total} médicos con todas sus visitas · cuentan las visitas "realizadas"`} />
+          <Medidor valor={resumen.visitas} total={resumen.esperadas} rotulo={unPeriodo ? `Visitas ${unPeriodo.del}${unPeriodo.tipo === 'ciclo' ? ` ${unPeriodo.ciclo?.nombre ?? ''}` : ''}` : 'Visitas del ciclo de cada equipo'} nota={`${resumen.cubiertos} de ${resumen.total} médicos con todas sus visitas · cuentan las visitas "realizadas"${unPeriodo?.tipo === 'ciclo' ? ` · quedan ${unPeriodo.restantes} días hábiles` : ''}`} />
         </Tarjeta>
         {gestiona && (
           <Tarjeta className="flex flex-col justify-center gap-2">
@@ -151,7 +162,7 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
           />
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-            {lista.slice(0, limite).map((c) => <FilaMedico key={c.medico.id} c={c} representante={esVendedor ? undefined : nombreUsuario(c.medico.vendedor_id)} onAbrir={() => setAbierto(c.medico.id)} />)}
+            {lista.slice(0, limite).map((c) => <FilaMedico key={c.medico.id} c={c} este={periodoDe(c.medico.vendedor_id).tipo === 'ciclo' ? 'este ciclo' : 'este mes'} representante={esVendedor ? undefined : nombreUsuario(c.medico.vendedor_id)} onAbrir={() => setAbierto(c.medico.id)} />)}
           </ul>
         )}
         {lista.length > limite && (
@@ -165,6 +176,7 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
         {seleccionado && (
           <FichaMedico
             c={seleccionado}
+            este={periodoDe(seleccionado.medico.vendedor_id).tipo === 'ciclo' ? 'este ciclo' : 'este mes'}
             representante={nombreUsuario(seleccionado.medico.vendedor_id)}
             visitas={visitas.filter((v) => v.medico_id === seleccionado.medico.id)}
             tareas={tareas.filter((t) => t.medico_id === seleccionado.medico.id)}
@@ -202,7 +214,7 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
   );
 }
 
-function FilaMedico({ c, representante, onAbrir }: { c: CoberturaMedico; representante?: string; onAbrir: () => void }) {
+function FilaMedico({ c, este, representante, onAbrir }: { c: CoberturaMedico; este: string; representante?: string; onAbrir: () => void }) {
   const m = c.medico;
   const listo = c.hechas >= c.esperadas;
   return (
@@ -215,7 +227,7 @@ function FilaMedico({ c, representante, onAbrir }: { c: CoberturaMedico; represe
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1">
           {m.categoria && <Etiqueta tono={m.categoria === 'A' ? 'marca' : 'neutro'}>Cat. {m.categoria}</Etiqueta>}
-          <span className={`text-xs ${listo ? 'text-emerald-700 dark:text-emerald-300' : 'font-semibold text-slate-600 dark:text-slate-300'}`}>{c.hechas} de {c.esperadas} este mes</span>
+          <span className={`text-xs ${listo ? 'text-emerald-700 dark:text-emerald-300' : 'font-semibold text-slate-600 dark:text-slate-300'}`}>{c.hechas} de {c.esperadas} {este}</span>
         </div>
       </button>
     </li>
@@ -224,8 +236,9 @@ function FilaMedico({ c, representante, onAbrir }: { c: CoberturaMedico; represe
 
 type Pestana = 'resumen' | 'visitas' | 'tareas' | 'historial';
 
-function FichaMedico({ c, representante, visitas, tareas, productos, clientes, medicos, vendedorId, verHistorial, nombreUsuario, onVisita, onEditar, onEliminar }: {
+function FichaMedico({ c, este, representante, visitas, tareas, productos, clientes, medicos, vendedorId, verHistorial, nombreUsuario, onVisita, onEditar, onEliminar }: {
   c: CoberturaMedico;
+  este: string;
   representante: string;
   visitas: Parameters<typeof ListaVisitas>[0]['visitas'];
   tareas: Parameters<typeof TareasDe>[0]['tareas'];
@@ -267,7 +280,7 @@ function FichaMedico({ c, representante, visitas, tareas, productos, clientes, m
       />
       {pestana === 'resumen' && (
         <div className="space-y-4">
-          <Medidor valor={c.hechas} total={c.esperadas} rotulo="Visitas de este mes" nota={c.ultima ? `Última visita: ${fechaCorta(c.ultima)}` : 'Aún sin visitas registradas'} />
+          <Medidor valor={c.hechas} total={c.esperadas} rotulo={`Visitas de ${este}`} nota={c.ultima ? `Última visita: ${fechaCorta(c.ultima)}` : 'Aún sin visitas registradas'} />
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
             {[
               ['Especialidad', m.especialidad], ['Categoría', m.categoria ? `Categoría ${m.categoria}` : null], ['Centro', m.centro], ['Dirección', m.direccion],
@@ -348,7 +361,7 @@ function MedicoForm({ inicial, vendedores, onCerrar, onGuardado }: {
               <option value="C">C</option>
             </select>
           </Campo>
-          <Campo rotulo="Visitas al mes"><input {...campo('visitas_mes')} inputMode="numeric" placeholder="1" className={estiloInput} /></Campo>
+          <Campo rotulo="Visitas por ciclo" ayuda="Sin ciclos, por mes"><input {...campo('visitas_mes')} inputMode="numeric" placeholder="1" className={estiloInput} /></Campo>
         </div>
         <Campo rotulo="Dirección"><input {...campo('direccion')} className={estiloInput} /></Campo>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">

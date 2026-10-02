@@ -3196,22 +3196,38 @@ BEGIN
   SELECT coalesce(array_agg(id), '{}') INTO v_resp FROM dim_usuarios
    WHERE rol IN ('admin','gerente') AND activo AND deleted_at IS NULL;
 
-  FOR r IN SELECT * FROM app.avance_metas(v_periodo, v_hoy) WHERE nivel IN ('en_riesgo','cumplida') LOOP
+  -- Metas del mes (las de antes) y metas de los ciclos vigentes (v11.0): el mismo aviso para ambas.
+  FOR r IN
+    SELECT a.meta_id, a.vendedor_id, a.cliente_id, a.drogueria_id, NULL::uuid AS medico_id, a.indicador, a.valor, a.objetivo,
+           a.esperado, a.dias_restantes AS restantes, a.nivel, NULL::text AS ciclo, NULL::uuid AS equipo_id
+      FROM app.avance_metas(v_periodo, v_hoy) a
+     WHERE a.nivel IN ('en_riesgo','cumplida')
+    UNION ALL
+    SELECT a.meta_id, a.vendedor_id, a.cliente_id, a.drogueria_id, a.medico_id, a.indicador, a.valor, a.objetivo,
+           a.esperado, a.habiles_restantes, a.nivel, c.nombre, c.equipo_id
+      FROM ciclos c CROSS JOIN LATERAL app.avance_metas_ciclo(c.id, v_hoy) a
+     WHERE c.deleted_at IS NULL AND v_hoy BETWEEN c.inicio AND c.fin AND a.nivel IN ('en_riesgo','cumplida')
+  LOOP
     SELECT coalesce(nullif(concat_ws(' · ',
              (SELECT nombre_completo FROM dim_usuarios WHERE id = r.vendedor_id),
              (SELECT nombre_comercial FROM dim_clientes WHERE id = r.cliente_id),
-             (SELECT nombre FROM dim_droguerias WHERE id = r.drogueria_id)), ''), 'Toda la empresa')
+             (SELECT 'Dr(a). ' || nombre FROM dim_medicos WHERE id = r.medico_id),
+             (SELECT nombre FROM dim_droguerias WHERE id = r.drogueria_id)), ''),
+             CASE WHEN r.equipo_id IS NOT NULL THEN 'Equipo ' || (SELECT nombre FROM dim_equipos WHERE id = r.equipo_id) ELSE 'Toda la empresa' END)
+           || CASE WHEN r.ciclo IS NOT NULL THEN ' (' || r.ciclo || ')' ELSE '' END
       INTO v_desc;
-    v_unidad := CASE r.indicador WHEN 'unidades' THEN 'unidades' WHEN 'pedidos' THEN 'pedidos' ELSE 'farmacias' END;
+    v_unidad := CASE r.indicador WHEN 'unidades' THEN 'unidades' WHEN 'pedidos' THEN 'pedidos' WHEN 'farmacias' THEN 'farmacias'
+                  WHEN 'visitas_medicos' THEN 'visitas a médicos' WHEN 'visitas_farmacias' THEN 'visitas a farmacias' ELSE 'médicos visitados' END;
     v_dest := ARRAY(SELECT DISTINCT x FROM unnest(array_append(v_resp, r.vendedor_id)) x WHERE x IS NOT NULL);
 
     IF r.nivel = 'en_riesgo' THEN
       INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, clave)
       SELECT u, 'meta_en_riesgo', 'Meta en riesgo: ' || v_desc,
-             format('Va en %s de %s %s. A esta fecha debería llevar %s. Faltan %s por día en los %s días que quedan.',
+             format('Va en %s de %s %s. A esta fecha debería llevar %s. Faltan %s por día en los %s %s que quedan.',
                     app.num_es(r.valor), app.num_es(r.objetivo), v_unidad,
                     app.num_es(r.esperado),
-                    app.num_es(ceil((r.objetivo - r.valor) / greatest(r.dias_restantes, 1))), r.dias_restantes),
+                    app.num_es(ceil((r.objetivo - r.valor) / greatest(r.restantes, 1))), r.restantes,
+                    CASE WHEN r.ciclo IS NOT NULL THEN 'días hábiles' ELSE 'días' END),
              'meta_riesgo:' || r.meta_id || ':' || v_semana
         FROM unnest(v_dest) u
       ON CONFLICT (usuario_id, clave) WHERE clave IS NOT NULL DO NOTHING;
@@ -3623,5 +3639,329 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN
   RAISE NOTICE 'No se programó la revisión diaria: %', SQLERRM;
 END $$;
+
+-- ------------------------------------------------------------------------------
+-- 19. FASE 4 (v11.0): CICLOS POR EQUIPO, FERIADOS Y METAS POR CICLO
+-- ------------------------------------------------------------------------------
+
+-- 19.1 Feriados: nacionales (para todos) o regionales (solo en los estados indicados).
+CREATE TABLE IF NOT EXISTS feriados (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  fecha       date NOT NULL,
+  nombre      text NOT NULL CHECK (btrim(nombre) <> ''),
+  alcance     text NOT NULL DEFAULT 'nacional' CHECK (alcance IN ('nacional','regional')),
+  estados     text[] NOT NULL DEFAULT '{}',
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version integer NOT NULL DEFAULT 1,
+  deleted_at  timestamptz,
+  CONSTRAINT ck_feriado_estados CHECK (alcance = 'nacional' OR cardinality(estados) > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feriado_nacional ON feriados (fecha) WHERE alcance = 'nacional' AND deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_feriados_fecha ON feriados (fecha) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_feriados_updated ON feriados (updated_at);
+
+-- Día hábil: lunes a viernes que no es feriado nacional (ni regional del estado indicado, si se indica uno).
+CREATE OR REPLACE FUNCTION app.es_dia_habil(p_fecha date, p_estado text DEFAULT NULL) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT extract(isodow FROM p_fecha) < 6
+     AND NOT EXISTS (SELECT 1 FROM feriados f
+                      WHERE f.fecha = p_fecha AND f.deleted_at IS NULL
+                        AND (f.alcance = 'nacional'
+                             OR (p_estado IS NOT NULL AND lower(btrim(p_estado)) = ANY (SELECT lower(btrim(e)) FROM unnest(f.estados) e))))
+$$;
+
+-- Cuántos días hábiles hay entre dos fechas (ambas incluidas).
+CREATE OR REPLACE FUNCTION dias_habiles(p_desde date, p_hasta date, p_estado text DEFAULT NULL) RETURNS integer
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT CASE WHEN p_hasta < p_desde THEN 0 ELSE
+    (SELECT count(*)::integer FROM generate_series(p_desde, p_hasta, interval '1 day') d WHERE app.es_dia_habil(d::date, p_estado)) END
+$$;
+
+-- 19.2 Ciclos: cada equipo tiene los suyos (normalmente 4 semanas, pero la duración puede variar). Un ciclo sin equipo
+-- es el general: lo usan los equipos que no tienen un ciclo propio en esas fechas.
+CREATE TABLE IF NOT EXISTS ciclos (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  equipo_id   uuid REFERENCES dim_equipos(id) ON DELETE CASCADE,
+  nombre      text NOT NULL CHECK (btrim(nombre) <> ''),
+  inicio      date NOT NULL,
+  fin         date NOT NULL,
+  notas       text,
+  cerrado_en  timestamptz,
+  creado_por  uuid DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version integer NOT NULL DEFAULT 1,
+  deleted_at  timestamptz,
+  CONSTRAINT ck_ciclo_fechas CHECK (fin >= inicio)
+);
+CREATE INDEX IF NOT EXISTS idx_ciclos_equipo ON ciclos (equipo_id, inicio) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ciclos_updated ON ciclos (updated_at);
+
+-- Reglas: empieza y termina en día hábil (feriados nacionales) y no se solapa con otro ciclo del mismo equipo.
+CREATE OR REPLACE FUNCTION app.validar_ciclo() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_otro text;
+BEGIN
+  IF NEW.deleted_at IS NOT NULL THEN RETURN NEW; END IF;
+  IF TG_OP = 'UPDATE' AND NEW.inicio = OLD.inicio AND NEW.fin = OLD.fin AND NEW.equipo_id IS NOT DISTINCT FROM OLD.equipo_id
+     AND OLD.deleted_at IS NULL THEN
+    RETURN NEW;   -- cambios de nombre, notas o cierre: no se vuelve a validar
+  END IF;
+  IF NEW.fin < NEW.inicio THEN
+    RAISE EXCEPTION 'La fecha de fin debe ser igual o posterior a la de inicio' USING ERRCODE = '23514';
+  END IF;
+  IF NOT app.es_dia_habil(NEW.inicio) THEN
+    RAISE EXCEPTION 'El ciclo debe empezar en un día hábil: el % es %', to_char(NEW.inicio, 'DD/MM/YYYY'),
+      CASE WHEN extract(isodow FROM NEW.inicio) >= 6 THEN 'fin de semana' ELSE 'feriado' END USING ERRCODE = '22023';
+  END IF;
+  IF NOT app.es_dia_habil(NEW.fin) THEN
+    RAISE EXCEPTION 'El ciclo debe terminar en un día hábil: el % es %', to_char(NEW.fin, 'DD/MM/YYYY'),
+      CASE WHEN extract(isodow FROM NEW.fin) >= 6 THEN 'fin de semana' ELSE 'feriado' END USING ERRCODE = '22023';
+  END IF;
+  SELECT nombre INTO v_otro FROM ciclos c
+   WHERE c.id <> NEW.id AND c.deleted_at IS NULL AND c.equipo_id IS NOT DISTINCT FROM NEW.equipo_id
+     AND daterange(c.inicio, c.fin, '[]') && daterange(NEW.inicio, NEW.fin, '[]')
+   LIMIT 1;
+  IF v_otro IS NOT NULL THEN
+    RAISE EXCEPTION 'Las fechas se cruzan con el ciclo %', v_otro USING ERRCODE = '23P01';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS trg_validar_ciclo ON ciclos;
+CREATE TRIGGER trg_validar_ciclo BEFORE INSERT OR UPDATE ON ciclos FOR EACH ROW EXECUTE FUNCTION app.validar_ciclo();
+
+-- 19.3 Metas por ciclo: además del mes, una meta puede ser de un ciclo; nuevos indicadores de visitas y metas por médico.
+ALTER TABLE metas ALTER COLUMN periodo DROP NOT NULL;
+ALTER TABLE metas ADD COLUMN IF NOT EXISTS ciclo_id uuid REFERENCES ciclos(id) ON DELETE CASCADE;
+ALTER TABLE metas ADD COLUMN IF NOT EXISTS medico_id uuid REFERENCES dim_medicos(id) ON DELETE CASCADE;
+DO $$ BEGIN
+  ALTER TABLE metas DROP CONSTRAINT IF EXISTS metas_indicador_check;
+  ALTER TABLE metas ADD CONSTRAINT metas_indicador_check
+    CHECK (indicador IN ('unidades','pedidos','farmacias','visitas_medicos','visitas_farmacias','medicos_visitados'));
+END $$;
+DO $$ BEGIN
+  ALTER TABLE metas ADD CONSTRAINT ck_meta_periodo_o_ciclo CHECK (num_nonnulls(periodo, ciclo_id) = 1);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_metas_ciclo ON metas (ciclo_id, indicador,
+  coalesce(vendedor_id, '00000000-0000-0000-0000-000000000000'::uuid),
+  coalesce(cliente_id, '00000000-0000-0000-0000-000000000000'::uuid),
+  coalesce(drogueria_id, '00000000-0000-0000-0000-000000000000'::uuid),
+  coalesce(medico_id, '00000000-0000-0000-0000-000000000000'::uuid)) WHERE deleted_at IS NULL AND ciclo_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_metas_ciclo ON metas (ciclo_id) WHERE deleted_at IS NULL;
+
+-- Avance de las metas de un ciclo (misma cuenta que la app). Pedidos por su fecha de creación y visitas por su fecha,
+-- en hora de Venezuela; en un ciclo de equipo solo cuenta lo de ese equipo. El ritmo usa días hábiles (feriados
+-- nacionales): lo esperado a hoy = objetivo × días hábiles completos ÷ días hábiles del ciclo. Los 2 primeros días
+-- hábiles no se juzga ("inicio").
+--   visitas_medicos   = visitas "realizadas" a médicos
+--   visitas_farmacias = visitas a farmacias (sin las reprogramadas)
+--   medicos_visitados = médicos distintos con al menos una visita realizada
+CREATE OR REPLACE FUNCTION app.avance_metas_ciclo(p_ciclo uuid, p_hoy date)
+RETURNS TABLE (meta_id uuid, vendedor_id uuid, cliente_id uuid, drogueria_id uuid, medico_id uuid, indicador text,
+               valor numeric, objetivo numeric, esperado numeric, habiles_restantes integer, nivel text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH c AS (
+    SELECT ci.*, dias_habiles(ci.inicio, ci.fin) AS total,
+           dias_habiles(ci.inicio, least(p_hoy - 1, ci.fin)) AS completos,
+           dias_habiles(greatest(p_hoy, ci.inicio), ci.fin) AS restantes
+      FROM ciclos ci WHERE ci.id = p_ciclo
+  ), m AS (
+    SELECT me.* FROM metas me, c WHERE me.ciclo_id = c.id AND me.deleted_at IS NULL
+  ), ped AS (
+    SELECT p.id, p.vendedor_id, p.cliente_id, p.drogueria_id
+      FROM fact_pedidos p, c
+     WHERE p.deleted_at IS NULL AND p.estado::text NOT IN ('borrador','cancelado','rechazado')
+       AND (p.created_at AT TIME ZONE 'America/Caracas')::date BETWEEN c.inicio AND c.fin
+       AND (c.equipo_id IS NULL OR p.equipo_id = c.equipo_id)
+  ), uds AS (
+    SELECT d.pedido_id, sum(d.unidades_solicitadas) AS u
+      FROM fact_pedido_detalles d JOIN ped ON ped.id = d.pedido_id
+     WHERE d.deleted_at IS NULL GROUP BY d.pedido_id
+  ), vis AS (
+    SELECT v.vendedor_id, v.cliente_id, v.medico_id, v.resultado::text AS resultado
+      FROM crm_visitas v JOIN dim_usuarios u ON u.id = v.vendedor_id, c
+     WHERE v.deleted_at IS NULL
+       AND (v.checkin_en AT TIME ZONE 'America/Caracas')::date BETWEEN c.inicio AND c.fin
+       AND (c.equipo_id IS NULL OR u.equipo_id = c.equipo_id)
+  ), v AS (
+    SELECT m.id, m.vendedor_id, m.cliente_id, m.drogueria_id, m.medico_id, m.indicador, m.objetivo,
+      (CASE m.indicador
+         WHEN 'unidades' THEN (SELECT coalesce(sum(uds.u), 0) FROM ped JOIN uds ON uds.pedido_id = ped.id
+                                WHERE (m.vendedor_id IS NULL OR ped.vendedor_id = m.vendedor_id) AND (m.cliente_id IS NULL OR ped.cliente_id = m.cliente_id)
+                                  AND (m.drogueria_id IS NULL OR ped.drogueria_id = m.drogueria_id))
+         WHEN 'pedidos' THEN (SELECT count(*) FROM ped
+                                WHERE (m.vendedor_id IS NULL OR ped.vendedor_id = m.vendedor_id) AND (m.cliente_id IS NULL OR ped.cliente_id = m.cliente_id)
+                                  AND (m.drogueria_id IS NULL OR ped.drogueria_id = m.drogueria_id))
+         WHEN 'farmacias' THEN (SELECT count(DISTINCT ped.cliente_id) FROM ped
+                                WHERE (m.vendedor_id IS NULL OR ped.vendedor_id = m.vendedor_id) AND (m.cliente_id IS NULL OR ped.cliente_id = m.cliente_id)
+                                  AND (m.drogueria_id IS NULL OR ped.drogueria_id = m.drogueria_id))
+         WHEN 'visitas_medicos' THEN (SELECT count(*) FROM vis
+                                WHERE vis.medico_id IS NOT NULL AND vis.resultado = 'realizada'
+                                  AND (m.vendedor_id IS NULL OR vis.vendedor_id = m.vendedor_id) AND (m.medico_id IS NULL OR vis.medico_id = m.medico_id))
+         WHEN 'visitas_farmacias' THEN (SELECT count(*) FROM vis
+                                WHERE vis.cliente_id IS NOT NULL AND coalesce(vis.resultado, '') <> 'reprogramada'
+                                  AND (m.vendedor_id IS NULL OR vis.vendedor_id = m.vendedor_id) AND (m.cliente_id IS NULL OR vis.cliente_id = m.cliente_id))
+         ELSE (SELECT count(DISTINCT vis.medico_id) FROM vis
+                                WHERE vis.medico_id IS NOT NULL AND vis.resultado = 'realizada'
+                                  AND (m.vendedor_id IS NULL OR vis.vendedor_id = m.vendedor_id) AND (m.medico_id IS NULL OR vis.medico_id = m.medico_id))
+       END)::numeric AS valor
+      FROM m
+  )
+  SELECT v.id, v.vendedor_id, v.cliente_id, v.drogueria_id, v.medico_id, v.indicador, v.valor, v.objetivo,
+         round(v.objetivo * c.completos / greatest(c.total, 1), 2), c.restantes,
+         CASE WHEN v.valor >= v.objetivo THEN 'cumplida'
+              WHEN p_hoy > c.fin THEN 'no_cumplida'
+              WHEN c.completos < 2 THEN 'inicio'
+              WHEN v.valor >= v.objetivo * c.completos / greatest(c.total, 1) * 0.95 THEN 'en_camino'
+              WHEN v.valor >= v.objetivo * c.completos / greatest(c.total, 1) * 0.80 THEN 'atencion'
+              ELSE 'en_riesgo' END
+    FROM v, c
+$$;
+
+-- 19.4 Cierre del ciclo: foto de los resultados (no cambia aunque luego se corrijan pedidos o visitas).
+CREATE TABLE IF NOT EXISTS resultados_ciclo (
+  ciclo_id     uuid NOT NULL REFERENCES ciclos(id) ON DELETE CASCADE,
+  meta_id      uuid NOT NULL REFERENCES metas(id) ON DELETE CASCADE,
+  vendedor_id  uuid,
+  cliente_id   uuid,
+  drogueria_id uuid,
+  medico_id    uuid,
+  indicador    text NOT NULL,
+  valor        numeric NOT NULL,
+  objetivo     numeric NOT NULL,
+  pct          numeric NOT NULL,
+  cerrado_en   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (ciclo_id, meta_id)
+);
+
+-- El cierre en sí (sin control de rol): lo usan cerrar_ciclo (administración) y la revisión diaria (automático).
+CREATE OR REPLACE FUNCTION app.cerrar_ciclo(p_ciclo uuid) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_c ciclos; v_n integer;
+BEGIN
+  SELECT * INTO v_c FROM ciclos WHERE id = p_ciclo AND deleted_at IS NULL;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Ciclo inexistente' USING ERRCODE = 'P0002'; END IF;
+  IF v_c.fin >= (now() AT TIME ZONE 'America/Caracas')::date THEN
+    RAISE EXCEPTION 'El ciclo % todavía no terminó', v_c.nombre USING ERRCODE = '22023';
+  END IF;
+  DELETE FROM resultados_ciclo WHERE ciclo_id = p_ciclo;
+  INSERT INTO resultados_ciclo (ciclo_id, meta_id, vendedor_id, cliente_id, drogueria_id, medico_id, indicador, valor, objetivo, pct)
+  SELECT p_ciclo, a.meta_id, a.vendedor_id, a.cliente_id, a.drogueria_id, a.medico_id, a.indicador, a.valor, a.objetivo,
+         round(a.valor * 100 / greatest(a.objetivo, 1), 1)
+    FROM app.avance_metas_ciclo(p_ciclo, v_c.fin + 1) a;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  UPDATE ciclos SET cerrado_en = now() WHERE id = p_ciclo;
+  RETURN v_n;
+END $$;
+
+-- Cierre a pedido de la administración (también sirve para volver a tomar la foto si se corrigieron datos).
+CREATE OR REPLACE FUNCTION cerrar_ciclo(p_ciclo uuid) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL AND NOT app.es_admin() THEN RAISE EXCEPTION 'Solo la administración cierra ciclos' USING ERRCODE = '42501'; END IF;
+  RETURN app.cerrar_ciclo(p_ciclo);
+END $$;
+
+-- 19.5 Repetir metas: copiar las de otro ciclo (con un ajuste en %, opcional) y ajustar todas las de un ciclo.
+CREATE OR REPLACE FUNCTION copiar_metas_ciclo(p_origen uuid, p_destino uuid, p_factor numeric DEFAULT 1, p_reemplazar boolean DEFAULT false)
+RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer;
+BEGIN
+  IF NOT (app.es_admin() OR app.rol() = 'gerente') THEN RAISE EXCEPTION 'Solo administración o gerencia' USING ERRCODE = '42501'; END IF;
+  IF p_origen = p_destino THEN RAISE EXCEPTION 'Elige un ciclo distinto' USING ERRCODE = '22023'; END IF;
+  IF coalesce(p_factor, 0) <= 0 THEN RAISE EXCEPTION 'El ajuste debe ser mayor que cero' USING ERRCODE = '22023'; END IF;
+  IF p_reemplazar THEN
+    UPDATE metas SET deleted_at = now() WHERE ciclo_id = p_destino AND deleted_at IS NULL;
+  END IF;
+  INSERT INTO metas (ciclo_id, vendedor_id, cliente_id, drogueria_id, medico_id, indicador, objetivo)
+  SELECT p_destino, o.vendedor_id, o.cliente_id, o.drogueria_id, o.medico_id, o.indicador, greatest(1, round(o.objetivo * p_factor))
+    FROM metas o
+   WHERE o.ciclo_id = p_origen AND o.deleted_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM metas d WHERE d.ciclo_id = p_destino AND d.deleted_at IS NULL AND d.indicador = o.indicador
+                       AND d.vendedor_id IS NOT DISTINCT FROM o.vendedor_id AND d.cliente_id IS NOT DISTINCT FROM o.cliente_id
+                       AND d.drogueria_id IS NOT DISTINCT FROM o.drogueria_id AND d.medico_id IS NOT DISTINCT FROM o.medico_id);
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END $$;
+
+CREATE OR REPLACE FUNCTION ajustar_metas_ciclo(p_ciclo uuid, p_factor numeric) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_n integer;
+BEGIN
+  IF NOT (app.es_admin() OR app.rol() = 'gerente') THEN RAISE EXCEPTION 'Solo administración o gerencia' USING ERRCODE = '42501'; END IF;
+  IF coalesce(p_factor, 0) <= 0 THEN RAISE EXCEPTION 'El ajuste debe ser mayor que cero' USING ERRCODE = '22023'; END IF;
+  UPDATE metas SET objetivo = greatest(1, round(objetivo * p_factor)) WHERE ciclo_id = p_ciclo AND deleted_at IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n;
+END $$;
+
+-- 19.6 La revisión diaria también cierra los ciclos que ya terminaron (y guarda su foto de resultados).
+CREATE OR REPLACE FUNCTION revision_diaria() RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_metas jsonb; v_tareas integer; v_cerrados integer := 0; c record;
+BEGIN
+  IF auth.uid() IS NOT NULL AND app.rol() IS NULL THEN RAISE EXCEPTION 'Cuenta sin acceso' USING ERRCODE = '42501'; END IF;
+  v_metas := revisar_metas();
+  v_tareas := revisar_tareas();
+  FOR c IN SELECT id FROM ciclos WHERE deleted_at IS NULL AND cerrado_en IS NULL
+              AND fin < (now() AT TIME ZONE 'America/Caracas')::date LOOP
+    PERFORM app.cerrar_ciclo(c.id);
+    v_cerrados := v_cerrados + 1;
+  END LOOP;
+  DELETE FROM registro_cambios WHERE created_at < now() - interval '18 months';
+  RETURN v_metas || jsonb_build_object('avisos_tareas', v_tareas, 'ciclos_cerrados', v_cerrados);
+END $$;
+
+-- Marcas de tiempo, auditoría, seguridad por filas y tiempo real.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['ciclos','feriados'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_touch ON %I', t);
+    EXECUTE format('CREATE TRIGGER trg_touch BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION app.touch()', t);
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_auditar ON %I', t);
+    EXECUTE format('CREATE TRIGGER trg_auditar AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION app.auditar()', t);
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+  END LOOP;
+  ALTER TABLE resultados_ciclo ENABLE ROW LEVEL SECURITY;
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    FOREACH t IN ARRAY ARRAY['ciclos','feriados'] LOOP
+      IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = t) THEN
+        EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+      END IF;
+    END LOOP;
+  END IF;
+END $$;
+
+-- Todos ven los ciclos y feriados (los necesitan para medir); solo la administración los define.
+DROP POLICY IF EXISTS ciclos_lectura ON ciclos;
+CREATE POLICY ciclos_lectura ON ciclos FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS ciclos_gestion ON ciclos;
+CREATE POLICY ciclos_gestion ON ciclos FOR ALL TO authenticated
+  USING ((SELECT app.es_admin())) WITH CHECK ((SELECT app.es_admin()));
+DROP POLICY IF EXISTS feriados_lectura ON feriados;
+CREATE POLICY feriados_lectura ON feriados FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS feriados_gestion ON feriados;
+CREATE POLICY feriados_gestion ON feriados FOR ALL TO authenticated
+  USING ((SELECT app.es_admin())) WITH CHECK ((SELECT app.es_admin()));
+DROP POLICY IF EXISTS resultados_lectura ON resultados_ciclo;
+CREATE POLICY resultados_lectura ON resultados_ciclo FOR SELECT TO authenticated
+  USING ((SELECT app.es_staff()) OR vendedor_id = (SELECT auth.uid()));
+-- Metas: el visitador también ve las metas de sus médicos (sin representante fijado).
+DROP POLICY IF EXISTS metas_lectura ON metas;
+CREATE POLICY metas_lectura ON metas FOR SELECT TO authenticated
+  USING ((SELECT app.es_staff()) OR vendedor_id = (SELECT auth.uid())
+         OR (vendedor_id IS NULL AND cliente_id IN (SELECT app.mis_clientes()))
+         OR (vendedor_id IS NULL AND medico_id IN (SELECT id FROM dim_medicos WHERE vendedor_id = (SELECT auth.uid()))));
+
+REVOKE ALL ON ciclos, feriados, resultados_ciclo FROM anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ciclos, feriados TO authenticated;
+GRANT SELECT ON resultados_ciclo TO authenticated;
+REVOKE ALL ON FUNCTION app.avance_metas_ciclo(uuid, date), app.cerrar_ciclo(uuid), cerrar_ciclo(uuid), copiar_metas_ciclo(uuid, uuid, numeric, boolean),
+                       ajustar_metas_ciclo(uuid, numeric), dias_habiles(date, date, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION cerrar_ciclo(uuid), copiar_metas_ciclo(uuid, uuid, numeric, boolean), ajustar_metas_ciclo(uuid, numeric),
+                          dias_habiles(date, date, text) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';

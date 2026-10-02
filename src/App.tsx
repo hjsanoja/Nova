@@ -31,6 +31,7 @@ const RutaVista = lazy(() => import('./ruta/RutaVista').then((m) => ({ default: 
 const MetasVista = lazy(() => import('./metas/MetasVista').then((m) => ({ default: m.MetasVista })));
 const MedicosVista = lazy(() => import('./crm/MedicosVista').then((m) => ({ default: m.MedicosVista })));
 const TareasVista = lazy(() => import('./crm/TareasVista').then((m) => ({ default: m.TareasVista })));
+const CiclosVista = lazy(() => import('./ciclos/CiclosVista').then((m) => ({ default: m.CiclosVista })));
 const AvisoPendientes = lazy(() => import('./components/AvisoPendientes').then((m) => ({ default: m.AvisoPendientes })));
 const AvisosLocales = lazy(() => import('./avisos/AvisosLocales').then((m) => ({ default: m.AvisosLocales })));
 const BannerComunicados = lazy(() => import('./comunicados/BannerComunicados').then((m) => ({ default: m.BannerComunicados })));
@@ -203,9 +204,10 @@ function AppContent() {
               {tabActiva === 'catalogo' && <CatalogoVista usuario={usuarioActual} />}
               {tabActiva === 'reportes' && <ReportesVista usuario={usuarioActual} />}
               {tabActiva === 'condiciones' && <CondicionesVista usuario={usuarioActual} />}
-              {tabActiva === 'metas' && <MetasVista />}
+              {tabActiva === 'metas' && <MetasVista usuario={usuarioActual} />}
               {tabActiva === 'medicos' && <MedicosVista usuario={usuarioActual} />}
               {tabActiva === 'tareas' && <TareasVista usuario={usuarioActual} />}
+              {tabActiva === 'ciclos' && <CiclosVista usuario={usuarioActual} />}
               {tabActiva === 'ruta' && <RutaVista usuario={usuarioActual} irATab={irATab} />}
               {tabActiva === 'comunicados' && <ComunicadosVista />}
               {tabActiva === 'datos' && <DatosVista usuario={usuarioActual} esDemo={esDemo} />}
