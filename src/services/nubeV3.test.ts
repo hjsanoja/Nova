@@ -123,7 +123,7 @@ describe('usuarios: el rol lo fija la base, no los metadatos del registro', () =
     const sb = {
       from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { nombre_completo: 'Ana', rol: 'transferencista', activo: true, telefono: null, dim_equipos: { codigo: 'LA SANTE' } }, error: null }) }) }) }),
     } as unknown as SupabaseClient;
-    expect(await cargarPerfilUsuario(sb, 'u1')).toEqual({ nombre_completo: 'Ana', rol: 'teletransferencista', equipo: 'La Sante', equipo_id: null, estado_geografico: null, telefono: undefined, activo: true });
+    expect(await cargarPerfilUsuario(sb, 'u1')).toEqual({ nombre_completo: 'Ana', rol: 'teletransferencista', equipo: 'La Sante', equipo_id: null, gerente_id: null, estado_geografico: null, telefono: undefined, activo: true });
     const sinFila = { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }) } as unknown as SupabaseClient;
     expect(await cargarPerfilUsuario(sinFila, 'u2')).toBeNull();
   });

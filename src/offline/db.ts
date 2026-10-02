@@ -1,6 +1,7 @@
 import Dexie from 'dexie';
 import type { Table } from 'dexie';
 import type {
+  LocalActividad,
   LocalCiclo,
   LocalCliente,
   LocalComunicado,
@@ -12,6 +13,7 @@ import type {
   LocalMapProducto,
   LocalMeta,
   LocalMedico,
+  LocalMotivo,
   LocalNotificacion,
   LocalPedido,
   LocalPlantilla,
@@ -47,6 +49,8 @@ export class NovaDB extends Dexie {
   tareas!: Table<LocalTarea, string>;
   ciclos!: Table<LocalCiclo, string>;
   feriados!: Table<LocalFeriado, string>;
+  motivos!: Table<LocalMotivo, string>;
+  actividades!: Table<LocalActividad, string>;
   outbox!: Table<OutboxItem, number>;
   meta!: Table<MetaEntrada, string>;
 
@@ -93,6 +97,11 @@ export class NovaDB extends Dexie {
       ciclos: 'id, equipo_id, inicio, fin, updated_at',
       feriados: 'id, fecha, updated_at',
       metas: 'id, periodo, ciclo_id, vendedor_id, updated_at',
+    });
+    // v7 (Fase 5): otras actividades y días libres, y sus motivos.
+    this.version(7).stores({
+      motivos: 'id, updated_at',
+      actividades: 'id, vendedor_id, estado, desde, sync_estado, updated_at',
     });
   }
 

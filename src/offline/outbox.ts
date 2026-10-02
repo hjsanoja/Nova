@@ -1,5 +1,5 @@
 import type { NovaDB } from './db';
-import type { LocalCliente, LocalDetalle, LocalPedido, OutboxItem, TipoOutbox } from './types';
+import type { LocalActividad, LocalCliente, LocalDetalle, LocalPedido, OutboxItem, TipoOutbox } from './types';
 import { ErrorRemoto } from './remoto';
 import type { FilaRemota, SyncRemote } from './remoto';
 
@@ -106,7 +106,7 @@ const num = (v: unknown, defecto = 0): number => (typeof v === 'number' ? v : de
 
 /** Aplica la respuesta del servidor al estado local y retira la mutación. Devuelve true si hubo conflicto. */
 async function aplicarRespuesta(db: NovaDB, item: OutboxItem, r: FilaRemota): Promise<boolean> {
-  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.mapClientes, db.plantillas, db.tareas];
+  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.mapClientes, db.plantillas, db.tareas, db.actividades];
   return db.transaction('rw', tablas, async () => {
     switch (item.tipo) {
       case 'pedido.crear':
@@ -196,6 +196,18 @@ async function aplicarRespuesta(db: NovaDB, item: OutboxItem, r: FilaRemota): Pr
         else if (!(await quedanMutaciones(db, item.entidad_id, item.seq!))) await db.plantillas.update(item.entidad_id, { sync_estado: 'sincronizado' });
         return false;
       }
+      case 'actividad.guardar': {
+        await db.outbox.delete(item.seq!);
+        // El servidor decide el estado (p. ej. aprobada sola si el motivo no requiere aprobación).
+        const restante = await quedanMutaciones(db, item.entidad_id, item.seq!);
+        await db.actividades.update(item.entidad_id, {
+          ...(r.estado ? { estado: r.estado as LocalActividad['estado'] } : {}),
+          ...(r.comentario !== undefined ? { comentario: (r.comentario as string | null) ?? null } : {}),
+          sync_estado: restante ? 'pendiente' : 'sincronizado',
+          sync_error: null,
+        });
+        return false;
+      }
       case 'tarea.guardar': {
         await db.outbox.delete(item.seq!);
         if (item.payload.eliminar) await db.tareas.delete(item.entidad_id);
@@ -216,7 +228,7 @@ async function aplicarRespuesta(db: NovaDB, item: OutboxItem, r: FilaRemota): Pr
 
 /** Rechazo definitivo del servidor: la mutación queda en "error" (no se reintenta) y se compensa lo local. */
 async function marcarErrorPermanente(db: NovaDB, item: OutboxItem, error: ErrorRemoto): Promise<void> {
-  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.mapClientes, db.plantillas, db.tareas];
+  const tablas = [db.outbox, db.pedidos, db.detalles, db.clientes, db.visitas, db.mapClientes, db.plantillas, db.tareas, db.actividades];
   await db.transaction('rw', tablas, async () => {
     await db.outbox.update(item.seq!, { estado: 'error', error: error.message });
     const patch = { sync_estado: 'error' as const, sync_error: error.message };
@@ -245,6 +257,9 @@ async function marcarErrorPermanente(db: NovaDB, item: OutboxItem, error: ErrorR
         break;
       case 'tarea.guardar':
         await db.tareas.update(item.entidad_id, { sync_estado: 'error' });
+        break;
+      case 'actividad.guardar':
+        await db.actividades.update(item.entidad_id, patch);
         break;
       case 'farmacia.codigo':
         // Rechazado (p. ej. el código es de otra farmacia): se retira para que la app vuelva a pedirlo.

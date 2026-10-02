@@ -67,10 +67,12 @@ export const PLANTILLA_MEDICOS = 'CODIGO;NOMBRE;ESPECIALIDAD;CENTRO;DIRECCION;CI
 
 export interface CoberturaMedico {
   medico: LocalMedico;
-  /** Visitas realizadas este mes (resultado "realizada"). */
+  /** Visitas realizadas en el período (resultado "realizada"). */
   hechas: number;
-  /** Visitas esperadas en el mes (1 si no se definió). */
+  /** Visitas esperadas en el período, ya ajustadas por los días libres aprobados del representante. */
   esperadas: number;
+  /** Las de su ficha, sin ajustar (1 si no se definió). */
+  esperadasBase: number;
   ultima: string | null;
 }
 
@@ -86,7 +88,13 @@ export interface RangoFechas { desde: string; hasta: string }
  * fecha dada: los que faltan por visitar primero (categoría A antes que B y C). Las visitas esperadas son las de su
  * ficha ("visitas por ciclo").
  */
-export function coberturaMedicos(medicos: LocalMedico[], visitas: LocalVisita[], cuando: Date | RangoFechas | ((m: LocalMedico) => RangoFechas) = new Date()): CoberturaMedico[] {
+export function coberturaMedicos(
+  medicos: LocalMedico[],
+  visitas: LocalVisita[],
+  cuando: Date | RangoFechas | ((m: LocalMedico) => RangoFechas) = new Date(),
+  /** Parte del período que el representante sí puede visitar (días efectivos ÷ días hábiles); 1 = sin ajuste. */
+  ajuste?: (m: LocalMedico) => number
+): CoberturaMedico[] {
   const rangoDe = (m: LocalMedico): RangoFechas | null => (cuando instanceof Date ? null : typeof cuando === 'function' ? cuando(m) : cuando);
   const mes = cuando instanceof Date ? mesDe(cuando.toISOString()) : '';
   const porMedico = new Map<string, LocalVisita[]>();
@@ -99,14 +107,17 @@ export function coberturaMedicos(medicos: LocalMedico[], visitas: LocalVisita[],
       const r = rangoDe(m);
       const hechas = vs.filter((v) => (r ? enRango(v.checkin_en, r) : mesDe(v.checkin_en) === mes) && v.resultado === 'realizada').length;
       const ultima = vs.reduce<string | null>((a, v) => (!a || v.checkin_en > a ? v.checkin_en : a), null);
-      return { medico: m, hechas, esperadas: Math.max(1, m.visitas_mes ?? 1), ultima };
+      const base = Math.max(1, m.visitas_mes ?? 1);
+      const factor = ajuste ? Math.min(1, Math.max(0, ajuste(m))) : 1;
+      return { medico: m, hechas, esperadas: factor === 1 ? base : Math.round(base * factor), esperadasBase: base, ultima };
     })
     .sort((a, b) => Number(a.hechas >= a.esperadas) - Number(b.hechas >= b.esperadas) || (orden[a.medico.categoria ?? 'C'] ?? 2) - (orden[b.medico.categoria ?? 'C'] ?? 2) || a.medico.nombre.localeCompare(b.medico.nombre));
 }
 
 /** Resumen: médicos con todas sus visitas del período, sobre el total. */
-export function resumenCobertura(c: CoberturaMedico[]): { cubiertos: number; total: number; visitas: number; esperadas: number } {
+export function resumenCobertura(c: CoberturaMedico[]): { cubiertos: number; total: number; visitas: number; esperadas: number; esperadasBase: number } {
   return {
+    esperadasBase: c.reduce((a, x) => a + x.esperadasBase, 0),
     cubiertos: c.filter((x) => x.hechas >= x.esperadas).length,
     total: c.length,
     visitas: c.reduce((a, x) => a + Math.min(x.hechas, x.esperadas), 0),

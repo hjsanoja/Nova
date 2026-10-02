@@ -39,7 +39,7 @@ async function usuarioDesdePerfil(sb: SupabaseClient, id: string, email: string,
   const perfil = await cargarPerfilUsuario(sb, id);
   if (!perfil) throw new Error('Tu cuenta aún no está activada. Pide a un administrador que le asigne rol y equipo.');
   if (!perfil.activo) throw new Error('Tu cuenta está desactivada. Pide a un administrador que la active.');
-  return { id, email, nombre_completo: perfil.nombre_completo, rol: perfil.rol, equipo: perfil.equipo, equipo_id: perfil.equipo_id ?? null, estado_geografico: perfil.estado_geografico ?? null, telefono: perfil.telefono, activo: true, created_at: creado, guia_vista_en: perfil.guia_vista_en };
+  return { id, email, nombre_completo: perfil.nombre_completo, rol: perfil.rol, equipo: perfil.equipo, equipo_id: perfil.equipo_id ?? null, gerente_id: perfil.gerente_id ?? null, estado_geografico: perfil.estado_geografico ?? null, telefono: perfil.telefono, activo: true, created_at: creado, guia_vista_en: perfil.guia_vista_en };
 }
 
 /** "Android · Chrome", "Windows · Edge"… (sin datos personales): para el reporte de accesos. */

@@ -11,6 +11,7 @@ import type { DestinoVisita } from '../crm/VisitaForm';
 import { leerUbicacion, fechaCorta, useMedicos } from '../crm/datos';
 import { coberturaMedicos } from '../crm/medicos';
 import { usePeriodo } from '../ciclos/datos';
+import { useAjusteCobertura } from '../actividades/datos';
 import type { Usuario } from '../types/pharmacy';
 import { actividadDeClientes } from '../vistas/logica';
 import { prepararPedidoPara } from '../vistas/navegacion';
@@ -41,7 +42,13 @@ export function RutaVista({ usuario, irATab }: { usuario: Usuario; irATab: (t: s
   const medicos = useMedicos();
   const misMedicos = useMemo(() => medicos.filter((m) => m.vendedor_id === usuario.id), [medicos, usuario.id]);
   const periodo = usePeriodo(usuario);
-  const cobertura = useMemo(() => coberturaMedicos(misMedicos, visitas, { desde: periodo.desde, hasta: periodo.hasta }), [misMedicos, visitas, periodo.desde, periodo.hasta]);
+  const estadoPropio = useCallback(() => usuario.estado_geografico, [usuario.estado_geografico]);
+  const ajusteCobertura = useAjusteCobertura(estadoPropio);
+  const ajuste = ajusteCobertura(usuario.id, periodo);
+  const cobertura = useMemo(
+    () => coberturaMedicos(misMedicos, visitas, { desde: periodo.desde, hasta: periodo.hasta }, () => ajuste.factor),
+    [misMedicos, visitas, periodo.desde, periodo.hasta, ajuste.factor]
+  );
   const medicosPendientes = cobertura.filter((c) => c.hechas < c.esperadas).length;
   const medicosOrdenados = useMemo(() => {
     if (!origen) return cobertura;
@@ -105,7 +112,7 @@ export function RutaVista({ usuario, irATab }: { usuario: Usuario; irATab: (t: s
           <Medidor valor={hechas} total={paraHoy.length} rotulo="Farmacias de hoy" nota={`${paraHoy.length - hechas} por visitar${recorrido ? ` · recorrido aprox. ${distanciaTexto(recorrido)}` : ''}${origen ? '' : ' · toca "Usar mi ubicación" para ordenar desde donde estás'}`} />
           {misMedicos.length > 0 && (
             <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
-              <Medidor valor={cobertura.length - medicosPendientes} total={cobertura.length} rotulo={`Médicos visitados ${periodo.tipo === 'ciclo' ? `en el ciclo ${periodo.ciclo?.nombre ?? ''}` : 'este mes'}`} nota={`${medicosPendientes} por visitar${periodo.tipo === 'ciclo' ? ` · quedan ${periodo.restantes} días hábiles` : ''}`} />
+              <Medidor valor={cobertura.length - medicosPendientes} total={cobertura.length} rotulo={`Médicos visitados ${periodo.tipo === 'ciclo' ? `en el ciclo ${periodo.ciclo?.nombre ?? ''}` : 'este mes'}`} nota={`${medicosPendientes} por visitar${periodo.tipo === 'ciclo' ? ` · quedan ${periodo.restantes} días hábiles` : ''}${ajuste.libres > 0 ? ` · descontados ${ajuste.libres.toLocaleString('es-VE')} días libres aprobados` : ''}`} />
             </div>
           )}
         </Tarjeta>

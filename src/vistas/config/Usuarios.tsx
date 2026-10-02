@@ -56,6 +56,17 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
     mostrar({ tipo: 'ok', texto: `${u.nombre_completo}: cambios guardados.` });
   };
 
+  // Gerente de cada representante: aprueba sus actividades y días libres (la administración también puede).
+  const gerentes = usuarios.filter((u) => u.activo && (u.rol === 'gerente' || u.rol === 'admin'));
+  const asignarGerente = async (u: UsuarioNube, gerenteId: string) => {
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const { error: e } = await sb.from('dim_usuarios').update({ gerente_id: gerenteId || null }).eq('id', u.id);
+    if (e) return mostrar({ tipo: 'error', texto: e.message });
+    setRecarga((n) => n + 1);
+    mostrar({ tipo: 'ok', texto: gerenteId ? `${u.nombre_completo}: lo aprueba ${gerentes.find((g) => g.id === gerenteId)?.nombre_completo ?? 'su gerente'}.` : `${u.nombre_completo}: sin gerente (aprueba la administración).` });
+  };
+
   const porActivar = usuarios.filter((u) => !u.activo);
   const visibles = filtrarPorTexto([...porActivar, ...usuarios.filter((u) => u.activo)], texto, (u) => [u.nombre_completo, u.email, u.rol, u.equipo]);
   const seleccionables = visibles.filter((u) => u.id !== yo.id).map((u) => u.id);
@@ -119,7 +130,7 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
               const b = actual(u);
               const soyYo = u.id === yo.id;
               return (
-                <li key={u.id} className={`grid gap-2 py-2.5 pl-1 pr-3 md:grid-cols-[auto_1fr_auto_auto_auto_auto] md:items-center ${sel.tiene(u.id) ? 'bg-marca-50 dark:bg-marca-950/60' : ''}`}>
+                <li key={u.id} className={`grid gap-2 py-2.5 pl-1 pr-3 md:grid-cols-[auto_1fr_auto_auto_auto_auto_auto] md:items-center ${sel.tiene(u.id) ? 'bg-marca-50 dark:bg-marca-950/60' : ''}`}>
                   <div className="flex items-center gap-2 md:contents">
                     {soyYo ? <span className="w-10" /> : <Casilla etiqueta={`Seleccionar ${u.nombre_completo}`} marcada={sel.tiene(u.id)} onChange={() => sel.alternar(u.id)} />}
                     <div className="flex min-w-0 items-center gap-3">
@@ -137,6 +148,12 @@ export function Usuarios({ yo, onFichero }: { yo: Usuario; onFichero: () => void
                     {ROLES.map((r) => <option key={r.id} value={r.id}>{r.texto}</option>)}
                   </select>
                   <input value={b.equipo} onChange={(e) => cambiar(u, { equipo: e.target.value })} list="equipos" placeholder="Equipo (opcional)" aria-label={`Equipo de ${u.nombre_completo}`} className={`${estiloInput} md:w-36`} />
+                  {u.rol === 'vendedor' ? (
+                    <select value={u.gerente_id ?? ''} onChange={(e) => void asignarGerente(u, e.target.value)} aria-label={`Gerente de ${u.nombre_completo}`} title="Aprueba sus actividades y días libres" className={`${estiloInput} md:w-44`}>
+                      <option value="">Sin gerente (aprueba la administración)</option>
+                      {gerentes.filter((g) => g.id !== u.id).map((g) => <option key={g.id} value={g.id}>{g.nombre_completo}</option>)}
+                    </select>
+                  ) : <span className="hidden md:block md:w-44" />}
                   <label className="flex min-h-10 items-center gap-2 text-sm font-semibold">
                     <input type="checkbox" checked={b.activo} disabled={soyYo} onChange={(e) => cambiar(u, { activo: e.target.checked })} className="h-4 w-4 accent-marca-600" /> Activo
                   </label>

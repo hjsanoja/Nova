@@ -17,6 +17,7 @@ import { PLANTILLA_MEDICOS, coberturaMedicos, leerMedicos, resumenCobertura } fr
 import type { CoberturaMedico } from './medicos';
 import { TareasDe } from './Tareas';
 import { usePeriodoDeEquipo } from '../ciclos/datos';
+import { useAjusteCobertura } from '../actividades/datos';
 import { VisitaForm } from './VisitaForm';
 
 type Filtro = 'todos' | 'pendientes' | 'A' | 'B' | 'C';
@@ -57,7 +58,16 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
     const equipo = new Map(usuarios.map((u) => [u.id, u.equipo_id ?? null]));
     return (vendedorId?: string | null) => periodoDeEquipo(vendedorId === usuario.id ? usuario.equipo_id : vendedorId ? equipo.get(vendedorId) : null);
   }, [usuarios, usuario.id, usuario.equipo_id, periodoDeEquipo]);
-  const cobertura = useMemo(() => coberturaMedicos(deCartera, visitas, (m) => periodoDe(m.vendedor_id)), [deCartera, visitas, periodoDe]);
+  // Cobertura ajustada: lo esperado baja en proporción a los días libres aprobados de cada representante.
+  const estadoDe = useMemo(() => {
+    const e = new Map(usuarios.map((u) => [u.id, u.estado_geografico]));
+    return (id: string) => (id === usuario.id ? usuario.estado_geografico : e.get(id));
+  }, [usuarios, usuario.id, usuario.estado_geografico]);
+  const ajusteCobertura = useAjusteCobertura(estadoDe);
+  const cobertura = useMemo(
+    () => coberturaMedicos(deCartera, visitas, (m) => periodoDe(m.vendedor_id), (m) => ajusteCobertura(m.vendedor_id, periodoDe(m.vendedor_id)).factor),
+    [deCartera, visitas, periodoDe, ajusteCobertura]
+  );
   const resumen = resumenCobertura(cobertura);
   const periodos = [...new Map(deCartera.map((m) => periodoDe(m.vendedor_id)).map((p) => [p.etiqueta, p])).values()];
   const unPeriodo = periodos.length <= 1 ? (periodos[0] ?? periodoDe(usuario.id)) : null;
@@ -127,7 +137,7 @@ export function MedicosVista({ usuario }: { usuario: Usuario }) {
 
       <div className="mb-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
         <Tarjeta>
-          <Medidor valor={resumen.visitas} total={resumen.esperadas} rotulo={unPeriodo ? `Visitas ${unPeriodo.del}${unPeriodo.tipo === 'ciclo' ? ` ${unPeriodo.ciclo?.nombre ?? ''}` : ''}` : 'Visitas del ciclo de cada equipo'} nota={`${resumen.cubiertos} de ${resumen.total} médicos con todas sus visitas · cuentan las visitas "realizadas"${unPeriodo?.tipo === 'ciclo' ? ` · quedan ${unPeriodo.restantes} días hábiles` : ''}`} />
+          <Medidor valor={resumen.visitas} total={resumen.esperadas} rotulo={unPeriodo ? `Visitas ${unPeriodo.del}${unPeriodo.tipo === 'ciclo' ? ` ${unPeriodo.ciclo?.nombre ?? ''}` : ''}` : 'Visitas del ciclo de cada equipo'} nota={`${resumen.cubiertos} de ${resumen.total} médicos con todas sus visitas · cuentan las visitas "realizadas"${resumen.esperadas < resumen.esperadasBase ? ` · esperadas ajustadas por días libres aprobados (eran ${resumen.esperadasBase})` : ''}${unPeriodo?.tipo === 'ciclo' ? ` · quedan ${unPeriodo.restantes} días hábiles` : ''}`} />
         </Tarjeta>
         {gestiona && (
           <Tarjeta className="flex flex-col justify-center gap-2">

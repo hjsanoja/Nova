@@ -1,8 +1,22 @@
 [
   {
+    "version": "12.0",
+    "fecha": "2026-10-02",
+    "tipo": "mayor",
+    "titulo": "Otras actividades y días libres con aprobación del gerente",
+    "cambios": [
+      "Mis actividades: el representante reporta vacaciones, reunión de ciclo, impulso u otra actividad (un día, varios días o media jornada), también sin señal, y ve si está por aprobar, aprobada o rechazada.",
+      "Actividades → Por aprobar: el gerente de cada representante (o la administración) aprueba o rechaza, una o varias a la vez; el rechazo lleva un comentario. Las dos partes reciben el aviso, también en el teléfono.",
+      "Configuración → Usuarios: cada representante tiene su gerente, que es quien aprueba sus actividades junto con la administración.",
+      "Motivos editables por la administración (arranca con Reunión de Ciclo, Vacaciones e Impulso): si descuentan de la cobertura, si requieren aprobación y si están activos.",
+      "Cobertura ajustada: lo aprobado se descuenta de los días del ciclo, y las visitas esperadas a médicos bajan en proporción (Médicos, Mi ruta y Reportes → Visitas)."
+    ]
+  },
+  {
     "version": "11.0",
     "fecha": "2026-10-02",
     "tipo": "mayor",
+    "pr": 15,
     "titulo": "Ciclos por equipo: días hábiles, feriados y metas por ciclo",
     "cambios": [
       "Gestión → Ciclos: cada equipo tiene su calendario de ciclos (y uno General para los demás). Los ciclos empiezan y terminan en día hábil, no se cruzan y «Crear el siguiente» propone el próximo con un toque.",

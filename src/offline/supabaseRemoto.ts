@@ -30,6 +30,7 @@ const RPC: Record<Exclude<TipoOutbox, 'pedido.rerutear'>, string> = {
   'farmacia.codigo': 'sync_registrar_codigo_farmacia',
   'plantilla.guardar': 'sync_guardar_plantilla',
   'tarea.guardar': 'sync_guardar_tarea',
+  'actividad.guardar': 'sync_guardar_actividad',
 };
 
 /** Implementación de SyncRemote sobre supabase-js. Cada mutación es una RPC idempotente (ver el DDL, sección 10-11). */

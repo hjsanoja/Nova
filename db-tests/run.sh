@@ -17,5 +17,6 @@ $P -d nova_test -f db-tests/70_novedades.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|
 $P -d nova_test -f db-tests/80_fase2.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|DETAIL|CONTEXT" | sed 's/^psql:[^ ]* NOTICE: *//'
 $P -d nova_test -f db-tests/90_crm.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|DETAIL|CONTEXT" | sed 's/^psql:[^ ]* NOTICE: *//'
 $P -d nova_test -f db-tests/95_ciclos.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|DETAIL|CONTEXT" | sed 's/^psql:[^ ]* NOTICE: *//'
+$P -d nova_test -f db-tests/97_actividades.sql 2>&1 | grep -E "NOTICE|ERROR|TODOS|DETAIL|CONTEXT" | sed 's/^psql:[^ ]* NOTICE: *//'
 
 ./db-tests/50_version_anterior.sh
