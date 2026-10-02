@@ -2,25 +2,7 @@ import type { NovaDB } from './db';
 import { textoBusquedaCliente, tokensProducto } from './busqueda';
 import type { FilaRemota, SyncRemote } from './remoto';
 import type { ReglaComercial } from './politicas';
-import type {
-  LocalCiclo,
-  LocalCliente,
-  LocalCompraMensual,
-  LocalDetalle,
-  LocalDrogueria,
-  LocalFeriado,
-  LocalMapCliente,
-  LocalMapProducto,
-  LocalComunicado,
-  LocalMedico,
-  LocalMeta,
-  LocalNotificacion,
-  LocalTarea,
-  LocalPlantilla,
-  LocalVisita,
-  LocalPedido,
-  LocalProducto,
-} from './types';
+import type { LocalActividad, LocalCiclo, LocalCliente, LocalCompraMensual, LocalComunicado, LocalDetalle, LocalDrogueria, LocalFeriado, LocalMapCliente, LocalMapProducto, LocalMedico, LocalMeta, LocalMotivo, LocalNotificacion, LocalPedido, LocalPlantilla, LocalProducto, LocalTarea, LocalVisita } from './types';
 
 /**
  * Sincronización descendente por cursor: cada tabla se pide con `updated_at > cursor`, en páginas,
@@ -398,6 +380,53 @@ export const TABLAS_PULL: TablaPull[] = [
           estados: Array.isArray(f.estados) ? (f.estados as string[]) : [],
           updated_at: str(f.updated_at),
         }))
+      );
+    },
+  },
+  {
+    remota: 'motivos_actividad',
+    aplicar: async (db, filas) => {
+      await db.motivos.bulkDelete(borrados(filas));
+      await db.motivos.bulkPut(
+        vigentes(filas).map<LocalMotivo>((f) => ({
+          id: str(f.id),
+          nombre: str(f.nombre),
+          descuenta: f.descuenta !== false,
+          requiere_aprobacion: f.requiere_aprobacion !== false,
+          activo: f.activo !== false,
+          orden: Number(f.orden ?? 0),
+          updated_at: str(f.updated_at),
+        }))
+      );
+    },
+  },
+  {
+    // Otras actividades y días libres: las propias (la gerencia y la administración, todas). Lo que aún no se envió
+    // desde este dispositivo no se pisa.
+    remota: 'actividades',
+    aplicar: async (db, filas) => {
+      const locales = new Map((await db.actividades.bulkGet(filas.map((f) => str(f.id)))).filter((a): a is LocalActividad => !!a).map((a) => [a.id, a]));
+      const sucio = (id: string) => (locales.get(id)?.sync_estado ?? 'sincronizado') === 'pendiente';
+      await db.actividades.bulkDelete(borrados(filas).filter((id) => !sucio(id)));
+      await db.actividades.bulkPut(
+        vigentes(filas)
+          .filter((f) => !sucio(str(f.id)))
+          .map<LocalActividad>((f) => ({
+            id: str(f.id),
+            vendedor_id: str(f.vendedor_id),
+            motivo_id: str(f.motivo_id),
+            desde: str(f.desde).slice(0, 10),
+            hasta: str(f.hasta).slice(0, 10),
+            jornada: f.jornada === 'media' ? 'media' : 'completa',
+            notas: strN(f.notas),
+            estado: (f.estado as LocalActividad['estado']) ?? 'pendiente',
+            decidido_por: strN(f.decidido_por),
+            decidido_en: strN(f.decidido_en),
+            comentario: strN(f.comentario),
+            created_at: str(f.created_at),
+            updated_at: str(f.updated_at),
+            sync_estado: 'sincronizado',
+          }))
       );
     },
   },

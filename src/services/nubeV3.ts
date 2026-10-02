@@ -159,6 +159,7 @@ export interface PerfilUsuario {
   rol: RolUsuario;
   equipo: EquipoVentas;
   equipo_id?: string | null;
+  gerente_id?: string | null;
   estado_geografico?: string | null;
   telefono?: string;
   activo: boolean;
@@ -181,6 +182,7 @@ export async function cargarPerfilUsuario(sb: SupabaseClient, id: string): Promi
     rol: rolDesdeV3(data.rol as string),
     equipo: equipoDesdeV3(equipo?.codigo),
     equipo_id: (data.equipo_id as string | null) ?? null,
+    gerente_id: (data.gerente_id as string | null) ?? null,
     estado_geografico: (data.estado_geografico as string | null) ?? null,
     telefono: (data.telefono as string | null) ?? undefined,
     activo: data.activo === true,

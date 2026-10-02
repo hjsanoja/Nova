@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, CalendarDays, CalendarRange, ClipboardPlus, Clock, HeartPulse, Link2, Package, Phone, ShoppingBag, Sparkles, Store, Target, UserCheck } from 'lucide-react';
+import { Activity, CalendarClock, CalendarDays, CalendarRange, ClipboardPlus, Clock, HeartPulse, Link2, Package, Phone, ShoppingBag, Sparkles, Store, Target, UserCheck } from 'lucide-react';
 import type { Usuario } from '../types/pharmacy';
 import { obtenerDb } from '../offline/db';
 import { useLive } from '../offline/useLive';
@@ -12,6 +12,7 @@ import type { LocalCompraMensual, LocalMeta } from '../offline/types';
 import { NIVELES_META, avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe, revisarMetasHoy } from '../metas/logica';
 import type { ContextoMetas } from '../metas/logica';
 import { useCiclos, useEquipos, useFeriados } from '../ciclos/datos';
+import { useActividades } from '../actividades/datos';
 import { cicloVigente, enRango, esDiaHabil, fechaTexto, periodoActual, periodoDeCiclo } from '../ciclos/logica';
 import { DetallePedidos } from './DetallePedidos';
 import type { SolicitudDetalle } from './DetallePedidos';
@@ -134,6 +135,8 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   // Metas del ciclo que se mide y, si las hay, las del mes en curso.
   const metas = useMemo(() => metasLocales.filter((m) => (periodo.ciclo && m.ciclo_id === periodo.ciclo.id) || m.periodo === mesActual), [metasLocales, periodo.ciclo, mesActual]);
   const visitas = useVisitas();
+  // Actividades y días libres que esta persona puede aprobar (la administración, todas; un gerente, las de su gente).
+  const actividades = useActividades();
 
   // El vendedor ve lo suyo; la gerencia, lo del equipo del ciclo elegido (o todo, con el ciclo general o el mes).
   const pedidos = useMemo(
@@ -235,6 +238,8 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const unidadesDeProducto = (productoId: string) => (p: (typeof pedidos)[number]) => (porPedido.get(p.id) ?? []).filter((d) => d.producto_id === productoId).reduce((a, d) => a + d.unidades_solicitadas, 0);
 
   const periodoAnterior = periodo.anterior?.etiqueta ?? (periodo.tipo === 'ciclo' ? 'el ciclo anterior' : 'el mes pasado');
+  const gerenteDe = new Map(usuarios.map((u) => [u.id, u.gerente_id ?? null]));
+  const porAprobar = puedeMetas ? actividades.filter((a) => a.estado === 'pendiente' && (esAdmin || gerenteDe.get(a.vendedor_id) === usuario.id)).length : 0;
   const tomarPedido = (usuario.rol === 'vendedor' || esAdmin) && (
     <Boton variante="primario" icono={ClipboardPlus} onClick={() => irATab('captura')}>
       Tomar pedido
@@ -469,6 +474,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
           <>
             <span className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-white/10 px-3 text-xs font-semibold text-white"><CalendarDays className="h-3.5 w-3.5" aria-hidden />{new Date().toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
             {(esVendedor || esAdmin) && <BotonClaro icono={ClipboardPlus} onClick={() => irATab('captura')}>Tomar pedido</BotonClaro>}
+            {porAprobar > 0 && <BotonClaro icono={CalendarClock} onClick={() => irATab('actividades')}>Por aprobar · {porAprobar}</BotonClaro>}
             {!esVendedor && porProcesar + enRevision > 0 && (esAdmin || usuario.rol === 'teletransferencista') && (
               <BotonClaro icono={Clock} onClick={() => irATab('por_procesar')}>Por procesar · {porProcesar + enRevision}</BotonClaro>
             )}
@@ -565,7 +571,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         <div className="flex min-w-0 flex-col gap-4 lg:gap-5 xl:col-span-4">
           {tarjetaMetas}
           {tarjetaTareas}
-          <CentroAvisos onAbrir={(n) => (n.tipo.startsWith('meta') ? puedeMetas && irATab('metas') : n.tipo.startsWith('tarea') ? irATab('tareas') : irATab('pedidos'))} />
+          <CentroAvisos onAbrir={(n) => (n.tipo.startsWith('meta') ? puedeMetas && irATab('metas') : n.tipo.startsWith('tarea') ? irATab('tareas') : n.tipo.startsWith('actividad') ? irATab('actividades') : irATab('pedidos'))} />
           {!esVendedor && (
             <Tarjeta>
               <Subtitulo>Unidades por droguería · {esteP}</Subtitulo>

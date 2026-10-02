@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BellOff, CheckCheck, ListTodo, PackageCheck, PackageX, Target, Trophy, Truck, X } from 'lucide-react';
+import { BellOff, CalendarClock, CheckCheck, ListTodo, PackageCheck, PackageX, Target, Trophy, Truck, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { obtenerDb } from '../offline/db';
 import { useLive } from '../offline/useLive';
@@ -14,6 +14,8 @@ const ICONO: Record<string, { icono: LucideIcon; clase: string; critico?: boolea
   meta_en_riesgo: { icono: Target, clase: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' },
   meta_cumplida: { icono: Trophy, clase: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' },
   tarea_vence: { icono: ListTodo, clase: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300' },
+  actividad_solicitud: { icono: CalendarClock, clase: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' },
+  actividad_decision: { icono: CalendarClock, clase: 'bg-marca-100 text-marca-800 dark:bg-marca-950 dark:text-marca-300' },
 };
 
 export function haceCuanto(iso: string, ahora = Date.now()): string {

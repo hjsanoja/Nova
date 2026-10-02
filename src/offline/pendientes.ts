@@ -10,6 +10,7 @@ const QUE: Record<TipoOutbox, string> = {
   'farmacia.codigo': 'Código de farmacia en droguería',
   'plantilla.guardar': 'Plantilla',
   'tarea.guardar': 'Tarea',
+  'actividad.guardar': 'Actividad o día libre',
 };
 
 export interface Pendiente {
@@ -42,6 +43,7 @@ export function describirPendientes(
       else if (o.tipo === 'prospecto.crear') detalle = String(p.nombre_comercial ?? '');
       else if (o.tipo === 'visita.registrar') detalle = p.cliente_id ? nombre(String(p.cliente_id)) ?? '' : 'Visita a un médico';
       else if (o.tipo === 'tarea.guardar') detalle = `${String(p.titulo ?? '')}${p.eliminar ? ' (borrar)' : ''}`;
+      else if (o.tipo === 'actividad.guardar') detalle = `${String(p.desde ?? '')}${p.hasta && p.hasta !== p.desde ? ` al ${String(p.hasta)}` : ''}${p.anular ? ' (anular)' : ''}`;
       return { seq: o.seq ?? 0, que: QUE[o.tipo] ?? o.tipo, detalle, desde: o.created_at, estado: o.estado, error: o.error ?? null, intentos: o.intentos };
     });
 }

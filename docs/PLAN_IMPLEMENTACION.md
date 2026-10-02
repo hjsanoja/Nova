@@ -9,7 +9,7 @@ si una fase se parte en dos PR, cada uno sube su versión.
 | 2 ✅ | v9.0 | Respuesta de la droguería por archivo · Metas con alertas · Farmacias en riesgo | Sí |
 | 3 ✅ | v10.0 | CRM: Médicos · Visitas con reporte (visitador mixto) · Tareas y recordatorios · Ficha 360° · Registro de cambios | Sí |
 | 4 ✅ | v11.0 | **Ciclos por equipo**: calendario con días hábiles y feriados nacionales y regionales · todo se mide por ciclo · metas por ciclo fáciles de repetir · cierre con foto de resultados | Sí |
-| 5 | v12.0 | **Otras actividades** (nuevo): días libres y actividades con aprobación del gerente · cobertura ajustada | Sí |
+| 5 ✅ | v12.0 | **Otras actividades**: días libres y actividades con aprobación del gerente asignado · motivos editables · cobertura ajustada | Sí |
 | 6 | v13.0 | Automatizaciones · WhatsApp · Monitoreo de errores y respaldo · Robustez de la base | Sí |
 | 7 | v14.0 (experimental) | Laboratorio de precios e inventario por droguería (solo administrador) | Sí |
 
@@ -149,37 +149,38 @@ si una fase se parte en dos PR, cada uno sube su versión.
 
 ---
 
-## Fase 5 — Otras actividades y días libres (v12.0) · *nueva petición, evaluada*
+## Fase 5 — Otras actividades y días libres (v12.0) ✅
 
-**Qué se pidió:** un apartado donde el vendedor o visitador reporte otras actividades o días libres (feriados, vacaciones, día producto, impulsos, jornada médica…); los motivos los define la administración; todo reporte lo aprueba el gerente **antes** de descontarlo de la cobertura de visitas.
+**Qué se pidió:** un apartado donde el vendedor o visitador reporte otras actividades o días libres; los motivos los define la administración; todo reporte lo aprueba el gerente **antes** de descontarlo de la cobertura de visitas. Respuestas del equipo: cada representante tiene **su propio gerente**, y aprueban **ese gerente o la administración**; motivos iniciales **Reunión de Ciclo, Vacaciones e Impulso**, editables por la administración.
 
-**Evaluación:** viable y necesario para que la cobertura por ciclo sea justa. Depende de la Fase 4 (días hábiles del ciclo), que ya está lista.
+### 5.1 Motivos (Gestión → Actividades → Motivos, solo administración)
+1. Arranca con Reunión de Ciclo, Vacaciones e Impulso. Se agregan, renombran o desactivan (un motivo inactivo ya no se elige; lo reportado se conserva).
+2. Cada motivo dice si **descuenta de la cobertura** y si **requiere aprobación** (sin aprobación queda aprobado al reportarlo).
+3. Los **feriados** del calendario (Fase 4) se descuentan solos para todos, sin aprobación.
 
-**Respuestas del equipo:**
-1. Cada representante tiene **su propio gerente**; aprueban **ese gerente o la administración**.
-2. Motivos iniciales: **Reunión de Ciclo, Vacaciones e Impulso**. La administración puede agregar, cambiar o desactivar motivos.
+### 5.2 Mis actividades (representante)
+1. Reporta un día, varios días o media jornada, con motivo y nota. Funciona sin señal (se envía al volver la conexión).
+2. NOVA no deja reportar dos actividades en las mismas fechas y muestra cuántos días hábiles ocupa.
+3. Ve el estado de cada una (por aprobar, aprobada, rechazada con el comentario, anulada) y sus días del ciclo: hábiles, libres aprobados y efectivos. Mientras está por aprobar la puede cambiar o anular.
 
-### 5.1 Motivos (administración)
-1. Catálogo editable que arranca con **Reunión de Ciclo, Vacaciones e Impulso** (luego se agregan día producto, jornada médica, reposo médico, capacitación… si hacen falta): nombre, si **descuenta de la cobertura**, si **requiere aprobación** y si está activo.
-2. Los **feriados** del calendario (Fase 4) se descuentan solos para todos, sin aprobación.
-
-### 5.2 Reporte del vendedor o visitador
-1. Módulo **Mis actividades**: fecha o rango de fechas, jornada completa o media jornada, motivo y nota. Funciona sin señal.
-2. Ve el estado de cada reporte: pendiente, aprobado o rechazado (con el comentario del gerente).
-
-### 5.3 Aprobación del gerente
-1. Bandeja **Por aprobar** para el gerente, con aviso al teléfono cuando llega un reporte; aprueba o rechaza con un comentario (también varios a la vez).
-2. El representante recibe el aviso de la decisión.
-3. Cada representante tiene asignado su **gerente** (nuevo dato en Configuración → Usuarios). Solo ese gerente o la administración pueden aprobar; si aún no tiene gerente, aprueba la administración.
+### 5.3 Aprobación (Gestión → Actividades → Por aprobar)
+1. El gerente ve las de los representantes que tiene asignados; la administración, todas. Aprueba o rechaza una o varias a la vez; el rechazo pide un comentario.
+2. Avisos en la app y al teléfono: al gerente cuando llega un reporte (si el representante no tiene gerente, a la administración) y al representante cuando se decide.
+3. El Inicio de la gerencia muestra «Por aprobar · N». Una actividad ya aprobada solo la puede anular su gerente o la administración.
+4. El gerente de cada representante se asigna en Configuración → Usuarios.
 
 ### 5.4 Cobertura ajustada
-1. **Días efectivos** del representante en el ciclo = días hábiles − feriados − días **aprobados** que descuentan.
-2. Lo esperado (visitas y, si se decide, metas) se prorratea con los días efectivos: si alguien tuvo 3 días de vacaciones aprobadas en un ciclo de 20 días hábiles, se le esperan 17/20 de las visitas.
-3. Los reportes muestran la cobertura real y la ajustada, y la lista de actividades del período.
+1. **Días efectivos** del representante en el ciclo = días hábiles (sin feriados nacionales ni los regionales de su estado) − días **aprobados** de motivos que descuentan (media jornada = medio día).
+2. Las visitas esperadas a cada médico se prorratean: 3 días de vacaciones aprobadas en un ciclo de 20 días hábiles → se esperan 17/20 de las visitas.
+3. Médicos, Mi ruta y Reportes → Visitas muestran la cobertura ajustada y cuántas eran sin ajustar.
 
 ### 5.5 Base de datos (resumen técnico)
-- Tablas `motivos_actividad` y `actividades` (con estado, quién aprobó y cuándo), y `dim_usuarios.gerente_id`.
-- Función `dias_efectivos(vendedor, ciclo)` y avisos de solicitud y decisión (con la revisión diaria y al instante).
+- `dim_usuarios.gerente_id`, tablas `motivos_actividad` y `actividades` (estado, quién decidió, cuándo y el comentario).
+- Funciones `sync_guardar_actividad` (idempotente, sin cruces), `decidir_actividades` (gerente asignado o administración) y `dias_efectivos(vendedor, desde, hasta)`; avisos de solicitud y decisión.
+- Pruebas SQL 57 a 59 (`db-tests/97_actividades.sql`).
+
+### 5.6 Para después (si se necesita)
+- Prorratear también las metas de visitas de cada representante con sus días efectivos.
 
 ---
 
@@ -270,5 +271,5 @@ Cada droguería manda su inventario y sus precios en un formato distinto. En lug
 1. **Archivos reales de inventario y de precios** de cada droguería (Cobeca, Drocerca, Nena y las demás), aunque vengan con datos borrados. Sin ellos no arranca la Fase 7.
 2. **Un ejemplo del archivo de respuesta** (lo despachado) de cada droguería, para dejar su formato configurado y probado. Mientras tanto, NOVA adivina las columnas por sus títulos.
 3. **Datos del médico** adicionales (horario de consulta, potencial en recetas, etc.): la Fase 3 ya guarda especialidad, centro, teléfono, correo, categoría y visitas por ciclo; lo que falte se agrega.
-4. **Para las otras actividades (Fase 5):** qué gerente tiene cada representante (se podrá cargar en Usuarios cuando llegue la Fase 5).
+4. **Gerente de cada representante:** cargarlo en Configuración → Usuarios (columna «Gerente»).
 

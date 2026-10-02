@@ -35,7 +35,7 @@ const ESPERA_AVISO_MS = 800; // agrupa ráfagas de avisos (p. ej. un pedido con 
 export const TABLAS_EN_VIVO = [
   'fact_pedidos', 'fact_pedido_detalles', 'notificaciones', 'comunicados', 'metas', 'plantillas_pedido',
   'config_reglas_comerciales', 'map_cliente_drogueria', 'map_producto_drogueria', 'dim_droguerias', 'rel_cliente_vendedor',
-  'dim_medicos', 'crm_tareas', 'crm_visitas', 'ciclos', 'feriados',
+  'dim_medicos', 'crm_tareas', 'crm_visitas', 'ciclos', 'feriados', 'motivos_actividad', 'actividades',
 ];
 
 export function crearMotorSync(db: NovaDB, remoto: SyncRemote | null): MotorSync {

@@ -9,6 +9,9 @@ import { coberturaMedicos, muestrasPorProducto, resumenCobertura, visitasPorRepr
 import type { FiltroVisitas } from './medicos';
 import { useCiclos, usePeriodoDeEquipo } from '../ciclos/datos';
 import { enRango } from '../ciclos/logica';
+import { useAjusteCobertura } from '../actividades/datos';
+
+const ajustada = (r: { esperadas: number; esperadasBase: number }) => (r.esperadas < r.esperadasBase ? ` (de ${r.esperadasBase}, ajustada por días libres aprobados)` : '');
 
 type Rango = '7' | '30' | 'mes' | 'ciclo';
 
@@ -41,13 +44,20 @@ export function ReporteVisitas() {
     const p = new Map(productos.map((x) => [x.id, x]));
     return muestrasPorProducto(visitas, desde).slice(0, 8).map((m) => ({ clave: m.producto_id, nombre: nombreDeProducto(p.get(m.producto_id)), valor: m.cantidad }));
   }, [visitas, desde, productos]);
+  const estadoDe = useMemo(() => {
+    const e = new Map(usuarios.map((u) => [u.id, u.estado_geografico]));
+    return (id: string) => e.get(id);
+  }, [usuarios]);
+  const ajusteCobertura = useAjusteCobertura(estadoDe);
+  const factorDe = (id?: string | null) => ajusteCobertura(id, periodoDe(id)).factor;
   const coberturaRep = useMemo(() => {
     const porRep = new Map<string, typeof medicos>();
     for (const m of medicos) if (m.vendedor_id) porRep.set(m.vendedor_id, [...(porRep.get(m.vendedor_id) ?? []), m]);
-    return [...porRep.entries()].map(([id, ms]) => ({ id, ...resumenCobertura(coberturaMedicos(ms, visitas, periodoDe(id))) })).sort((a, b) => a.cubiertos / a.total - b.cubiertos / b.total);
-  }, [medicos, visitas, periodoDe]);
+    return [...porRep.entries()].map(([id, ms]) => ({ id, ...resumenCobertura(coberturaMedicos(ms, visitas, periodoDe(id), () => factorDe(id))), libres: ajusteCobertura(id, periodoDe(id)).libres })).sort((a, b) => a.cubiertos / a.total - b.cubiertos / b.total);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [medicos, visitas, periodoDe, ajusteCobertura]);
   // Cobertura: cada médico con el ciclo vigente del equipo de su representante (o el mes, si no hay ciclos).
-  const total = resumenCobertura(coberturaMedicos(medicos, visitas, (m) => periodoDe(m.vendedor_id)));
+  const total = resumenCobertura(coberturaMedicos(medicos, visitas, (m) => periodoDe(m.vendedor_id), (m) => factorDe(m.vendedor_id)));
   const conCiclos = medicos.some((m) => periodoDe(m.vendedor_id).tipo === 'ciclo');
 
   const descargar = () => {
@@ -116,9 +126,9 @@ export function ReporteVisitas() {
             <Vacio titulo="Sin médicos cargados" texto="Cárgalos en el módulo Médicos." />
           ) : (
             <div className="flex flex-col gap-4">
-              <Medidor valor={total.cubiertos} total={total.total} rotulo="Médicos con todas sus visitas" nota={`${total.visitas} de ${total.esperadas} visitas esperadas ${conCiclos ? 'en el ciclo de cada equipo' : 'en el mes'}`} />
+              <Medidor valor={total.cubiertos} total={total.total} rotulo="Médicos con todas sus visitas" nota={`${total.visitas} de ${total.esperadas} visitas esperadas ${conCiclos ? 'en el ciclo de cada equipo' : 'en el mes'}${ajustada(total)}`} />
               {coberturaRep.map((r) => (
-                <Medidor key={r.id} valor={r.cubiertos} total={r.total} rotulo={nombre(r.id)} nota={`${r.visitas} de ${r.esperadas} visitas`} />
+                <Medidor key={r.id} valor={r.cubiertos} total={r.total} rotulo={nombre(r.id)} nota={`${r.visitas} de ${r.esperadas} visitas${r.libres > 0 ? ` · ${r.libres.toLocaleString('es-VE')} días libres aprobados` : ''}${ajustada(r)}`} />
               ))}
             </div>
           )}

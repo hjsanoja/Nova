@@ -2509,6 +2509,7 @@ BEGIN
     TRUNCATE fact_pedido_detalles, pedido_bloqueos, notificaciones, crm_visitas, alertas_comerciales,
              fact_pedidos RESTART IDENTITY CASCADE;
     IF to_regclass('public.crm_tareas') IS NOT NULL THEN EXECUTE 'TRUNCATE crm_tareas'; END IF;
+    IF to_regclass('public.actividades') IS NOT NULL THEN EXECUTE 'TRUNCATE actividades'; END IF;
     PERFORM setval('seq_correlativo_pedido', 1001, false);
   END IF;
   IF p_alcance = 'homologaciones' THEN
@@ -3963,5 +3964,243 @@ REVOKE ALL ON FUNCTION app.avance_metas_ciclo(uuid, date), app.cerrar_ciclo(uuid
                        ajustar_metas_ciclo(uuid, numeric), dias_habiles(date, date, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION cerrar_ciclo(uuid), copiar_metas_ciclo(uuid, uuid, numeric, boolean), ajustar_metas_ciclo(uuid, numeric),
                           dias_habiles(date, date, text) TO authenticated;
+
+-- ------------------------------------------------------------------------------
+-- 20. FASE 5 (v12.0): OTRAS ACTIVIDADES Y DÍAS LIBRES, CON APROBACIÓN DEL GERENTE
+-- ------------------------------------------------------------------------------
+-- El representante reporta días que no visita (vacaciones, reunión de ciclo, impulso…). Su gerente o la
+-- administración lo aprueban; solo lo aprobado descuenta de la cobertura de visitas del ciclo.
+
+-- 20.1 El gerente de cada representante (lo asigna la administración en Usuarios).
+ALTER TABLE dim_usuarios ADD COLUMN IF NOT EXISTS gerente_id uuid REFERENCES dim_usuarios(id) ON DELETE SET NULL;
+ALTER TABLE dim_usuarios DROP CONSTRAINT IF EXISTS ck_usuario_gerente_propio;
+ALTER TABLE dim_usuarios ADD CONSTRAINT ck_usuario_gerente_propio CHECK (gerente_id IS NULL OR gerente_id <> id);
+CREATE INDEX IF NOT EXISTS idx_usuarios_gerente ON dim_usuarios (gerente_id) WHERE gerente_id IS NOT NULL;
+
+-- 20.2 Motivos (los define la administración). Arranca con Reunión de Ciclo, Vacaciones e Impulso.
+CREATE TABLE IF NOT EXISTS motivos_actividad (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  nombre               text NOT NULL CHECK (btrim(nombre) <> ''),
+  descuenta            boolean NOT NULL DEFAULT true,   -- descuenta los días de la cobertura de visitas
+  requiere_aprobacion  boolean NOT NULL DEFAULT true,   -- sin aprobación queda aprobada al reportarla
+  activo               boolean NOT NULL DEFAULT true,
+  orden                integer NOT NULL DEFAULT 0,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version          integer NOT NULL DEFAULT 1,
+  deleted_at           timestamptz
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_motivo_nombre ON motivos_actividad (lower(btrim(nombre))) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_motivos_updated ON motivos_actividad (updated_at);
+-- Solo la primera vez (si la tabla está vacía): así no reaparecen los que la administración quite.
+INSERT INTO motivos_actividad (nombre, orden)
+SELECT v.nombre, v.orden FROM (VALUES ('Reunión de Ciclo', 1), ('Vacaciones', 2), ('Impulso', 3)) v(nombre, orden)
+ WHERE NOT EXISTS (SELECT 1 FROM motivos_actividad);
+
+-- 20.3 Actividades reportadas: un día, un rango de días o media jornada.
+CREATE TABLE IF NOT EXISTS actividades (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  vendedor_id   uuid NOT NULL REFERENCES dim_usuarios(id) ON DELETE CASCADE,
+  motivo_id     uuid NOT NULL REFERENCES motivos_actividad(id),
+  desde         date NOT NULL,
+  hasta         date NOT NULL,
+  jornada       text NOT NULL DEFAULT 'completa' CHECK (jornada IN ('completa','media')),
+  notas         text,
+  estado        text NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente','aprobada','rechazada','anulada')),
+  decidido_por  uuid REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  decidido_en   timestamptz,
+  comentario    text,
+  creado_por    uuid DEFAULT auth.uid() REFERENCES dim_usuarios(id) ON DELETE SET NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  updated_at    timestamptz NOT NULL DEFAULT clock_timestamp(),
+  row_version   integer NOT NULL DEFAULT 1,
+  deleted_at    timestamptz,
+  CONSTRAINT ck_actividad_fechas CHECK (hasta >= desde AND hasta - desde <= 62),
+  CONSTRAINT ck_actividad_media CHECK (jornada = 'completa' OR desde = hasta)
+);
+CREATE INDEX IF NOT EXISTS idx_actividades_vendedor ON actividades (vendedor_id, desde);
+CREATE INDEX IF NOT EXISTS idx_actividades_estado ON actividades (estado) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_actividades_updated ON actividades (updated_at);
+
+-- Quién aprueba: el gerente asignado al representante o la administración.
+CREATE OR REPLACE FUNCTION app.puede_aprobar(p_vendedor uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT app.es_admin()
+      OR (app.rol() = 'gerente' AND EXISTS (SELECT 1 FROM dim_usuarios WHERE id = p_vendedor AND gerente_id = auth.uid()))
+$$;
+
+-- "del 05/10 al 09/10" o "el 05/10 (media jornada)".
+CREATE OR REPLACE FUNCTION app.texto_fechas(p_desde date, p_hasta date, p_jornada text) RETURNS text
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN p_desde = p_hasta THEN 'el ' || to_char(p_desde, 'DD/MM') || CASE WHEN p_jornada = 'media' THEN ' (media jornada)' ELSE '' END
+              ELSE 'del ' || to_char(p_desde, 'DD/MM') || ' al ' || to_char(p_hasta, 'DD/MM') END
+$$;
+
+-- 20.4 Reportar, cambiar o anular (desde el dispositivo, idempotente). Mientras está pendiente se puede cambiar; una
+-- vez decidida, solo el gerente o la administración la anulan.
+CREATE OR REPLACE FUNCTION sync_guardar_actividad(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_id uuid := (p->>'id')::uuid;
+  v_vendedor uuid := coalesce(nullif(p->>'vendedor_id', '')::uuid, auth.uid());
+  v_previa actividades; v_motivo motivos_actividad; v_row actividades; v_cruce record;
+  v_desde date := (p->>'desde')::date; v_hasta date := coalesce(nullif(p->>'hasta', '')::date, (p->>'desde')::date);
+  v_jornada text := coalesce(nullif(p->>'jornada', ''), 'completa');
+  v_anular boolean := coalesce((p->>'anular')::boolean, false);
+  v_nombre text; v_aprobadores uuid[];
+BEGIN
+  IF app.rol() IS NULL THEN RAISE EXCEPTION 'Cuenta sin acceso' USING ERRCODE = '42501'; END IF;
+  IF v_vendedor <> auth.uid() AND NOT app.puede_aprobar(v_vendedor) THEN
+    RAISE EXCEPTION 'Solo puedes reportar tus propias actividades' USING ERRCODE = '42501';
+  END IF;
+  SELECT * INTO v_previa FROM actividades WHERE id = v_id;
+  IF FOUND AND v_previa.vendedor_id <> v_vendedor THEN RAISE EXCEPTION 'Actividad de otra persona' USING ERRCODE = '42501'; END IF;
+
+  IF v_anular THEN
+    IF NOT FOUND THEN RETURN jsonb_build_object('id', v_id, 'estado', 'anulada'); END IF;
+    IF v_previa.estado = 'anulada' THEN RETURN jsonb_build_object('id', v_id, 'estado', 'anulada', 'row_version', v_previa.row_version); END IF;
+    IF v_previa.estado <> 'pendiente' AND NOT app.puede_aprobar(v_vendedor) THEN
+      RAISE EXCEPTION 'Ya fue %: pide a tu gerente que la anule', CASE v_previa.estado WHEN 'aprobada' THEN 'aprobada' ELSE 'rechazada' END USING ERRCODE = '42501';
+    END IF;
+    UPDATE actividades SET estado = 'anulada' WHERE id = v_id RETURNING * INTO v_row;
+    UPDATE notificaciones SET leida = true WHERE clave = 'actividad:' || v_id || ':solicitud' AND NOT leida;
+    RETURN jsonb_build_object('id', v_row.id, 'estado', v_row.estado, 'row_version', v_row.row_version);
+  END IF;
+
+  IF FOUND AND v_previa.estado <> 'pendiente' THEN
+    -- Ya decidida: reintentos del mismo envío no cambian nada.
+    RETURN jsonb_build_object('id', v_previa.id, 'estado', v_previa.estado, 'row_version', v_previa.row_version, 'comentario', v_previa.comentario);
+  END IF;
+  SELECT * INTO v_motivo FROM motivos_actividad WHERE id = (p->>'motivo_id')::uuid AND deleted_at IS NULL;
+  IF NOT FOUND OR (NOT v_motivo.activo AND (v_previa.id IS NULL OR v_previa.motivo_id <> v_motivo.id)) THEN
+    RAISE EXCEPTION 'Ese motivo ya no está disponible' USING ERRCODE = '22023';
+  END IF;
+  IF v_desde IS NULL OR v_hasta < v_desde THEN RAISE EXCEPTION 'Revisa las fechas: el fin no puede ser antes del inicio' USING ERRCODE = '22023'; END IF;
+  IF v_hasta - v_desde > 62 THEN RAISE EXCEPTION 'Reporta como máximo dos meses a la vez' USING ERRCODE = '22023'; END IF;
+  IF v_jornada = 'media' AND v_hasta <> v_desde THEN RAISE EXCEPTION 'La media jornada es de un solo día' USING ERRCODE = '22023'; END IF;
+  SELECT a.desde, a.hasta, m.nombre INTO v_cruce FROM actividades a JOIN motivos_actividad m ON m.id = a.motivo_id
+   WHERE a.vendedor_id = v_vendedor AND a.id <> v_id AND a.deleted_at IS NULL AND a.estado IN ('pendiente','aprobada')
+     AND a.desde <= v_hasta AND v_desde <= a.hasta LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'Ya reportaste % %', v_cruce.nombre, app.texto_fechas(v_cruce.desde, v_cruce.hasta, 'completa') USING ERRCODE = '23P01';
+  END IF;
+
+  INSERT INTO actividades (id, vendedor_id, motivo_id, desde, hasta, jornada, notas, estado, decidido_en, comentario)
+  VALUES (v_id, v_vendedor, v_motivo.id, v_desde, v_hasta, v_jornada, nullif(btrim(p->>'notas'), ''),
+          CASE WHEN v_motivo.requiere_aprobacion THEN 'pendiente' ELSE 'aprobada' END,
+          CASE WHEN v_motivo.requiere_aprobacion THEN NULL ELSE now() END,
+          CASE WHEN v_motivo.requiere_aprobacion THEN NULL ELSE 'No requiere aprobación' END)
+  ON CONFLICT (id) DO UPDATE
+    SET motivo_id = excluded.motivo_id, desde = excluded.desde, hasta = excluded.hasta, jornada = excluded.jornada,
+        notas = excluded.notas, estado = excluded.estado, decidido_en = excluded.decidido_en, comentario = excluded.comentario
+  RETURNING * INTO v_row;
+
+  -- Aviso a quien aprueba (su gerente; si no tiene, la administración), una vez por actividad.
+  IF v_row.estado = 'pendiente' THEN
+    SELECT nombre_completo, CASE WHEN gerente_id IS NOT NULL THEN ARRAY[gerente_id] END INTO v_nombre, v_aprobadores
+      FROM dim_usuarios WHERE id = v_vendedor;
+    IF v_aprobadores IS NULL THEN
+      SELECT array_agg(id) INTO v_aprobadores FROM dim_usuarios WHERE rol = 'admin' AND activo AND deleted_at IS NULL;
+    END IF;
+    INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, clave)
+    SELECT u, 'actividad_solicitud', 'Por aprobar: ' || v_motivo.nombre || ' de ' || coalesce(v_nombre, 'un representante'),
+           upper(left(app.texto_fechas(v_row.desde, v_row.hasta, v_row.jornada), 1)) || substr(app.texto_fechas(v_row.desde, v_row.hasta, v_row.jornada), 2)
+             || coalesce(' · ' || v_row.notas, ''),
+           'actividad:' || v_row.id || ':solicitud'
+      FROM unnest(coalesce(v_aprobadores, '{}'::uuid[])) u
+     WHERE u <> v_vendedor
+    ON CONFLICT (usuario_id, clave) WHERE clave IS NOT NULL DO NOTHING;
+  END IF;
+  RETURN jsonb_build_object('id', v_row.id, 'estado', v_row.estado, 'row_version', v_row.row_version, 'comentario', v_row.comentario);
+END $$;
+
+-- 20.5 Aprobar o rechazar (una o varias). El rechazo lleva un comentario; el representante recibe el aviso.
+CREATE OR REPLACE FUNCTION decidir_actividades(p_ids uuid[], p_aprobar boolean, p_comentario text DEFAULT NULL) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE a record; v_n integer := 0; v_sin_permiso integer := 0; v_coment text := nullif(btrim(p_comentario), '');
+BEGIN
+  IF app.rol() IS NULL OR app.rol() NOT IN ('admin','gerente') THEN
+    RAISE EXCEPTION 'Solo la gerencia o la administración aprueban actividades' USING ERRCODE = '42501';
+  END IF;
+  IF NOT p_aprobar AND v_coment IS NULL THEN RAISE EXCEPTION 'Escribe por qué la rechazas' USING ERRCODE = '22023'; END IF;
+  FOR a IN SELECT x.*, m.nombre AS motivo FROM actividades x JOIN motivos_actividad m ON m.id = x.motivo_id
+            WHERE x.id = ANY (p_ids) AND x.deleted_at IS NULL AND x.estado = 'pendiente' FOR UPDATE OF x LOOP
+    IF NOT app.puede_aprobar(a.vendedor_id) THEN v_sin_permiso := v_sin_permiso + 1; CONTINUE; END IF;
+    UPDATE actividades SET estado = CASE WHEN p_aprobar THEN 'aprobada' ELSE 'rechazada' END,
+           decidido_por = auth.uid(), decidido_en = now(), comentario = v_coment
+     WHERE id = a.id;
+    -- El aviso de "por aprobar" ya no hace falta (tampoco a las demás personas que lo recibieron).
+    UPDATE notificaciones SET leida = true WHERE clave = 'actividad:' || a.id || ':solicitud' AND NOT leida;
+    INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, clave)
+    VALUES (a.vendedor_id, 'actividad_decision',
+            CASE WHEN p_aprobar THEN 'Aprobada: ' ELSE 'Rechazada: ' END || a.motivo || ' ' || app.texto_fechas(a.desde, a.hasta, a.jornada),
+            coalesce(v_coment, CASE WHEN p_aprobar THEN 'Ya no cuenta para tu cobertura de visitas.' END),
+            'actividad:' || a.id || ':decision')
+    ON CONFLICT (usuario_id, clave) WHERE clave IS NOT NULL DO NOTHING;
+    v_n := v_n + 1;
+  END LOOP;
+  IF v_n = 0 AND v_sin_permiso > 0 THEN
+    RAISE EXCEPTION 'Solo el gerente de ese representante o la administración pueden aprobarla' USING ERRCODE = '42501';
+  END IF;
+  RETURN v_n;
+END $$;
+
+-- 20.6 Días efectivos de un representante: días hábiles (con los feriados de su estado) menos los días aprobados de
+-- motivos que descuentan (media jornada = medio día). Es lo que se usa para la cobertura ajustada.
+CREATE OR REPLACE FUNCTION dias_efectivos(p_vendedor uuid, p_desde date, p_hasta date) RETURNS numeric
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_estado text; v_habiles integer; v_libres numeric;
+BEGIN
+  IF auth.uid() IS NOT NULL AND p_vendedor <> auth.uid() AND NOT app.es_staff() THEN
+    RAISE EXCEPTION 'Sin permiso' USING ERRCODE = '42501';
+  END IF;
+  SELECT estado_geografico INTO v_estado FROM dim_usuarios WHERE id = p_vendedor;
+  v_habiles := dias_habiles(p_desde, p_hasta, v_estado);
+  SELECT coalesce(sum(CASE WHEN a.jornada = 'media' THEN 0.5 ELSE 1 END), 0) INTO v_libres
+    FROM actividades a JOIN motivos_actividad m ON m.id = a.motivo_id
+    CROSS JOIN LATERAL generate_series(greatest(a.desde, p_desde), least(a.hasta, p_hasta), interval '1 day') d
+   WHERE a.vendedor_id = p_vendedor AND a.estado = 'aprobada' AND a.deleted_at IS NULL AND m.descuenta
+     AND app.es_dia_habil(d::date, v_estado);
+  RETURN greatest(0, v_habiles - v_libres);
+END $$;
+
+-- 20.7 Marcas de tiempo, auditoría, seguridad por filas y tiempo real.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['motivos_actividad','actividades'] LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_touch ON %I', t);
+    EXECUTE format('CREATE TRIGGER trg_touch BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION app.touch()', t);
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_auditar ON %I', t);
+    EXECUTE format('CREATE TRIGGER trg_auditar AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH ROW EXECUTE FUNCTION app.auditar()', t);
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+  END LOOP;
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    FOREACH t IN ARRAY ARRAY['motivos_actividad','actividades'] LOOP
+      IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = t) THEN
+        EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+      END IF;
+    END LOOP;
+  END IF;
+END $$;
+
+-- Todos ven los motivos; solo la administración los cambia.
+DROP POLICY IF EXISTS motivos_lectura ON motivos_actividad;
+CREATE POLICY motivos_lectura ON motivos_actividad FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS motivos_gestion ON motivos_actividad;
+CREATE POLICY motivos_gestion ON motivos_actividad FOR ALL TO authenticated
+  USING ((SELECT app.es_admin())) WITH CHECK ((SELECT app.es_admin()));
+-- Cada quien ve las suyas; la gerencia y la administración, todas. Se escriben solo con las funciones de arriba.
+DROP POLICY IF EXISTS actividades_lectura ON actividades;
+CREATE POLICY actividades_lectura ON actividades FOR SELECT TO authenticated
+  USING (vendedor_id = (SELECT auth.uid()) OR (SELECT app.rol())::text IN ('admin','gerente'));
+
+REVOKE ALL ON motivos_actividad, actividades FROM anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON motivos_actividad TO authenticated;
+REVOKE INSERT, UPDATE, DELETE ON actividades FROM authenticated;
+GRANT SELECT ON actividades TO authenticated;
+REVOKE ALL ON FUNCTION sync_guardar_actividad(jsonb), decidir_actividades(uuid[], boolean, text), dias_efectivos(uuid, date, date),
+                       app.puede_aprobar(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION sync_guardar_actividad(jsonb), decidir_actividades(uuid[], boolean, text), dias_efectivos(uuid, date, date) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';

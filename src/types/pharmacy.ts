@@ -8,6 +8,8 @@ export interface Usuario {
   equipo: EquipoVentas;
   /** Equipo en la base (dim_equipos.id): decide qué ciclo le aplica. */
   equipo_id?: string | null;
+  /** Gerente que aprueba sus actividades y días libres (además de la administración). */
+  gerente_id?: string | null;
   /** Estado donde trabaja: para los feriados regionales. */
   estado_geografico?: string | null;
   telefono?: string;

@@ -389,6 +389,40 @@ export interface LocalFeriado {
   updated_at?: string;
 }
 
+/** Motivo de otra actividad o día libre (lo define la administración). */
+export interface LocalMotivo {
+  id: string;
+  nombre: string;
+  /** Descuenta los días de la cobertura de visitas. */
+  descuenta: boolean;
+  requiere_aprobacion: boolean;
+  activo: boolean;
+  orden: number;
+  updated_at?: string;
+}
+
+export type EstadoActividad = 'pendiente' | 'aprobada' | 'rechazada' | 'anulada';
+
+/** Otra actividad o día libre que reporta el representante (la aprueba su gerente o la administración). */
+export interface LocalActividad {
+  id: string;
+  vendedor_id: string;
+  motivo_id: string;
+  /** YYYY-MM-DD */
+  desde: string;
+  hasta: string;
+  jornada: 'completa' | 'media';
+  notas?: string | null;
+  estado: EstadoActividad;
+  decidido_por?: string | null;
+  decidido_en?: string | null;
+  comentario?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  sync_estado: EstadoSync;
+  sync_error?: string | null;
+}
+
 export type TipoOutbox =
   | 'prospecto.crear'
   | 'pedido.crear'
@@ -397,7 +431,8 @@ export type TipoOutbox =
   | 'visita.registrar'
   | 'farmacia.codigo'
   | 'plantilla.guardar'
-  | 'tarea.guardar';
+  | 'tarea.guardar'
+  | 'actividad.guardar';
 
 export type EstadoOutbox = 'pendiente' | 'error' | 'conflicto';
 

@@ -38,8 +38,15 @@ describe('médicos: cobertura del mes', () => {
       hoy
     );
     expect(c.map((x) => [x.medico.id, x.hechas, x.esperadas])).toEqual([['a', 1, 2], ['b', 0, 1], ['c', 1, 1]]);
-    expect(resumenCobertura(c)).toEqual({ cubiertos: 1, total: 3, visitas: 2, esperadas: 4 });
+    expect(resumenCobertura(c)).toEqual({ cubiertos: 1, total: 3, visitas: 2, esperadas: 4, esperadasBase: 4 });
   });
+  it('ajustada por días libres aprobados: lo esperado baja en proporción a los días efectivos', () => {
+    const c = coberturaMedicos([m('a', { visitas_mes: 4 }), m('b', { visitas_mes: 1 })], [], { desde: '2027-01-04', hasta: '2027-01-29' }, () => 15 / 20);
+    expect(c.map((x) => [x.medico.id, x.esperadas, x.esperadasBase])).toEqual([['a', 3, 4], ['b', 1, 1]]);
+    expect(resumenCobertura(c)).toMatchObject({ esperadas: 4, esperadasBase: 5 });
+    expect(coberturaMedicos([m('a', { visitas_mes: 4 })], [], new Date(), () => 0)[0]).toMatchObject({ esperadas: 0, hechas: 0 });
+  });
+
   it('por ciclo: cuenta las visitas dentro de las fechas del ciclo (o del ciclo del equipo de cada representante)', () => {
     const medicos = [m('a', { visitas_mes: 2, vendedor_id: 'v1' }), m('b', { vendedor_id: 'v2' })];
     const visitas = [v('a', new Date(2026, 8, 30, 10).toISOString()), v('a', new Date(2026, 9, 1, 10).toISOString()), v('b', new Date(2026, 9, 2, 10).toISOString())];
