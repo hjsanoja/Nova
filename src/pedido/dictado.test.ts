@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extraerDrogueriaYPlantilla, interpretarDictado, palabrasANumeros, parecido, separarFrase } from './dictado';
+import { crearVocabulario, elegirTranscripcion, extraerDrogueriaYPlantilla, fonetica, interpretarDictado, palabrasANumeros, parecido, separarFrase } from './dictado';
 import { normalizar, tokensProducto } from '../offline/busqueda';
 
 const prod = (id: string, nombre: string, presentacion = '', principio = '') => ({
@@ -112,5 +112,32 @@ describe('droguería y plantilla dichas en el pedido', () => {
     expect(r.plantilla).toBeNull();
     expect(extraerDrogueriaYPlantilla('farmacia nena 3 omeprazol', [{ id: 'x', nombre: 'Ne', codigo: 'NE' }]).drogueria).toBeNull();
     expect(extraerDrogueriaYPlantilla('3 omeprazol por nena', DROG).drogueria?.id).toBe('d3');
+  });
+});
+
+describe('más precisión', () => {
+  it('compara cómo suenan las palabras (b/v, c/s/z, ll/y, h muda, qu/k)', () => {
+    expect(fonetica('atorvastatina')).toBe(fonetica('atorbastatina'));
+    expect(fonetica('cetirizina')).toBe(fonetica('setirisina'));
+    expect(fonetica('hidroclorotiazida')).toBe(fonetica('idroclorotiasida'));
+    expect(fonetica('quetiapina')).toBe(fonetica('ketiapina'));
+    expect(parecido(['setirisina'], ['cetirizina'])).toBeGreaterThanOrEqual(0.9);
+    const r = interpretarDictado('farmacia la paz 4 omeprasol y 2 atamell', CLIENTES, PRODUCTOS);
+    expect(r.lineas.map((l) => l.producto?.id)).toEqual(['OME20', 'ATA500']);
+  });
+
+  it('de las versiones que da el reconocimiento elige la que más se parece al catálogo', () => {
+    const v = crearVocabulario([...PRODUCTOS.map((p) => p.nombre_comercial), ...CLIENTES.map((c) => c.nombre_comercial)]);
+    expect(elegirTranscripcion(['farmacia la paz 10 lo sartan', 'farmacia la paz 10 losartan'], v)).toBe('farmacia la paz 10 losartan');
+    expect(elegirTranscripcion(['10 omeprazol', '10 o me prazol'], v)).toBe('10 omeprazol');
+  });
+
+  it('prefiere lo que la farmacia ya compra y respeta la concentración dicha', () => {
+    const historial = () => new Map([['LOS100', 1]]);
+    expect(interpretarDictado('la paz 10 losartan', CLIENTES, PRODUCTOS).lineas[0].producto?.id).toBe('LOS50');
+    expect(interpretarDictado('la paz 10 losartan', CLIENTES, PRODUCTOS, [], { historial }).lineas[0].producto?.id).toBe('LOS100');
+    expect(interpretarDictado('la paz 10 losartan 50', CLIENTES, PRODUCTOS, [], { historial }).lineas[0].producto?.id).toBe('LOS50');
+    // Sin farmacia en la frase: la del carrito abierto aporta su historial.
+    expect(interpretarDictado('10 losartan', CLIENTES, PRODUCTOS, [], { historial, clientePorDefecto: CLIENTES[0] }).lineas[0].producto?.id).toBe('LOS100');
   });
 });

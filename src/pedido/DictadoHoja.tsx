@@ -1,12 +1,15 @@
 import { useMemo, useRef, useState } from 'react';
-import { Mic, MicOff, RotateCcw, ShoppingCart, Wand2 } from 'lucide-react';
+import { RotateCcw, ShoppingCart, Wand2 } from 'lucide-react';
 import { Sheet } from '../components/capture/Sheet';
 import { Avatar, Boton, Campo, Casilla, Etiqueta, PasoUnidades, estiloInput } from '../components/ui/kit';
 import type { LocalCliente, LocalDrogueria, LocalPlantilla, LocalProducto } from '../offline/types';
 import { normalizar } from '../offline/busqueda';
-import { interpretarDictado } from './dictado';
+import { crearVocabulario, elegirTranscripcion, interpretarDictado } from './dictado';
+import { obtenerDb } from '../offline/db';
+import { productosComprados } from '../offline/sugerido';
 import type { PedidoDictado } from './dictado';
 import { useDictado } from './useDictado';
+import { MicrofonoPresionar } from './MicrofonoPresionar';
 import { SelectorCliente } from './SelectorCliente';
 
 interface LineaVista { incluir: boolean; producto_id: string; unidades: number; texto: string; opciones: LocalProducto[]; confianza: number }
@@ -46,7 +49,13 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
 }) {
   // Al detectar la pausa final se pasa solo a la vista previa (no hace falta tocar "Ver pedido").
   const alTerminar = useRef<(t: string) => void>(() => undefined);
-  const voz = useDictado((t) => alTerminar.current(t));
+  // Palabras conocidas (farmacias, productos, droguerías): de las versiones que da el reconocimiento se elige la que más
+  // se parece a ellas.
+  const vocabulario = useMemo(
+    () => crearVocabulario([...productos.flatMap((p) => [p.nombre_comercial, p.principio_activo ?? '']), ...clientes.map((c) => c.nombre_comercial), ...droguerias.map((d) => d.nombre)]),
+    [productos, clientes, droguerias]
+  );
+  const voz = useDictado({ alTerminar: (t) => alTerminar.current(t), elegir: (alternativas) => elegirTranscripcion(alternativas, vocabulario) });
   const [vista, setVista] = useState<{
     cliente: LocalCliente | null;
     alternativas: LocalCliente[];
@@ -60,9 +69,24 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
   const [buscandoCliente, setBuscandoCliente] = useState(false);
   const porId = useMemo(() => new Map(productos.map((p) => [p.id, p])), [productos]);
 
-  const interpretar = (textoDictado: string = voz.texto) => {
+  const interpretar = async (textoDictado: string = voz.texto) => {
     if (voz.escuchando) voz.detener();
-    const r: PedidoDictado<LocalCliente, LocalProducto, LocalDrogueria> = interpretarDictado(textoDictado, clientes, productos, droguerias);
+    // Primero se ubica la farmacia; luego se vuelve a interpretar con lo que ella compra, para elegir bien entre
+    // presentaciones parecidas ("losartán" → la de 50 mg que siempre pide).
+    const previo = interpretarDictado(textoDictado, clientes, productos, droguerias, { clientePorDefecto: clienteActual });
+    const deQuien = previo.cliente ?? clienteActual;
+    let historial: Map<string, number> | undefined;
+    if (deQuien) {
+      try {
+        const comprados = await productosComprados(obtenerDb(), deQuien.id, 60);
+        historial = new Map(comprados.map((p, i) => [p.id, 1 - i / Math.max(1, comprados.length)]));
+      } catch {
+        historial = undefined;
+      }
+    }
+    const r: PedidoDictado<LocalCliente, LocalProducto, LocalDrogueria> = historial
+      ? interpretarDictado(textoDictado, clientes, productos, droguerias, { clientePorDefecto: clienteActual, historial: () => historial })
+      : previo;
     const cliente = r.cliente ?? clienteActual ?? null;
     // "Farmacia La Paz, plantilla semanal" sin productos: se carga esa plantilla guardada.
     const guardada = r.plantilla && r.lineas.length === 0 && cliente ? plantillaDicha(plantillasDe(cliente.id), r.plantilla.nombre) : null;
@@ -90,7 +114,7 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
     });
   };
 
-  alTerminar.current = (t) => interpretar(t);
+  alTerminar.current = (t) => void interpretar(t);
 
   const cerrar = () => {
     voz.detener();
@@ -109,7 +133,7 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
       {!vista ? (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-slate-600 dark:text-slate-300">
-            Di la farmacia, la droguería y cada producto con sus unidades. Al hacer una pausa, verás el pedido para confirmarlo.
+            Mantén presionado el micrófono y di la farmacia, la droguería y cada producto con sus unidades. Al soltarlo verás el pedido para confirmarlo.
           </p>
           <details className="-mt-2 text-sm text-slate-600 dark:text-slate-300">
             <summary className="cursor-pointer font-medium text-marca-700 dark:text-marca-300">Ver ejemplos</summary>
@@ -119,27 +143,15 @@ export function DictadoHoja({ abierto, clientes, productos, droguerias, plantill
               <li>Para repetirlo: <i>“Farmacia La Paz, plantilla semanal”</i>.</li>
             </ul>
           </details>
-          {voz.disponible && (
-            <div className="flex flex-col items-center gap-2">
-              <button
-                type="button"
-                onClick={voz.escuchando ? voz.detener : voz.iniciar}
-                aria-pressed={voz.escuchando}
-                aria-label={voz.escuchando ? 'Detener el dictado' : 'Empezar a dictar'}
-                className={`inline-flex h-16 w-16 items-center justify-center rounded-full text-white transition-colors sm:h-20 sm:w-20 ${voz.escuchando ? 'animate-pulse bg-rose-700' : 'bg-marca-700 hover:bg-marca-800'}`}
-              >
-                {voz.escuchando ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
-              </button>
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-200">{voz.escuchando ? 'Escuchando… haz una pausa al terminar' : 'Toca para hablar'}</p>
-            </div>
-          )}
+          {voz.disponible && <MicrofonoPresionar escuchando={voz.escuchando} hablando={voz.hablando} onPresionar={voz.presionar} onSoltar={voz.soltar} />}
+          {voz.aviso && <p role="status" className="rounded-lg bg-slate-100 p-3 text-center text-sm text-slate-700 dark:bg-slate-800 dark:text-slate-200">{voz.aviso}</p>}
           {voz.error && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{voz.error}</p>}
           <Campo rotulo={voz.disponible ? 'Lo que escuché (puedes corregirlo)' : 'Escribe el pedido'}>
             <textarea rows={3} value={voz.texto + (voz.parcial ? ` ${voz.parcial}` : '')} onChange={(e) => voz.setTexto(e.target.value)} className={`${estiloInput} py-2`} placeholder="Farmacia La Paz, 10 losartán 50, 5 atorvastatina" />
           </Campo>
           <div className="flex justify-end gap-2">
             <Boton onClick={cerrar}>Cancelar</Boton>
-            <Boton variante="primario" icono={Wand2} disabled={!voz.texto.trim()} onClick={() => interpretar()}>Ver pedido</Boton>
+            <Boton variante="primario" icono={Wand2} disabled={!voz.texto.trim() || voz.escuchando} onClick={() => void interpretar()}>Ver pedido</Boton>
           </div>
         </div>
       ) : (
