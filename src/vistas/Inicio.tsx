@@ -5,22 +5,25 @@ import { obtenerDb } from '../offline/db';
 import { useLive } from '../offline/useLive';
 import { useEstadoSync } from '../offline/syncStore';
 import { getSupabaseClient } from '../services/supabaseClient';
-import { Avatar, Boton, BotonClaro, Dato, Destacado, Etiqueta, Pildoras, Subtitulo, Tarjeta, Vacio, Variacion } from '../components/ui/kit';
+import { Avatar, Boton, BotonClaro, Dato, Destacado, Etiqueta, Filtros, Pildoras, Subtitulo, Tarjeta, Vacio, Variacion } from '../components/ui/kit';
 import { CentroAvisos } from '../avisos/CentroAvisos';
 import { Anillo, BarrasRanking, BarrasTendencia, Linea, MAX_PARTES_ANILLO, Medidor } from '../components/graficos/Graficos';
 import type { LocalCompraMensual, LocalMeta } from '../offline/types';
-import { NIVELES_META, avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe, revisarMetasHoy, ritmoMeta } from '../metas/logica';
+import { NIVELES_META, avanceMeta, describirMeta, indicador, pedidosDeMeta, periodoDe, revisarMetasHoy } from '../metas/logica';
+import type { ContextoMetas } from '../metas/logica';
+import { useCiclos, useEquipos, useFeriados } from '../ciclos/datos';
+import { cicloVigente, enRango, esDiaHabil, fechaTexto, periodoActual, periodoDeCiclo } from '../ciclos/logica';
 import { DetallePedidos } from './DetallePedidos';
 import type { SolicitudDetalle } from './DetallePedidos';
 import { ESTADOS_ETIQUETA, perteneceAGrupo, unidadesDePedido, detallesPorPedido } from './logica';
 import { NIVELES_RIESGO, describirRiesgo } from './riesgo';
 import type { NivelRiesgo } from './riesgo';
 import { useRiesgoFarmacias } from './useRiesgo';
-import { useMedicos, useTareas } from '../crm/datos';
+import { useMedicos, useTareas, useVisitas } from '../crm/datos';
 import { FilaTarea, TareaForm, useNombresDestino } from '../crm/Tareas';
 import { agruparTareas, hoyTexto } from '../offline/crm';
 import { irASeccion, prepararPedidoPara } from './navegacion';
-import { cuenta, rankingMes, resumenMeses, serieDiaria, serieMensual, topProductosMes, unidadesPorPedido, variacion } from './indicadores';
+import { cuenta, rankingMes, resumenPeriodo, serieDiaria, serieMensual, topProductosMes, unidadesPorPedido, variacion } from './indicadores';
 import type { PuntoMes } from './indicadores';
 import { useClientes, useDetalles, useDroguerias, usePedidos, useProductos, useUsuariosNube } from './useDatos';
 
@@ -100,12 +103,43 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   // El consolidado de compras (grande para la gerencia) solo hace falta para "clientes por atender" del vendedor.
   const compras = useLive(() => (esVendedor ? db.comprasMensual.toArray() : []), [esVendedor], [] as LocalCompraMensual[]);
   const { usuarios } = useUsuariosNube();
-  const metas = useLive(() => db.metas.where('periodo').equals(periodoDe(new Date())).toArray(), [], [] as LocalMeta[]);
   const conteos = useConteosAdmin(esAdmin);
   const mensualNube = useMensualNube(esVendedor ? usuario.id : null);
   const [metrica, setMetrica] = useState<Metrica>('unidades');
 
-  const pedidos = useMemo(() => (esVendedor ? todos.filter((p) => p.vendedor_id === usuario.id) : todos), [todos, esVendedor, usuario.id]);
+  // Período que se mide: el ciclo vigente del equipo (o el general) y, sin ciclos, el mes calendario.
+  // La gerencia elige qué ciclo vigente mirar (cada equipo puede tener el suyo) o el mes.
+  const ciclos = useCiclos();
+  const feriados = useFeriados();
+  const equipos = useEquipos(ciclos);
+  const hoyTxt = fechaTexto(new Date());
+  const vigentes = useMemo(() => {
+    const lista = [...equipos.map((e) => e.id), null].map((id) => cicloVigente(ciclos, id, hoyTxt)).filter((c, i, a) => c && a.findIndex((x) => x?.id === c.id) === i);
+    return lista as NonNullable<(typeof lista)[number]>[];
+  }, [ciclos, equipos, hoyTxt]);
+  const [eleccion, setEleccion] = useState<string | null>(null);
+  const propio = cicloVigente(ciclos, usuario.equipo_id, hoyTxt);
+  const elegida = esVendedor ? null : eleccion ?? (propio ? propio.id : vigentes[0]?.id ?? 'mes');
+  const cicloElegido = elegida && elegida !== 'mes' ? ciclos.find((c) => c.id === elegida) : undefined;
+  const periodo = useMemo(
+    () =>
+      cicloElegido ? periodoDeCiclo(cicloElegido, ciclos, feriados, hoyTxt, usuario.estado_geografico)
+        : elegida === 'mes' ? periodoActual([], feriados, null, hoyTxt, usuario.estado_geografico)
+        : periodoActual(ciclos, feriados, usuario.equipo_id, hoyTxt, usuario.estado_geografico),
+    [cicloElegido, elegida, ciclos, feriados, hoyTxt, usuario.equipo_id, usuario.estado_geografico]
+  );
+  const equipoPeriodo = periodo.ciclo?.equipo_id ?? null;
+  const mesActual = periodoDe(new Date());
+  const metasLocales = useLive(() => db.metas.toArray(), [], [] as LocalMeta[]);
+  // Metas del ciclo que se mide y, si las hay, las del mes en curso.
+  const metas = useMemo(() => metasLocales.filter((m) => (periodo.ciclo && m.ciclo_id === periodo.ciclo.id) || m.periodo === mesActual), [metasLocales, periodo.ciclo, mesActual]);
+  const visitas = useVisitas();
+
+  // El vendedor ve lo suyo; la gerencia, lo del equipo del ciclo elegido (o todo, con el ciclo general o el mes).
+  const pedidos = useMemo(
+    () => (esVendedor ? todos.filter((p) => p.vendedor_id === usuario.id) : equipoPeriodo ? todos.filter((p) => p.equipo_id === equipoPeriodo) : todos),
+    [todos, esVendedor, usuario.id, equipoPeriodo]
+  );
   const nombreCliente = useMemo(() => new Map(clientes.map((c) => [c.id, c.nombre_comercial])), [clientes]);
   const porPedido = useMemo(() => detallesPorPedido(detalles), [detalles]);
   const unidades = useMemo(() => unidadesPorPedido(detalles), [detalles]);
@@ -114,9 +148,10 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
     const d = new Map(droguerias.map((x) => [x.id, x.nombre]));
     return { vendedor: (id: string) => u.get(id) ?? 'Representante', cliente: (id: string) => nombreCliente.get(id) ?? 'Farmacia', drogueria: (id: string) => d.get(id) ?? 'Droguería' };
   }, [usuarios, droguerias, nombreCliente]);
+  const rango = useMemo(() => ({ desde: periodo.desde, hasta: periodo.hasta }), [periodo.desde, periodo.hasta]);
 
-  // Indicadores del mes, de los últimos 30 días y de los últimos meses.
-  const resumen = useMemo(() => resumenMeses(pedidos, unidades), [pedidos, unidades]);
+  // Indicadores del período (ciclo o mes), de los últimos 30 días y de los últimos meses.
+  const resumen = useMemo(() => resumenPeriodo(pedidos, unidades, rango, periodo.anterior), [pedidos, unidades, rango, periodo.anterior]);
   const diario = useMemo(() => serieDiaria(pedidos, unidades, 30), [pedidos, unidades]);
   const serie = diario.map((p) => ({ clave: p.fecha, etiqueta: etiquetaDia(p.fecha), valor: p[metrica] }));
   const total30 = diario.reduce((a, p) => a + p.pedidos, 0);
@@ -129,20 +164,21 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const serieMes = mensual.map((m) => ({ clave: m.mes, etiqueta: etiquetaMes(m.mes), valor: m[metrica] }));
   const cerrados = mensual.slice(0, -1).filter((m) => m.pedidos > 0);
   const promedioMensual = cerrados.length ? Math.round(cerrados.reduce((a, m) => a + m.unidades, 0) / cerrados.length) : null;
-  const diasDelMes = new Date().getDate();
-  const promDiaUnidades = Math.round(resumen.actual.unidades / diasDelMes);
-  const promDiaPedidos = resumen.actual.pedidos / diasDelMes;
+  // Promedio por día hábil: los ya completos más hoy, si es hábil.
+  const diasCorridos = Math.max(1, periodo.transcurridos + (hoyTxt <= periodo.hasta && esDiaHabil(hoyTxt, feriados, usuario.estado_geografico) ? 1 : 0));
+  const promDiaUnidades = Math.round(resumen.actual.unidades / diasCorridos);
+  const promDiaPedidos = resumen.actual.pedidos / diasCorridos;
 
   const topProductos = useMemo(() => {
     const nombre = new Map(productos.map((p) => [p.id, p.nombre_comercial]));
-    return topProductosMes(pedidos, detalles, (id) => nombre.get(id) ?? 'Producto', 5);
-  }, [pedidos, detalles, productos]);
-  const porVendedor = useMemo(() => rankingMes(pedidos, unidades, (p) => p.vendedor_id, nombres.vendedor, 5), [pedidos, unidades, nombres]);
-  const porDrogueria = useMemo(() => rankingMes(pedidos, unidades, (p) => p.drogueria_id, nombres.drogueria, 5), [pedidos, unidades, nombres]);
-  // Reparto del mes por droguería en un anillo: cada droguería conserva su color (orden alfabético de todas, no su puesto
-  // del mes). Con más de 6 droguerías, o con una sola, se usan las barras.
+    return topProductosMes(pedidos, detalles, (id) => nombre.get(id) ?? 'Producto', 5, new Date(), rango);
+  }, [pedidos, detalles, productos, rango]);
+  const porVendedor = useMemo(() => rankingMes(pedidos, unidades, (p) => p.vendedor_id, nombres.vendedor, 5, new Date(), rango), [pedidos, unidades, nombres, rango]);
+  const porDrogueria = useMemo(() => rankingMes(pedidos, unidades, (p) => p.drogueria_id, nombres.drogueria, 5, new Date(), rango), [pedidos, unidades, nombres, rango]);
+  // Reparto del período por droguería en un anillo: cada droguería conserva su color (orden alfabético de todas, no su
+  // puesto del período). Con más de 6 droguerías, o con una sola, se usan las barras.
   const colorDrogueria = useMemo(() => new Map([...droguerias].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map((d, i) => [d.id, i])), [droguerias]);
-  const repartoDrogueria = useMemo(() => rankingMes(pedidos, unidades, (p) => p.drogueria_id, nombres.drogueria, 99), [pedidos, unidades, nombres]);
+  const repartoDrogueria = useMemo(() => rankingMes(pedidos, unidades, (p) => p.drogueria_id, nombres.drogueria, 99, new Date(), rango), [pedidos, unidades, nombres, rango]);
   const anilloDrogueria = droguerias.length <= MAX_PARTES_ANILLO && repartoDrogueria.length >= 2 && repartoDrogueria.every((f) => colorDrogueria.has(f.clave));
 
   const porProcesar = pedidos.filter((p) => perteneceAGrupo(p.estado, 'por_procesar')).length;
@@ -161,17 +197,19 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
     () => pedidos.filter((p) => perteneceAGrupo(p.estado, 'por_procesar') || p.estado === 'en_revision').sort((a, b) => a.created_at.localeCompare(b.created_at)).slice(0, 5),
     [pedidos]
   );
-  // Metas del mes: el avance usa todos los pedidos visibles (una meta de farmacia cuenta los de cualquier representante).
-  // Las más urgentes primero (en riesgo, atención…), y dentro de cada nivel la de menor avance.
+  // Metas del período: el avance usa todos los pedidos y visitas visibles (una meta de farmacia cuenta los de cualquier
+  // representante). Las más urgentes primero (en riesgo, atención…), y dentro de cada nivel la de menor avance.
+  const equipoDe = useMemo(() => {
+    const m = new Map(usuarios.map((u) => [u.id, u.equipo_id ?? null]));
+    return (id: string) => (id === usuario.id ? usuario.equipo_id : m.get(id));
+  }, [usuarios, usuario.id, usuario.equipo_id]);
+  const ctxMetas = useMemo<ContextoMetas>(() => ({ pedidos: todos, unidades, visitas, ciclos, feriados, equipoDe }), [todos, unidades, visitas, ciclos, feriados, equipoDe]);
   const avances = useMemo(
     () =>
       metas
-        .map((m) => {
-          const a = avanceMeta(m, todos, unidades);
-          return { m, a, r: ritmoMeta(m, a.valor), texto: describirMeta(m, nombres) };
-        })
-        .sort((x, y) => NIVELES_META[x.r.nivel].orden - NIVELES_META[y.r.nivel].orden || x.a.pct - y.a.pct),
-    [metas, todos, unidades, nombres]
+        .map((m) => ({ m, a: avanceMeta(m, ctxMetas), texto: describirMeta(m, nombres, m.ciclo_id ? ciclos.find((c) => c.id === m.ciclo_id) : null) }))
+        .sort((x, y) => NIVELES_META[x.a.nivel].orden - NIVELES_META[y.a.nivel].orden || x.a.pct - y.a.pct),
+    [metas, ctxMetas, nombres, ciclos]
   );
   // Una vez al día, la base revisa las metas y avisa las que van en riesgo o ya se cumplieron.
   useEffect(() => {
@@ -184,16 +222,19 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
   const nombreProducto = useMemo(() => new Map(productos.map((p) => [p.id, p.nombre_comercial])), [productos]);
   const nombresDetalle = useMemo(() => ({ ...nombres, producto: (id: string) => nombreProducto.get(id) ?? 'Producto' }), [nombres, nombreProducto]);
   const hoyClave = diaDe(new Date().toISOString());
-  const mesClave = hoyClave.slice(0, 7);
-  const delMes = useMemo(() => pedidos.filter((p) => cuenta(p) && diaDe(p.created_at).startsWith(mesClave)), [pedidos, mesClave]);
-  const deHoy = useMemo(() => delMes.filter((p) => diaDe(p.created_at) === hoyClave), [delMes, hoyClave]);
-  const nombreMes = new Date().toLocaleDateString('es', { month: 'long' });
+  const delPeriodo = useMemo(() => pedidos.filter((p) => cuenta(p) && enRango(p.created_at, rango)), [pedidos, rango]);
+  const deHoy = useMemo(() => pedidos.filter((p) => cuenta(p) && diaDe(p.created_at) === hoyClave), [pedidos, hoyClave]);
+  // "octubre" o "el ciclo C8-2026 (3 ago – 28 ago)"; "del mes" o "del ciclo".
+  const nombrePeriodo = periodo.tipo === 'ciclo' ? `el ciclo ${periodo.etiqueta}` : periodo.etiqueta;
+  const delP = periodo.del;
+  const enP = periodo.tipo === 'ciclo' ? 'en el ciclo' : 'en el mes';
+  const esteP = periodo.tipo === 'ciclo' ? 'este ciclo' : 'este mes';
   const QUE_CUENTA = 'Solo pedidos enviados (no cuenta borradores, cancelados ni rechazados)';
   const NOTA_LOCAL = 'El detalle usa los pedidos guardados en este dispositivo (últimos 90 días).';
   const abrir = (titulo: string, calculo: string, lista: typeof pedidos, extra: Partial<SolicitudDetalle> = {}) => setDetalle({ titulo, calculo, pedidos: lista, ...extra });
   const unidadesDeProducto = (productoId: string) => (p: (typeof pedidos)[number]) => (porPedido.get(p.id) ?? []).filter((d) => d.producto_id === productoId).reduce((a, d) => a + d.unidades_solicitadas, 0);
 
-  const mesAnterior = 'el mes pasado';
+  const periodoAnterior = periodo.anterior?.etiqueta ?? (periodo.tipo === 'ciclo' ? 'el ciclo anterior' : 'el mes pasado');
   const tomarPedido = (usuario.rol === 'vendedor' || esAdmin) && (
     <Boton variante="primario" icono={ClipboardPlus} onClick={() => irATab('captura')}>
       Tomar pedido
@@ -236,25 +277,33 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
 
   const tarjetaMetas = (
     <Tarjeta>
-      <Subtitulo accion={puedeMetas ? verTodos('metas', avances.length ? 'Ver todas' : 'Definir') : undefined}>{esVendedor ? 'Mis metas del mes' : 'Metas del mes'}</Subtitulo>
+      <Subtitulo accion={puedeMetas ? verTodos('metas', avances.length ? 'Ver todas' : 'Definir') : undefined}>{esVendedor ? `Mis metas ${delP}` : `Metas ${delP}`}</Subtitulo>
       {avances.length === 0 ? (
-        <Vacio icono={Target} titulo="Sin metas este mes" texto={puedeMetas ? 'Define objetivos por representante, farmacia o droguería.' : 'Tu gerente aún no definió metas para este mes.'} />
+        <Vacio icono={Target} titulo={`Sin metas ${esteP}`} texto={puedeMetas ? 'Define objetivos por representante, farmacia, médico o droguería.' : `Tu gerente aún no definió metas para ${esteP}.`} />
       ) : (
         <ul className="flex flex-col gap-4">
-          {avances.slice(0, 4).map(({ m, a, r, texto }) => {
+          {avances.slice(0, 4).map(({ m, a, texto }) => {
             const ind = indicador(m.indicador);
-            const nivel = NIVELES_META[r.nivel];
-            const atrasada = r.nivel === 'en_riesgo' || r.nivel === 'atencion';
+            const nivel = NIVELES_META[a.nivel];
+            const atrasada = a.nivel === 'en_riesgo' || a.nivel === 'atencion';
+            const propia = esVendedor && m.vendedor_id === usuario.id && !m.cliente_id && !m.drogueria_id && !m.medico_id;
+            const deMes = periodo.tipo === 'ciclo' && !m.ciclo_id;
+            const dondeMide = m.ciclo_id ? `del ciclo ${ciclos.find((c) => c.id === m.ciclo_id)?.nombre ?? ''}`.trim() : `de ${new Date(`${m.periodo}T12:00:00`).toLocaleDateString('es', { month: 'long' })}`;
+            const visitasMeta = ind.tipo === 'visitas';
             return (
               <li key={m.id}>
                 <Medidor
                   valor={a.valor}
                   total={a.objetivo}
-                  esperado={r.nivel === 'cumplida' ? undefined : r.esperado}
+                  esperado={a.nivel === 'cumplida' ? undefined : a.esperado}
                   distintivo={<Etiqueta tono={nivel.tono} punto>{nivel.texto}</Etiqueta>}
-                  rotulo={`${esVendedor && m.vendedor_id === usuario.id && !m.cliente_id && !m.drogueria_id ? ind.texto : `${texto} · ${ind.texto.toLowerCase()}`}`}
-                  nota={a.valor >= a.objetivo ? '¡Meta cumplida!' : `${atrasada ? `A hoy se esperaban ${formato(Math.round(r.esperado))} · ` : ''}Faltan ${formato(a.objetivo - a.valor)} · ${formato(a.porDia)} ${ind.unidad} por día${a.proyeccion !== null ? ` · proyección ${formato(a.proyeccion)}` : ''}`}
-                  onClick={() => abrir(`Meta: ${texto}`, `${QUE_CUENTA} de ${nombreMes}${m.vendedor_id ? ` del representante ${nombres.vendedor(m.vendedor_id)}` : ''}${m.cliente_id ? ` para ${nombres.cliente(m.cliente_id)}` : ''}${m.drogueria_id ? ` por ${nombres.drogueria(m.drogueria_id)}` : ''}. Mide ${ind.texto.toLowerCase()}: ${formato(a.valor)} de ${formato(a.objetivo)} (${a.pct}%). Faltan ${a.diasRestantes} días.`, pedidosDeMeta(m, todos))}
+                  rotulo={`${propia ? ind.texto : `${texto} · ${ind.texto.toLowerCase()}`}${deMes ? ' · del mes' : ''}`}
+                  nota={a.valor >= a.objetivo ? '¡Meta cumplida!' : `${atrasada ? `A hoy se esperaban ${formato(Math.round(a.esperado))} · ` : ''}Faltan ${formato(a.objetivo - a.valor)} · ${formato(a.porDia)} ${ind.unidad} por ${a.dias === 'días' ? 'día' : 'día hábil'}${a.proyeccion !== null ? ` · proyección ${formato(a.proyeccion)}` : ''}`}
+                  onClick={
+                    visitasMeta
+                      ? () => irATab(!esVendedor ? 'reportes' : m.indicador === 'visitas_farmacias' ? 'ruta' : 'medicos')
+                      : () => abrir(`Meta: ${texto}`, `${QUE_CUENTA} ${dondeMide}${m.vendedor_id ? ` del representante ${nombres.vendedor(m.vendedor_id)}` : ''}${m.cliente_id ? ` para ${nombres.cliente(m.cliente_id)}` : ''}${m.drogueria_id ? ` por ${nombres.drogueria(m.drogueria_id)}` : ''}. Mide ${ind.texto.toLowerCase()}: ${formato(a.valor)} de ${formato(a.objetivo)} (${a.pct}%). Faltan ${a.diasRestantes} ${a.dias}.`, pedidosDeMeta(m, todos, ciclos))
+                  }
                 />
               </li>
             );
@@ -319,8 +368,8 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
 
   const masPedidos = (
     <Tarjeta>
-      <Subtitulo>Productos más pedidos del mes</Subtitulo>
-      <BarrasRanking filas={topProductos} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombreProducto.get(id) ?? 'Producto'} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} que incluyen este producto. Las unidades son solo las de este producto.`, delMes.filter((p) => (porPedido.get(p.id) ?? []).some((d) => d.producto_id === id)), { unidadesDe: unidadesDeProducto(id) })} />
+      <Subtitulo>Productos más pedidos {delP}</Subtitulo>
+      <BarrasRanking filas={topProductos} unidad="unidades" vacio={`Aún no hay pedidos ${esteP}.`} onSeleccionar={(id) => abrir(`${nombreProducto.get(id) ?? 'Producto'} · ${periodo.etiqueta}`, `${QUE_CUENTA} de ${nombrePeriodo} que incluyen este producto. Las unidades son solo las de este producto.`, delPeriodo.filter((p) => (porPedido.get(p.id) ?? []).some((d) => d.producto_id === id)), { unidadesDe: unidadesDeProducto(id) })} />
     </Tarjeta>
   );
 
@@ -394,13 +443,13 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
 
   const miFichero = (
     <Tarjeta>
-      <Subtitulo>Mi fichero este mes</Subtitulo>
+      <Subtitulo>Mi fichero {esteP}</Subtitulo>
       <Medidor
         valor={resumen.actual.clientes}
         total={clientes.length}
         rotulo="Farmacias con pedido"
-        nota={clientes.length === 0 ? 'Agrega farmacias a tu fichero desde "Mis clientes".' : `${formato(Math.max(0, clientes.length - resumen.actual.clientes))} farmacias sin pedido este mes.`}
-        onClick={() => abrir('Farmacias con pedido este mes', `Farmacias distintas de tu fichero (${formato(clientes.length)}) con al menos un pedido en ${nombreMes}: ${formato(resumen.actual.clientes)}. ${QUE_CUENTA}.`, delMes)}
+        nota={clientes.length === 0 ? 'Agrega farmacias a tu fichero desde "Mis clientes".' : `${formato(Math.max(0, clientes.length - resumen.actual.clientes))} farmacias sin pedido ${esteP}.`}
+        onClick={() => abrir(`Farmacias con pedido ${esteP}`, `Farmacias distintas de tu fichero (${formato(clientes.length)}) con al menos un pedido en ${nombrePeriodo}: ${formato(resumen.actual.clientes)}. ${QUE_CUENTA}.`, delPeriodo)}
       />
       <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 dark:border-slate-800">
         <Mini rotulo="Unidades por pedido" valor={resumen.actual.pedidos ? formato(Math.round(resumen.actual.unidades / resumen.actual.pedidos)) : '—'} />
@@ -415,7 +464,7 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         icono={Sparkles}
         titulo={`${saludo()}, ${usuario.nombre_completo.split(' ')[0]}`}
         distintivo={enVivo ? 'En vivo' : undefined}
-        texto={`${esVendedor ? 'Tu' : 'El equipo en'} ${nombreMes}: ${formato(resumen.actual.pedidos)} pedido${resumen.actual.pedidos === 1 ? '' : 's'} · ${formato(resumen.actual.unidades)} unidades · ${formato(resumen.actual.clientes)} farmacias`}
+        texto={`${periodo.tipo === 'ciclo' ? `${esVendedor ? 'Tu ciclo' : `Ciclo ${periodo.ciclo?.equipo_nombre ? `de ${periodo.ciclo.equipo_nombre} ` : ''}`} ${periodo.ciclo?.nombre ?? ''} (quedan ${periodo.restantes} día${periodo.restantes === 1 ? '' : 's'} hábil${periodo.restantes === 1 ? '' : 'es'})` : `${esVendedor ? 'Tu' : 'El equipo en'} ${periodo.etiqueta}`}: ${formato(resumen.actual.pedidos)} pedido${resumen.actual.pedidos === 1 ? '' : 's'} · ${formato(resumen.actual.unidades)} unidades · ${formato(resumen.actual.clientes)} farmacias`}
         acciones={
           <>
             <span className="inline-flex min-h-9 items-center gap-1.5 rounded-full bg-white/10 px-3 text-xs font-semibold text-white"><CalendarDays className="h-3.5 w-3.5" aria-hidden />{new Date().toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' })}</span>
@@ -427,11 +476,22 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
         }
       />
 
+      {!esVendedor && vigentes.length > 0 && (
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-xs font-medium text-slate-500">Medir por</span>
+          <Filtros
+            valor={elegida ?? 'mes'}
+            onChange={setEleccion}
+            opciones={[...vigentes.map((c) => ({ id: c.id, texto: `${c.equipo_id ? (c.equipo_nombre ?? 'Equipo') : 'General'} · ${c.nombre}` })), { id: 'mes', texto: 'Mes calendario' }]}
+          />
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
-        <Dato icono={ShoppingBag} serie={tendencia.pedidos} rotulo="Pedidos del mes" valor={formato(resumen.actual.pedidos)} nota={<Variacion pct={variacion(resumen.actual.pedidos, resumen.anterior.pedidos)} periodo={mesAnterior} />} onClick={() => abrir(`Pedidos de ${nombreMes}`, `${QUE_CUENTA} creados desde el 1 de ${nombreMes}: ${formato(resumen.actual.pedidos)}. El mes pasado: ${formato(resumen.anterior.pedidos)}.`, delMes)} />
-        <Dato icono={Package} serie={tendencia.unidades} rotulo="Unidades del mes" valor={formato(resumen.actual.unidades)} nota={<Variacion pct={variacion(resumen.actual.unidades, resumen.anterior.unidades)} periodo={mesAnterior} />} onClick={() => abrir(`Unidades de ${nombreMes}`, `Suma de las unidades pedidas en cada pedido de ${nombreMes}: ${formato(resumen.actual.unidades)}. El mes pasado: ${formato(resumen.anterior.unidades)}. ${QUE_CUENTA}.`, delMes)} />
-        <Dato icono={Activity} rotulo="Promedio por día" valor={`${formato(promDiaUnidades)} uds`} nota={`${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día`} onClick={() => abrir('Promedio por día', `${formato(resumen.actual.unidades)} unidades ÷ ${diasDelMes} días transcurridos de ${nombreMes} = ${formato(promDiaUnidades)} unidades por día. ${formato(resumen.actual.pedidos)} pedidos ÷ ${diasDelMes} días = ${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día.`, delMes)} />
-        <Dato icono={Store} serie={tendencia.farmacias} rotulo="Farmacias con pedido hoy" valor={formato(resumen.hoy.clientes)} nota={`${formato(resumen.actual.clientes)} en el mes · ${formato(resumen.hoy.pedidos)} pedido${resumen.hoy.pedidos === 1 ? '' : 's'} hoy`} onClick={() => abrir('Pedidos de hoy', `Farmacias distintas con al menos un pedido hoy: ${formato(resumen.hoy.clientes)} (${formato(resumen.hoy.pedidos)} pedidos). En el mes: ${formato(resumen.actual.clientes)} farmacias. ${QUE_CUENTA}.`, deHoy)} />
+        <Dato icono={ShoppingBag} serie={tendencia.pedidos} rotulo={`Pedidos ${delP}`} valor={formato(resumen.actual.pedidos)} nota={<Variacion pct={variacion(resumen.actual.pedidos, resumen.anterior.pedidos)} periodo={periodoAnterior} />} onClick={() => abrir(`Pedidos de ${nombrePeriodo}`, `${QUE_CUENTA} creados desde el ${fechaLarga(periodo.desde)}: ${formato(resumen.actual.pedidos)}. En ${periodoAnterior}: ${formato(resumen.anterior.pedidos)}.`, delPeriodo)} />
+        <Dato icono={Package} serie={tendencia.unidades} rotulo={`Unidades ${delP}`} valor={formato(resumen.actual.unidades)} nota={<Variacion pct={variacion(resumen.actual.unidades, resumen.anterior.unidades)} periodo={periodoAnterior} />} onClick={() => abrir(`Unidades de ${nombrePeriodo}`, `Suma de las unidades pedidas en cada pedido de ${nombrePeriodo}: ${formato(resumen.actual.unidades)}. En ${periodoAnterior}: ${formato(resumen.anterior.unidades)}. ${QUE_CUENTA}.`, delPeriodo)} />
+        <Dato icono={Activity} rotulo="Promedio por día hábil" valor={`${formato(promDiaUnidades)} uds`} nota={`${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día`} onClick={() => abrir('Promedio por día hábil', `${formato(resumen.actual.unidades)} unidades ÷ ${diasCorridos} día${diasCorridos === 1 ? '' : 's'} hábil${diasCorridos === 1 ? '' : 'es'} de ${nombrePeriodo} (contando hoy si es hábil; sin fines de semana ni feriados) = ${formato(promDiaUnidades)} unidades por día. ${formato(resumen.actual.pedidos)} pedidos ÷ ${diasCorridos} = ${promDiaPedidos.toLocaleString('es-VE', { maximumFractionDigits: 1 })} pedidos por día.`, delPeriodo)} />
+        <Dato icono={Store} serie={tendencia.farmacias} rotulo="Farmacias con pedido hoy" valor={formato(resumen.hoy.clientes)} nota={`${formato(resumen.actual.clientes)} ${enP} · ${formato(resumen.hoy.pedidos)} pedido${resumen.hoy.pedidos === 1 ? '' : 's'} hoy`} onClick={() => abrir('Pedidos de hoy', `Farmacias distintas con al menos un pedido hoy: ${formato(resumen.hoy.clientes)} (${formato(resumen.hoy.pedidos)} pedidos). ${enP[0].toUpperCase()}${enP.slice(1)}: ${formato(resumen.actual.clientes)} farmacias. ${QUE_CUENTA}.`, deHoy)} />
         <Dato icono={CalendarRange} serie={mensual.length > 1 ? mensual.map((m) => m.unidades) : undefined} rotulo="Promedio por mes" valor={promedioMensual === null ? '—' : `${formato(promedioMensual)} uds`} nota={cerrados.length ? `Últimos ${cerrados.length} mes${cerrados.length === 1 ? '' : 'es'} cerrados` : 'Aún sin meses cerrados'} onClick={() => abrir('Promedio por mes', cerrados.length ? `Promedio de unidades de los meses cerrados con pedidos: ${cerrados.map((m) => `${etiquetaMes(m.mes)} ${formato(m.unidades)}`).join(' + ')} = ${formato(cerrados.reduce((a, m) => a + m.unidades, 0))} ÷ ${cerrados.length} = ${formato(promedioMensual ?? 0)}. No incluye el mes en curso.` : 'Todavía no hay meses cerrados con pedidos.', pedidos.filter((p) => cuenta(p) && cerrados.some((m) => diaDe(p.created_at).startsWith(m.mes))), { nota: NOTA_LOCAL })} />
         {esVendedor ? (
           pendientes > 0 ? (
@@ -495,8 +555,8 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
             {masPedidos}
             {esVendedor ? miFichero : (
             <Tarjeta>
-              <Subtitulo>Unidades por representante · este mes</Subtitulo>
-              <BarrasRanking filas={porVendedor} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.vendedor(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} tomados por este representante. Suma de unidades pedidas.`, delMes.filter((p) => p.vendedor_id === id))} />
+              <Subtitulo>Unidades por representante · {esteP}</Subtitulo>
+              <BarrasRanking filas={porVendedor} unidad="unidades" vacio={`Aún no hay pedidos ${esteP}.`} onSeleccionar={(id) => abrir(`${nombres.vendedor(id)} · ${periodo.etiqueta}`, `${QUE_CUENTA} de ${nombrePeriodo} tomados por este representante. Suma de unidades pedidas.`, delPeriodo.filter((p) => p.vendedor_id === id))} />
             </Tarjeta>
             )}
           </div>
@@ -508,15 +568,15 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
           <CentroAvisos onAbrir={(n) => (n.tipo.startsWith('meta') ? puedeMetas && irATab('metas') : n.tipo.startsWith('tarea') ? irATab('tareas') : irATab('pedidos'))} />
           {!esVendedor && (
             <Tarjeta>
-              <Subtitulo>Unidades por droguería · este mes</Subtitulo>
+              <Subtitulo>Unidades por droguería · {esteP}</Subtitulo>
               {anilloDrogueria ? (
                 <Anillo
                   partes={repartoDrogueria.map((f) => ({ ...f, color: colorDrogueria.get(f.clave) ?? 0 }))}
                   unidad="unidades"
-                  onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} enviados a esta droguería. Suma de unidades pedidas.`, delMes.filter((p) => p.drogueria_id === id))}
+                  onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${periodo.etiqueta}`, `${QUE_CUENTA} de ${nombrePeriodo} enviados a esta droguería. Suma de unidades pedidas.`, delPeriodo.filter((p) => p.drogueria_id === id))}
                 />
               ) : (
-                <BarrasRanking filas={porDrogueria} unidad="unidades" vacio="Aún no hay pedidos este mes." onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${nombreMes}`, `${QUE_CUENTA} de ${nombreMes} enviados a esta droguería. Suma de unidades pedidas.`, delMes.filter((p) => p.drogueria_id === id))} />
+                <BarrasRanking filas={porDrogueria} unidad="unidades" vacio={`Aún no hay pedidos ${esteP}.`} onSeleccionar={(id) => abrir(`${nombres.drogueria(id)} · ${periodo.etiqueta}`, `${QUE_CUENTA} de ${nombrePeriodo} enviados a esta droguería. Suma de unidades pedidas.`, delPeriodo.filter((p) => p.drogueria_id === id))} />
               )}
             </Tarjeta>
           )}
@@ -535,6 +595,11 @@ export function Inicio({ usuario, irATab }: { usuario: Usuario; irATab: (t: stri
       )}
     </div>
   );
+}
+
+/** "3 de agosto" a partir de YYYY-MM-DD. */
+function fechaLarga(t: string): string {
+  return new Date(`${t}T12:00:00`).toLocaleDateString('es', { day: 'numeric', month: 'long' });
 }
 
 /** Día local (YYYY-MM-DD) de una fecha ISO: el mismo criterio que los gráficos. */

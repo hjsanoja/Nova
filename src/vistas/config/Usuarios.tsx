@@ -8,6 +8,7 @@ import { Sheet } from '../../components/capture/Sheet';
 import { eliminarUsuarios, filtrarPorTexto } from '../../services/maestros';
 import { useUsuariosNube } from '../useDatos';
 import type { UsuarioNube } from '../useDatos';
+import { ESTADOS_VENEZUELA } from '../../ciclos/logica';
 
 const ROLES: { id: string; texto: string }[] = [
   { id: 'vendedor', texto: 'Vendedor' },
@@ -170,9 +171,10 @@ function ZonaUsuario({ usuario: u, onCerrar, onGuardado }: { usuario: UsuarioNub
   return (
     <Sheet abierto titulo={`Zona de ${u.nombre_completo}`} onCerrar={onCerrar}>
       <form onSubmit={guardar} className="flex flex-col gap-3">
-        <p className="text-sm text-slate-600 dark:text-slate-300">Se usa para enviarle comunicados por región, estado o ciudad. A un vendedor también le llegan los de las zonas de las farmacias de su fichero.</p>
+        <p className="text-sm text-slate-600 dark:text-slate-300">Se usa para enviarle comunicados por región, estado o ciudad. A un vendedor también le llegan los de las zonas de las farmacias de su fichero. El estado también decide qué feriados regionales no cuenta como días hábiles.</p>
         <Campo rotulo="Región"><input value={z.region} onChange={(e) => setZ({ ...z, region: e.target.value })} placeholder="Ej.: Occidente" className={estiloInput} /></Campo>
-        <Campo rotulo="Estado"><input value={z.estado_geografico} onChange={(e) => setZ({ ...z, estado_geografico: e.target.value })} placeholder="Ej.: Zulia" className={estiloInput} /></Campo>
+        <Campo rotulo="Estado"><input value={z.estado_geografico} onChange={(e) => setZ({ ...z, estado_geografico: e.target.value })} list="estados-zona" placeholder="Ej.: Zulia" className={estiloInput} /></Campo>
+        <datalist id="estados-zona">{ESTADOS_VENEZUELA.map((e) => <option key={e} value={e} />)}</datalist>
         <Campo rotulo="Ciudad"><input value={z.ciudad} onChange={(e) => setZ({ ...z, ciudad: e.target.value })} placeholder="Ej.: Maracaibo" className={estiloInput} /></Campo>
         {error && <p role="alert" className="text-sm text-rose-700 dark:text-rose-300">{error}</p>}
         <div className="flex justify-end gap-2">

@@ -1,6 +1,7 @@
-// Médicos: lectura del archivo de carga, cobertura de visitas del mes y orden de la cartera.
+// Médicos: lectura del archivo de carga, cobertura de visitas del ciclo (o del mes) y orden de la cartera.
 import type { LocalMedico, LocalVisita } from '../offline/types';
 import { normalizarTitulo } from '../services/respuestaDrogueria';
+import { enRango } from '../ciclos/logica';
 
 export type CampoMedico = 'codigo' | 'nombre' | 'especialidad' | 'centro' | 'direccion' | 'ciudad' | 'zona' | 'telefono' | 'correo' | 'categoria' | 'visitas_mes' | 'lat' | 'lon' | 'representante' | 'notas';
 
@@ -62,7 +63,7 @@ export function leerMedicos(filas: string[][]): { filas: FilaMedico[]; descartes
   return { filas: salida, descartes, columnas };
 }
 
-export const PLANTILLA_MEDICOS = 'CODIGO;NOMBRE;ESPECIALIDAD;CENTRO;DIRECCION;CIUDAD;ZONA;TELEFONO;CORREO;CATEGORIA;VISITAS_MES;LATITUD;LONGITUD;REPRESENTANTE\r\nMED-001;Ana Pérez;Cardiología;Clínica El Ávila;Av. San Juan Bosco;Caracas;Altamira;0414-0000000;ana@correo.com;A;2;10.4961;-66.8472;vendedor@empresa.com\r\n';
+export const PLANTILLA_MEDICOS = 'CODIGO;NOMBRE;ESPECIALIDAD;CENTRO;DIRECCION;CIUDAD;ZONA;TELEFONO;CORREO;CATEGORIA;VISITAS_CICLO;LATITUD;LONGITUD;REPRESENTANTE\r\nMED-001;Ana Pérez;Cardiología;Clínica El Ávila;Av. San Juan Bosco;Caracas;Altamira;0414-0000000;ana@correo.com;A;2;10.4961;-66.8472;vendedor@empresa.com\r\n';
 
 export interface CoberturaMedico {
   medico: LocalMedico;
@@ -78,9 +79,16 @@ const mesDe = (iso: string) => {
   return `${d.getFullYear()}-${d.getMonth()}`;
 };
 
-/** Cobertura del mes por médico: los que faltan por visitar primero (categoría A antes que B y C). */
-export function coberturaMedicos(medicos: LocalMedico[], visitas: LocalVisita[], hoy = new Date()): CoberturaMedico[] {
-  const mes = mesDe(hoy.toISOString());
+export interface RangoFechas { desde: string; hasta: string }
+
+/**
+ * Cobertura por médico en el ciclo (un rango de fechas, o el ciclo del equipo de su representante) o en el mes de la
+ * fecha dada: los que faltan por visitar primero (categoría A antes que B y C). Las visitas esperadas son las de su
+ * ficha ("visitas por ciclo").
+ */
+export function coberturaMedicos(medicos: LocalMedico[], visitas: LocalVisita[], cuando: Date | RangoFechas | ((m: LocalMedico) => RangoFechas) = new Date()): CoberturaMedico[] {
+  const rangoDe = (m: LocalMedico): RangoFechas | null => (cuando instanceof Date ? null : typeof cuando === 'function' ? cuando(m) : cuando);
+  const mes = cuando instanceof Date ? mesDe(cuando.toISOString()) : '';
   const porMedico = new Map<string, LocalVisita[]>();
   for (const v of visitas) if (v.medico_id) porMedico.set(v.medico_id, [...(porMedico.get(v.medico_id) ?? []), v]);
   const orden = { A: 0, B: 1, C: 2 } as const;
@@ -88,14 +96,15 @@ export function coberturaMedicos(medicos: LocalMedico[], visitas: LocalVisita[],
     .filter((m) => m.activo !== false)
     .map((m) => {
       const vs = porMedico.get(m.id) ?? [];
-      const hechas = vs.filter((v) => mesDe(v.checkin_en) === mes && v.resultado === 'realizada').length;
+      const r = rangoDe(m);
+      const hechas = vs.filter((v) => (r ? enRango(v.checkin_en, r) : mesDe(v.checkin_en) === mes) && v.resultado === 'realizada').length;
       const ultima = vs.reduce<string | null>((a, v) => (!a || v.checkin_en > a ? v.checkin_en : a), null);
       return { medico: m, hechas, esperadas: Math.max(1, m.visitas_mes ?? 1), ultima };
     })
     .sort((a, b) => Number(a.hechas >= a.esperadas) - Number(b.hechas >= b.esperadas) || (orden[a.medico.categoria ?? 'C'] ?? 2) - (orden[b.medico.categoria ?? 'C'] ?? 2) || a.medico.nombre.localeCompare(b.medico.nombre));
 }
 
-/** Resumen: médicos con todas sus visitas del mes, sobre el total. */
+/** Resumen: médicos con todas sus visitas del período, sobre el total. */
 export function resumenCobertura(c: CoberturaMedico[]): { cubiertos: number; total: number; visitas: number; esperadas: number } {
   return {
     cubiertos: c.filter((x) => x.hechas >= x.esperadas).length,
@@ -117,11 +126,15 @@ export interface FilaVisitasRepresentante {
   muestras: number;
 }
 
-/** Visitas desde una fecha, por representante (farmacias, médicos, en el lugar, pedidos tomados y muestras). */
-export function visitasPorRepresentante(visitas: LocalVisita[], desde: Date): FilaVisitasRepresentante[] {
+/** ¿La visita entra en el reporte? Desde una fecha, o según una regla (p. ej. el ciclo del equipo de cada representante). */
+export type FiltroVisitas = Date | ((v: LocalVisita) => boolean);
+const entra = (v: LocalVisita, f: FiltroVisitas) => (f instanceof Date ? new Date(v.checkin_en) >= f : f(v));
+
+/** Visitas del período, por representante (farmacias, médicos, en el lugar, pedidos tomados y muestras). */
+export function visitasPorRepresentante(visitas: LocalVisita[], desde: FiltroVisitas): FilaVisitasRepresentante[] {
   const acc = new Map<string, FilaVisitasRepresentante>();
   for (const v of visitas) {
-    if (new Date(v.checkin_en) < desde) continue;
+    if (!entra(v, desde)) continue;
     const f = acc.get(v.vendedor_id) ?? { vendedor_id: v.vendedor_id, farmacias: 0, medicos: 0, enElLugar: 0, pedidos: 0, muestras: 0 };
     if (v.medico_id) f.medicos++;
     else f.farmacias++;
@@ -133,11 +146,11 @@ export function visitasPorRepresentante(visitas: LocalVisita[], desde: Date): Fi
   return [...acc.values()].sort((a, b) => b.farmacias + b.medicos - (a.farmacias + a.medicos));
 }
 
-/** Muestras entregadas por producto desde una fecha (las más entregadas primero). */
-export function muestrasPorProducto(visitas: LocalVisita[], desde: Date): { producto_id: string; cantidad: number }[] {
+/** Muestras entregadas por producto en el período (las más entregadas primero). */
+export function muestrasPorProducto(visitas: LocalVisita[], desde: FiltroVisitas): { producto_id: string; cantidad: number }[] {
   const acc = new Map<string, number>();
   for (const v of visitas) {
-    if (new Date(v.checkin_en) < desde) continue;
+    if (!entra(v, desde)) continue;
     for (const m of v.muestras ?? []) acc.set(m.producto_id, (acc.get(m.producto_id) ?? 0) + m.cantidad);
   }
   return [...acc.entries()].map(([producto_id, cantidad]) => ({ producto_id, cantidad })).sort((a, b) => b.cantidad - a.cantidad);

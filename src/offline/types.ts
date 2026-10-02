@@ -348,19 +348,45 @@ export interface LocalComunicado {
   updated_at: string;
 }
 
-export type IndicadorMeta = 'unidades' | 'pedidos' | 'farmacias';
+export type IndicadorMeta = 'unidades' | 'pedidos' | 'farmacias' | 'visitas_medicos' | 'visitas_farmacias' | 'medicos_visitados';
 
 /** Meta del mes por representante, farmacia y/o droguería (cualquier combinación). */
 export interface LocalMeta {
   id: string;
-  /** Primer día del mes (YYYY-MM-DD). */
-  periodo: string;
+  /** Meta del mes: primer día del mes (YYYY-MM-DD). Null si es de un ciclo. */
+  periodo: string | null;
+  /** Meta de un ciclo (v11.0). */
+  ciclo_id?: string | null;
   vendedor_id: string | null;
   cliente_id: string | null;
   drogueria_id: string | null;
+  medico_id?: string | null;
   indicador: IndicadorMeta;
   objetivo: number;
   updated_at: string;
+}
+
+/** Ciclo de trabajo de un equipo (o general si no tiene equipo). Fechas YYYY-MM-DD, ambas incluidas. */
+export interface LocalCiclo {
+  id: string;
+  equipo_id: string | null;
+  equipo_nombre?: string | null;
+  nombre: string;
+  inicio: string;
+  fin: string;
+  notas?: string | null;
+  cerrado_en?: string | null;
+  updated_at?: string;
+}
+
+/** Feriado nacional (para todos) o regional (solo en los estados indicados). */
+export interface LocalFeriado {
+  id: string;
+  fecha: string;
+  nombre: string;
+  alcance: 'nacional' | 'regional';
+  estados: string[];
+  updated_at?: string;
 }
 
 export type TipoOutbox =
