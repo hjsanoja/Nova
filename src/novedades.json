@@ -1,8 +1,21 @@
 [
   {
+    "version": "12.2",
+    "fecha": "2026-10-14",
+    "tipo": "ajuste",
+    "titulo": "Pedido desde una foto y tarjetas más claras",
+    "cambios": [
+      "Nuevo pedido → Foto: toma una foto o elige una captura de pantalla de la lista del pedido y NOVA la lee y arma la vista previa (farmacia, productos y unidades) para revisar y confirmar. La primera vez necesita internet para descargar el lector.",
+      "Se lee mejor una lista escrita o una captura con un producto por línea y la cantidad (por ejemplo \"Losartán 50 mg x 10\").",
+      "Las tarjetas del catálogo muestran solo el nombre de la presentación, y el carrito también.",
+      "En el teléfono las tarjetas ya caben en la pantalla: no hace falta desplazarse de lado para leer el nombre."
+    ]
+  },
+  {
     "version": "12.1",
     "fecha": "2026-10-02",
     "tipo": "ajuste",
+    "pr": 17,
     "titulo": "Dictado: presionar para hablar, con onda de voz y más precisión",
     "cambios": [
       "El micrófono escucha solo mientras lo mantienes presionado (también con la barra espaciadora en la computadora). Al soltarlo pasa a la vista previa: ya no hay dudas de cuándo deja de escuchar.",

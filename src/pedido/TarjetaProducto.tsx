@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import { Check, Plus } from 'lucide-react';
 import { Avatar, Boton, Etiqueta, PasoUnidades } from '../components/ui/kit';
 import type { LocalProducto } from '../offline/types';
+import { nombreDeProducto } from '../vistas/logica';
 
 /** Producto del catálogo: foto (o iniciales), datos, cuántas unidades y "Agregar" al carrito del cliente activo. */
 export const TarjetaProducto = memo(function TarjetaProducto({
@@ -24,13 +25,15 @@ export const TarjetaProducto = memo(function TarjetaProducto({
 }) {
   // Siempre arranca en 1 unidad; el vendedor la cambia. El sugerido se usa tocando su etiqueta.
   const [unidades, setUnidades] = useState(1);
+  // Se muestra solo la presentación ("ATORVASTATINA TABL RECUB. 20 MG x 30"); el nombre de la familia queda para la búsqueda.
+  const nombre = nombreDeProducto(p);
   return (
-    <article className="flex gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
-      <Avatar nombre={p.nombre_comercial} foto={p.foto_url} tamano={64} cuadrado />
+    <article className="flex min-w-0 gap-3 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+      <Avatar nombre={nombre} foto={p.foto_url} tamano={64} cuadrado />
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="min-w-0">
-          <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900 dark:text-white">{p.nombre_comercial}</h3>
-          <p className="truncate text-xs text-slate-500">{[p.presentacion, p.sku, p.empaque_minimo > 1 ? `Empaque x${p.empaque_minimo}` : null].filter(Boolean).join(' · ')}</p>
+          <h3 className="line-clamp-2 break-words text-sm font-semibold leading-snug text-slate-900 dark:text-white">{nombre}</h3>
+          <p className="truncate text-xs text-slate-500">{[p.sku, p.empaque_minimo > 1 ? `Empaque x${p.empaque_minimo}` : null].filter(Boolean).join(' · ')}</p>
           {(p.es_prioritario || loCompra || sugerido || oferta) && (
             <div className="mt-1 flex flex-wrap gap-1">
               {oferta && <Etiqueta tono="exito">−{oferta.pct}%{oferta.desde ? ` desde ${oferta.desde}` : ''}</Etiqueta>}
@@ -45,8 +48,8 @@ export const TarjetaProducto = memo(function TarjetaProducto({
           )}
         </div>
         <div className="mt-auto flex flex-wrap items-center gap-2">
-          <PasoUnidades valor={unidades} onChange={setUnidades} paso={1} min={1} compacto etiqueta={`Unidades de ${p.nombre_comercial}`} />
-          <Boton tamano="sm" variante={enCarrito ? 'secundario' : 'primario'} icono={Plus} onClick={() => onAgregar(unidades)} aria-label={`Agregar ${unidades} de ${p.nombre_comercial}`}>
+          <PasoUnidades valor={unidades} onChange={setUnidades} paso={1} min={1} compacto etiqueta={`Unidades de ${nombre}`} />
+          <Boton tamano="sm" variante={enCarrito ? 'secundario' : 'primario'} icono={Plus} onClick={() => onAgregar(unidades)} aria-label={`Agregar ${unidades} de ${nombre}`}>
             Agregar
           </Boton>
         </div>
