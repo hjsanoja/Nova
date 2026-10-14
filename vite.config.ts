@@ -4,6 +4,7 @@ import {defineConfig} from 'vitest/config';
 import type {Plugin} from 'vite';
 import {readFileSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {createRequire} from 'node:module';
 
 // Versión de NOVA: la primera entrada de src/novedades.json (se lee aquí sin importar código de la app).
 const VERSION: string = JSON.parse(readFileSync(new URL('./src/novedades.json', import.meta.url), 'utf8'))[0].version;
@@ -13,8 +14,36 @@ const manifiestoServiceWorker = (): Plugin => ({
   name: 'nova-sw-manifest',
   apply: 'build',
   generateBundle(_opciones, bundle) {
-    const archivos = Object.keys(bundle).filter((f) => !f.endsWith('.map'));
+    const archivos = Object.keys(bundle).filter((f) => !f.endsWith('.map') && !f.startsWith('ocr/'));
     this.emitFile({ type: 'asset', fileName: 'sw-manifest.json', source: JSON.stringify(archivos) });
+  },
+});
+
+/**
+ * Lector de fotos (tesseract) servido desde la misma NOVA en ocr/: el programa, el núcleo (solo las variantes LSTM; el
+ * teléfono baja una) y el español. Va fuera del precache del Service Worker: solo lo descarga quien lee una foto.
+ */
+const requerir = createRequire(import.meta.url);
+const ARCHIVOS_LECTOR: Record<string, () => string> = {
+  'worker.min.js': () => requerir.resolve('tesseract.js/dist/worker.min.js'),
+  'tesseract-core-lstm.wasm.js': () => requerir.resolve('tesseract.js-core/tesseract-core-lstm.wasm.js'),
+  'tesseract-core-simd-lstm.wasm.js': () => requerir.resolve('tesseract.js-core/tesseract-core-simd-lstm.wasm.js'),
+  'tesseract-core-relaxedsimd-lstm.wasm.js': () => requerir.resolve('tesseract.js-core/tesseract-core-relaxedsimd-lstm.wasm.js'),
+  'spa.traineddata.gz': () => requerir.resolve('@tesseract.js-data/spa/4.0.0_best_int/spa.traineddata.gz'),
+};
+const lectorDeFotos = (): Plugin => ({
+  name: 'nova-lector-fotos',
+  configureServer(server) {
+    server.middlewares.use((req, res, next) => {
+      const nombre = req.url?.split('?')[0].match(/\/ocr\/([\w.-]+)$/)?.[1];
+      const ruta = nombre && ARCHIVOS_LECTOR[nombre]?.();
+      if (!ruta) return next();
+      res.setHeader('Content-Type', nombre.endsWith('.js') ? 'text/javascript' : 'application/octet-stream');
+      res.end(readFileSync(ruta));
+    });
+  },
+  generateBundle() {
+    for (const [nombre, ruta] of Object.entries(ARCHIVOS_LECTOR)) this.emitFile({ type: 'asset', fileName: `ocr/${nombre}`, source: readFileSync(ruta()) });
   },
 });
 
@@ -43,7 +72,7 @@ const versionPublicada = (): Plugin => {
 export default defineConfig({
   // Rutas relativas: el build funciona igual en GitHub Pages (subruta) que en Cloud Run.
   base: './',
-  plugins: [react(), tailwindcss(), manifiestoServiceWorker(), versionPublicada()],
+  plugins: [react(), tailwindcss(), lectorDeFotos(), manifiestoServiceWorker(), versionPublicada()],
   build: {
     target: 'es2022',
     // El escáner de códigos (html5-qrcode, ~370 kB) se descarga solo al abrir la cámara.
