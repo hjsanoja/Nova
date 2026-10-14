@@ -1,5 +1,6 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { BookmarkCheck, Camera, ChevronRight, Mic, ScanLine, Search, ShoppingCart, X } from 'lucide-react';
+import { BookmarkCheck, ChevronRight, Mic, ScanLine, Search, ShoppingCart, X } from 'lucide-react';
+import { BotonesFoto } from './BotonesFoto';
 import { obtenerDb } from '../offline/db';
 import { buscarPorCodigo, normalizar } from '../offline/busqueda';
 import { solicitarSync } from '../offline/motor';
@@ -176,11 +177,7 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
         acciones={
           <>
             <Boton icono={Mic} onClick={() => { setFoto(null); setDictando(true); }}>Dictar</Boton>
-            <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-marca-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800">
-              <Camera className="h-4 w-4" aria-hidden />
-              Foto
-              <input type="file" accept="image/*" aria-label="Pedido desde una foto o captura" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) { setFoto(f); setDictando(true); } }} />
-            </label>
+            <BotonesFoto onImagen={(f) => { setFoto(f); setDictando(true); }} />
             <Boton icono={ScanLine} onClick={() => setEscaneando(true)} className="hidden sm:inline-flex">Escanear</Boton>
           </>
         }

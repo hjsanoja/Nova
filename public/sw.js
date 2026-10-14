@@ -9,6 +9,8 @@
 const VERSION = 'nova-__VERSION_APP__';
 const ACTUAL = `${VERSION}-app`;
 const RAIZ = new URL('./', self.location).href;
+// Lector de fotos (ocr/): caché aparte que no se borra al cambiar de versión (se baja una sola vez, ~6 MB).
+const LECTOR = 'lector-fotos-v1';
 
 self.addEventListener('install', (evento) => {
   evento.waitUntil(
@@ -46,6 +48,19 @@ self.addEventListener('fetch', (evento) => {
   if (url.origin !== self.location.origin && !/fonts\.(googleapis|gstatic)\.com$/.test(url.hostname)) return;
   // La versión publicada siempre se consulta en la red (es la que avisa que hay una versión nueva).
   if (url.pathname.endsWith('/version.json')) return;
+
+  if (url.origin === self.location.origin && url.pathname.includes('/ocr/')) {
+    evento.respondWith(
+      caches.open(LECTOR).then(async (cache) => {
+        const guardado = await cache.match(req);
+        if (guardado) return guardado;
+        const res = await fetch(req);
+        if (res.ok) await cache.put(req, res.clone());
+        return res;
+      })
+    );
+    return;
+  }
 
   if (req.mode === 'navigate') {
     evento.respondWith(

@@ -1,8 +1,22 @@
 [
   {
+    "version": "12.3",
+    "fecha": "2026-10-14",
+    "tipo": "ajuste",
+    "titulo": "Pedido desde una foto: lector más preciso y botones separados",
+    "cambios": [
+      "Nuevo pedido tiene dos botones: «Tomar foto» abre la cámara directo y «Elegir imagen» busca una captura o foto guardada.",
+      "Lector más preciso: lee la lista en orden, línea por línea, y entiende tablas con precios, rellenos de puntos o guiones («Losartán ....... 10 cajas»), listas numeradas y errores comunes («50 M8» → 50 mg). En las pruebas acertó todos los productos y cantidades de capturas, hojas impresas, tablas y notas.",
+      "Cada línea es un producto con su cantidad: la cantidad ya no pasa al producto vecino.",
+      "Más rápido: el lector se descarga desde NOVA una sola vez (unos 6 MB), queda guardado en el teléfono y empieza a cargar apenas tocas el botón. Sigue siendo gratis: no usa servicios de pago.",
+      "Si Google Fotos dice «foto no disponible», NOVA indica elegir la imagen desde Archivos."
+    ]
+  },
+  {
     "version": "12.2",
     "fecha": "2026-10-14",
     "tipo": "ajuste",
+    "pr": 18,
     "titulo": "Pedido desde una foto y tarjetas más claras",
     "cambios": [
       "Nuevo pedido → Foto: toma una foto o elige una captura de pantalla de la lista del pedido y NOVA la lee y arma la vista previa (farmacia, productos y unidades) para revisar y confirmar. La primera vez necesita internet para descargar el lector.",

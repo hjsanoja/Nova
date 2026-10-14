@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, RotateCcw, ShoppingCart, Wand2 } from 'lucide-react';
-import { leerTextoDeImagen, textoDeFotoAPedido } from './leerFoto';
+import { RotateCcw, ShoppingCart, Wand2 } from 'lucide-react';
+import { interpretarFoto, leerTextoDeImagen, textoDeFotoAPedido } from './leerFoto';
+import { BotonesFoto } from './BotonesFoto';
 import { Sheet } from '../components/capture/Sheet';
 import { Avatar, Boton, Campo, Casilla, Etiqueta, PasoUnidades, estiloInput } from '../components/ui/kit';
 import type { LocalCliente, LocalDrogueria, LocalPlantilla, LocalProducto } from '../offline/types';
@@ -74,9 +75,11 @@ export function DictadoHoja({ abierto, foto, clientes, productos, droguerias, pl
 
   const interpretar = async (textoDictado: string = voz.texto) => {
     if (voz.escuchando) voz.detener();
+    // Lo leído de una foto viene en varias líneas (una por producto): se interpreta línea por línea.
+    const interpretador = textoDictado.includes('\n') ? interpretarFoto : interpretarDictado;
     // Primero se ubica la farmacia; luego se vuelve a interpretar con lo que ella compra, para elegir bien entre
     // presentaciones parecidas ("losartán" → la de 50 mg que siempre pide).
-    const previo = interpretarDictado(textoDictado, clientes, productos, droguerias, { clientePorDefecto: clienteActual });
+    const previo = interpretador(textoDictado, clientes, productos, droguerias, { clientePorDefecto: clienteActual });
     const deQuien = previo.cliente ?? clienteActual;
     let historial: Map<string, number> | undefined;
     if (deQuien) {
@@ -88,7 +91,7 @@ export function DictadoHoja({ abierto, foto, clientes, productos, droguerias, pl
       }
     }
     const r: PedidoDictado<LocalCliente, LocalProducto, LocalDrogueria> = historial
-      ? interpretarDictado(textoDictado, clientes, productos, droguerias, { clientePorDefecto: clienteActual, historial: () => historial })
+      ? interpretador(textoDictado, clientes, productos, droguerias, { clientePorDefecto: clienteActual, historial: () => historial })
       : previo;
     const cliente = r.cliente ?? clienteActual ?? null;
     // "Farmacia La Paz, plantilla semanal" sin productos: se carga esa plantilla guardada.
@@ -178,12 +181,8 @@ export function DictadoHoja({ abierto, foto, clientes, productos, droguerias, pl
           </details>
           {voz.disponible && <MicrofonoPresionar escuchando={voz.escuchando} hablando={voz.hablando} onPresionar={voz.presionar} onSoltar={voz.soltar} />}
           <div className="flex flex-col items-center gap-1">
-            <label className={`inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border border-slate-300 px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-marca-600 dark:border-slate-700 dark:text-slate-100 dark:hover:bg-slate-800 ${leyendo ? 'pointer-events-none opacity-60' : ''}`}>
-              <Camera className="h-4 w-4" aria-hidden />
-              Desde una foto o captura
-              <input type="file" accept="image/*" className="sr-only" disabled={!!leyendo} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void procesarFoto(f); }} />
-            </label>
-            <p className="text-xs text-slate-500">Una lista con un producto por línea (y la cantidad) se lee mejor.</p>
+            <div className="flex flex-wrap justify-center gap-2"><BotonesFoto deshabilitado={!!leyendo} onImagen={(f) => void procesarFoto(f)} /></div>
+            <p className="text-center text-xs text-slate-500">Se lee mejor una captura o una lista escrita, con un producto por línea y su cantidad. Si Google Fotos dice «foto no disponible», elige la imagen desde Archivos (Descargas o Capturas de pantalla).</p>
           </div>
           {leyendo && (
             <div role="status" className="flex flex-col gap-1.5 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60">
@@ -195,7 +194,7 @@ export function DictadoHoja({ abierto, foto, clientes, productos, droguerias, pl
           {voz.aviso && <p role="status" className="rounded-lg bg-slate-100 p-3 text-center text-sm text-slate-700 dark:bg-slate-800 dark:text-slate-200">{voz.aviso}</p>}
           {voz.error && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">{voz.error}</p>}
           <Campo rotulo={voz.disponible ? 'Lo que escuché (puedes corregirlo)' : 'Escribe el pedido'}>
-            <textarea rows={3} value={voz.texto + (voz.parcial ? ` ${voz.parcial}` : '')} onChange={(e) => voz.setTexto(e.target.value)} className={`${estiloInput} py-2`} placeholder="Farmacia La Paz, 10 losartán 50, 5 atorvastatina" />
+            <textarea rows={voz.texto.includes('\n') ? 6 : 3} value={voz.texto + (voz.parcial ? ` ${voz.parcial}` : '')} onChange={(e) => voz.setTexto(e.target.value)} className={`${estiloInput} py-2`} placeholder="Farmacia La Paz, 10 losartán 50, 5 atorvastatina" />
           </Campo>
           <div className="flex justify-end gap-2">
             <Boton onClick={cerrar}>Cancelar</Boton>
