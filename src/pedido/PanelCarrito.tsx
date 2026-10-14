@@ -7,6 +7,7 @@ import type { ReglaComercial } from '../offline/politicas';
 import type { LocalCliente, LocalDrogueria, LocalProducto } from '../offline/types';
 import { faltaParaEnviar, totales } from './carritos';
 import type { AccionCarritos, Carrito, EstadoCarritos } from './carritos';
+import { nombreDeProducto } from '../vistas/logica';
 import { contextoCarrito, descuentoDeLinea } from './useCarritos';
 
 interface Props {
@@ -143,13 +144,13 @@ function DetalleCarrito({ carrito: c, dispatch, cliente, productos, droguerias, 
             const pct = descuentoDeLinea(l, auto);
             const tope = topeDescuentoLinea(reglas, contexto, { producto_id: l.producto_id, categoria: p?.categoria ?? null, unidades: l.unidades });
             const excede = l.descuento_pct != null && (pct ?? 0) > Math.max(tope, auto ?? 0);
-            const nombre = p?.nombre_comercial ?? 'producto';
+            const nombre = p ? nombreDeProducto(p) : 'producto';
             return (
               <li key={l.producto_id} className="flex flex-col gap-1.5 px-3 py-2">
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{p?.nombre_comercial ?? 'Producto'}</p>
-                    <p className="truncate text-xs text-slate-500">{p?.presentacion ?? p?.sku}</p>
+                    <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{nombreDeProducto(p)}</p>
+                    <p className="truncate text-xs text-slate-500">{[p?.sku, p && p.empaque_minimo > 1 ? `Empaque x${p.empaque_minimo}` : null].filter(Boolean).join(' · ')}</p>
                   </div>
                   <PasoUnidades valor={l.unidades} onChange={(n) => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: n })} paso={1} min={0} compacto etiqueta={`Unidades de ${nombre}`} />
                   <BotonIcono icono={X} etiqueta={`Quitar ${nombre}`} onClick={() => dispatch({ tipo: 'unidades', carrito_id: c.id, producto_id: l.producto_id, unidades: 0 })} className="!h-8 !w-8" />

@@ -1,5 +1,5 @@
 import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { BookmarkCheck, ChevronRight, Mic, ScanLine, Search, ShoppingCart, X } from 'lucide-react';
+import { BookmarkCheck, Camera, ChevronRight, Mic, ScanLine, Search, ShoppingCart, X } from 'lucide-react';
 import { obtenerDb } from '../offline/db';
 import { buscarPorCodigo, normalizar } from '../offline/busqueda';
 import { solicitarSync } from '../offline/motor';
@@ -60,6 +60,7 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
   const [eligiendo, setEligiendo] = useState<{ pendiente?: { producto_id: string; unidades: number } } | null>(null);
   const [verCarrito, setVerCarrito] = useState(false);
   const [dictando, setDictando] = useState(false);
+  const [foto, setFoto] = useState<File | null>(null);
   const [escaneando, setEscaneando] = useState(false);
   const [enviando, setEnviando] = useState(false);
 
@@ -174,7 +175,12 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
         descripcion={online ? 'Elige la farmacia y agrega productos.' : 'Sin conexión: los pedidos se enviarán al volver la señal.'}
         acciones={
           <>
-            <Boton icono={Mic} onClick={() => setDictando(true)}>Dictar</Boton>
+            <Boton icono={Mic} onClick={() => { setFoto(null); setDictando(true); }}>Dictar</Boton>
+            <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-within:ring-2 focus-within:ring-marca-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800">
+              <Camera className="h-4 w-4" aria-hidden />
+              Foto
+              <input type="file" accept="image/*" aria-label="Pedido desde una foto o captura" className="sr-only" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) { setFoto(f); setDictando(true); } }} />
+            </label>
             <Boton icono={ScanLine} onClick={() => setEscaneando(true)} className="hidden sm:inline-flex">Escanear</Boton>
           </>
         }
@@ -243,7 +249,7 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
               <Vacio icono={Search} titulo={productos.length === 0 ? 'El catálogo está vacío' : 'Sin resultados'} texto={productos.length === 0 ? 'Sincroniza o pide al administrador que cargue los productos.' : filtro === 'sugeridos' ? 'Esta farmacia aún no tiene historial para sugerir.' : 'Prueba con otra búsqueda.'} />
             </Tarjeta>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 2xl:grid-cols-3">
               {lista.slice(0, limite).map((p) => (
                 <TarjetaProducto
                   key={`${p.id}-${cliente?.id ?? ''}-${sugeridoPorId.get(p.id) ?? 0}`}
@@ -292,19 +298,21 @@ export function TiendaVista({ vendedorId, equipoId }: { vendedorId: string; equi
       />
       <DictadoHoja
         abierto={dictando}
+        foto={foto}
         clientes={clientes}
         productos={productos}
         droguerias={droguerias}
         plantillasDe={plantillasDe}
         clienteActual={cliente}
         conCarrito={conCarrito}
-        onCerrar={() => setDictando(false)}
+        onCerrar={() => { setDictando(false); setFoto(null); }}
         onConfirmar={async (c, lineas, extra) => {
           const drogueria_id = extra.drogueria_id ?? (await drogueriaPara(c.id));
           const existente = estado.carritos.find((x) => x.cliente_id === c.id);
           dispatch({ tipo: 'agregar_varios', cliente_id: c.id, lineas, drogueria_id });
           if (existente && extra.drogueria_id) dispatch({ tipo: 'drogueria', carrito_id: existente.id, drogueria_id: extra.drogueria_id });
           setDictando(false);
+          setFoto(null);
           mostrar({ tipo: 'ok', texto: `${lineas.length} producto(s) agregados al carrito de ${c.nombre_comercial}.` });
           if (extra.plantilla) {
             try {
